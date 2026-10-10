@@ -1,6 +1,6 @@
 # ForumAggregator — Design
 
-Status: **Draft v0.2** (2026-10-10). Nothing is built yet. This document records
+Status: **v0.3** (2026-10-10). Milestone M0 (skeleton, app login, Docker) is built. This document records
 what we want, the decisions made so far, and the questions still open.
 Decisions are logged in [DECISIONS.md](DECISIONS.md).
 
@@ -62,18 +62,19 @@ My earlier draft suggested Python. I now recommend TypeScript, for three reasons
 
 1. **Login** (§6) relies on a real browser that the app controls. Playwright is a Node project, so TypeScript uses it directly.
 2. The server, the web UI and a possible Android app later can **share code and data types**.
-3. A good database layer (Drizzle) handles both SQLite and Postgres (R11).
+3. A good database layer (Kysely) handles both SQLite and Postgres from one set of code (R11).
 
 | Part | Choice |
 |---|---|
-| Runtime | Node.js (current LTS) |
+| Runtime | Node.js 22 LTS. Will move to 24 LTS once it's tested |
 | Server/API | Fastify, with Zod for checking config and API input |
-| Database | Drizzle ORM. **SQLite** (better-sqlite3, WAL mode) by default; **Postgres** if `DATABASE_URL` is set |
+| Database | Kysely query builder. **SQLite** (better-sqlite3, WAL mode) by default; **Postgres** if `DATABASE_URL` is set. One set of migrations for both (Drizzle would need a separate schema per database) |
 | Search | Behind an interface: SQLite FTS5, or Postgres `tsvector` |
 | Fetching and parsing | undici (HTTP with a cookie jar), cheerio (HTML) |
 | Browser | Playwright with Chromium, used for logins (§6) and for sites that need it |
 | Scheduler | In-process job queue with a per-host rate limiter |
-| UI | React + Vite, built into static files the server delivers. PWA, so it installs on a phone home screen. Capacitor can wrap the same app for Android later |
+| UI | React + Vite, built into static files the server delivers. PWA (M2), so it installs on a phone home screen. Capacitor can wrap the same app for Android later |
+| Shared code | `@fa/shared`: API types and constants, used by both server and UI (and a future Android app) |
 | Packaging | Multi-arch Docker image (amd64/arm64) and `docker-compose.yml` |
 
 ---
@@ -169,10 +170,24 @@ Kept for odd cases. Never required.
 - Before each poll, the app checks that it's still logged in. If it isn't, it tries A, and if that fails it marks the site **"needs login"** and shows a banner. It never keeps fetching while logged out without telling me.
 - Request rates stay low and human-like (§7) to protect my accounts.
 
-### Logging in to the app itself (it's on the internet)
-- One user, with a strong password (Argon2 hash) and optional TOTP 2FA. Session cookies are HttpOnly, Secure and SameSite. Repeated failed logins are slowed down.
-- Works behind the reverse proxy: it honours `X-Forwarded-*` headers from a trusted proxy IP.
-- Optionally, it can trust a header from a single-sign-on proxy such as Authelia or Authentik.
+### What if a forum adds 2FA later?
+Nothing in the design changes. Logins go through a pluggable *login strategy* per site:
+- If a site later asks for a code from an **authenticator app**, I can store that 2FA
+  secret (encrypted) and the app generates the code itself. Re-login stays fully automatic.
+- If it sends codes by **email or SMS**, or shows a captcha, the app uses method B: one
+  manual login in the built-in browser, then the session lasts as long as the site allows
+  (usually months with "stay logged in"). The app only asks again when that session ends.
+- Because no account uses 2FA today, M1 ships method A first and B right after it.
+
+### Logging in to the app itself (built in M0)
+- **First run:** the app has no account and prints a one-time **setup code** to the container log. Creating the account needs that code, so nobody else can claim a freshly started instance.
+- One user. Password at least 12 characters, hashed with Argon2id. Optional TOTP 2FA (authenticator app, QR code enrolment), and a used code can't be replayed.
+- Sessions: random token in an HttpOnly, SameSite=Lax cookie, marked Secure behind HTTPS. Only a hash of the token is stored. 30-day sliding expiry. Changing the password signs out other devices.
+- Login, setup and 2FA endpoints are limited to 10 attempts per 15 minutes per client IP. Unknown usernames take as long to check as real ones.
+- CSRF: every state-changing API call needs an `x-fa-request: 1` header, which a cross-site page can't send.
+- Security headers (CSP, nosniff, frame-ancestors none). HSTS is left to the proxy.
+- Works behind Nginx Proxy Manager: `X-Forwarded-*` headers are trusted only from private/loopback addresses by default.
+- `AUTH_MODE=local|proxy|both`: optionally trust a username header from an SSO proxy (Authelia/Authentik), accepted only from configured proxy IPs. See [DEPLOY.md §5](DEPLOY.md#5-later-single-sign-on-with-authelia-or-authentik).
 
 ---
 
@@ -256,7 +271,7 @@ AI would be a plug-in stage that is **off by default**: `fetch → store → fil
 
 | # | Scope | Done when |
 |---|---|---|
-| **M0** | Skeleton: Fastify + React app, SQLite/Postgres through Drizzle, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi |
+| **M0** ✅ | Skeleton: Fastify + React app, SQLite/Postgres through Kysely, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi. *Verified on amd64; arm64 is built by CI but untested on a real Pi yet* |
 | **M1** | XenForo adapter: login methods A and B, discovery and corrections, `new_threads` / `activity` / `all_posts`, rate limiter, health page | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
 | **M2** | Feed UI: read/unread, save, follow/mute from a card, mobile layout, PWA | Usable daily on my phone |
 | **M3** | Filters (simple and advanced, with preview) and full-text search | |

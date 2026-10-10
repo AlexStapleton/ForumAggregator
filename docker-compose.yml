@@ -1,0 +1,16 @@
+# Usage:
+#   cp .env.example .env   # then set FA_SECRET_KEY
+#   mkdir -p data && sudo chown 1000:1000 data
+#   docker compose up -d && docker compose logs forumaggregator   # shows the first-run setup code
+services:
+  forumaggregator:
+    image: ghcr.io/alexstapleton/forumaggregator:latest
+    build: .
+    container_name: forumaggregator
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    ports:
+      # Remove this if Nginx Proxy Manager reaches the container over a shared Docker network.
+      - "8080:8080"

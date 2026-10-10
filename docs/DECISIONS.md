@@ -2,6 +2,20 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-10 (round 3: M0 build)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-026 | Forum accounts have no 2FA today. M1 builds password login (A) first and the built-in login browser (B) right after. Later 2FA is handled per site: authenticator-app 2FA by storing its secret (stays automatic), email/SMS codes or captchas via B | User + Claude | User asked what changes if 2FA is added later: nothing structural |
+| D-027 | Kysely instead of Drizzle | Claude | Drizzle needs a separate schema per database (sqlite-core vs pg-core); Kysely runs one set of migrations and queries on both. Timestamps are epoch-ms integers and booleans 0/1 for portability |
+| D-028 | First-run setup code printed to the container log, required to create the account | Claude | App is internet-facing; stops anyone else claiming a fresh instance |
+| D-029 | App login: Argon2id, 12+ character passwords, optional TOTP with replay protection, HttpOnly SameSite=Lax cookies storing only a token hash, 30-day sliding sessions, 10 attempts per 15 min per IP, CSRF header on all mutating calls | Claude | Internet-facing single-user app |
+| D-030 | Nginx Proxy Manager is the reverse proxy. Default `TRUST_PROXY=loopback,uniquelocal`. HSTS left to NPM. Websockets enabled in NPM ahead of M1 | User + Claude | Works out of the box behind NPM on the LAN or a Docker network |
+| D-031 | Authelia/Authentik supported later via `AUTH_MODE=both`. The header is trusted only from the proxy's exact IP; don't publish port 8080 when using it | User (considering SSO) + Claude | Forward auth can be spoofed by anything reaching the app directly |
+| D-032 | Node 22 LTS for now (what the build and tests ran on); move to Node 24 LTS in a later milestone | Claude | Tested parity over novelty. Node 22 is supported until April 2027 |
+| D-033 | Docker: Debian slim base (prebuilt native binaries need glibc), `npm ci --ignore-scripts`, runs as uid 1000, healthcheck on `/healthz`. CI builds amd64+arm64 to GHCR on push to `main` | Claude | Small attack surface, no compiler needed, Pi-ready |
+| D-034 | npm workspaces monorepo: `packages/shared` (API types, zod schemas on a separate subpath so the UI bundle stays small), `packages/server`, `packages/web` | Claude | Shared contract for UI, server and a future Android app |
+
 ## 2026-10-10 (round 2)
 
 | ID | Decision | Source | Rationale |
@@ -10,7 +24,7 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 | D-018 | Filtering: highlight rather than hide by default, nothing deleted (Filtered view), preview before saving, reusable keyword sets. Simple 3-box mode on top of an ordered rule engine | Claude (proposed); user was open to suggestions | Reduces the risk of missing posts silently. Simple to start, powerful when needed |
 | D-019 | No cookie export. Login order: A) username and password with automatic re-login, B) built-in login browser streamed into the app page for captchas and 2FA, C) cookie paste as a hidden last resort | User (cookie export too difficult) + Claude | Easy for the user and survives expired sessions |
 | D-020 | Public behind the user's reverse proxy at `forumaggregator.<domain>`. The app has its own login (Argon2 password, optional TOTP, rate-limited) and trusts forwarded headers from the proxy | User + Claude | It's reachable from the internet, so it must be locked down |
-| D-021 | Language: **TypeScript / Node** (Fastify, Drizzle, React + Vite PWA, Playwright). Rust, C++ and Go were rejected | Claude (recommended); user asked for a recommendation, **awaiting OK** | Playwright is native to Node; code can be shared with an Android app later; database layer handles both SQLite and Postgres. The app waits on the network, so Rust/C++ speed buys nothing |
+| D-021 | Language: **TypeScript / Node** (Fastify, ~~Drizzle~~ Kysely per D-027, React + Vite PWA, Playwright). Rust, C++ and Go were rejected | Claude (recommended), **user confirmed** | Playwright is native to Node; code can be shared with an Android app later; database layer handles both SQLite and Postgres. The app waits on the network, so Rust/C++ speed buys nothing |
 | D-022 | SQLite by default; Postgres optional via `DATABASE_URL`. Search sits behind an interface (FTS5 or tsvector). Retention is configurable, default keep everything, saved items never deleted | User + Claude | User is fine with SQLite; others may want a more robust database |
 | D-023 | Same multi-arch image on the i3 server and on a Pi. Pi: 4 GB+ RAM and an SSD recommended. AI is never inside the container; it's called over HTTP | User + Claude | User wants it to run on both |
 | D-024 | YouTube: specific creators via the channel's public feed, no API key | User | |
@@ -39,9 +53,8 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 
 ## Open questions
 
-Resolved: Q-LOGIN (D-019), Q-ACCESS (D-020), Q-STACK (D-021, awaiting OK), Q-PI (D-023), Q-RETENTION (D-022), Q-YOUTUBE (D-024), Q-NOTIFY (D-025).
+Resolved: Q-LOGIN (D-019), Q-ACCESS (D-020), Q-STACK (D-021), Q-PI (D-023), Q-RETENTION (D-022), Q-YOUTUBE (D-024), Q-NOTIFY (D-025), Q-2FA (D-026), Q-PROXY (D-030, D-031).
 
-- **Q-STACK-OK**: Confirm TypeScript (D-021).
-- **Q-2FA**: Do any of the forum accounts use 2FA? (Decides whether login method B is needed in M1 or can wait.)
-- **Q-PROXY**: Which reverse proxy (Nginx Proxy Manager, Traefik, Caddy, plain Nginx)? Does it already do single sign-on (Authelia or Authentik)?
+- **Q-GHCR**: OK for CI to publish the image to GHCR on pushes to `main`? Should the package be public (easy `docker pull` on the server) or private (needs `docker login`)?
+- **Q-PI-TEST**: Is a Pi available to try the arm64 image once it's published? (Not testable in the build environment.)
 - **Q-REDDIT**: Subreddits only, or also your home feed and saved posts? Deferred until after YouTube.

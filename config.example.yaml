@@ -1,0 +1,27 @@
+# ForumAggregator config. Copy to <data folder>/config.yaml and edit.
+# Every setting is optional; the values shown are the defaults.
+# This file is re-read on restart. A settings screen will replace it later (milestone M4).
+
+# How often and how politely sources are fetched (DESIGN.md §7).
+# Sites can override any of these under their own `polling:` key.
+polling:
+  intervalMinutes: 30          # site/board subscriptions
+  threadIntervalMinutes: 15    # followed threads
+  minDelaySeconds: 5           # minimum gap between requests to the same site
+  jitterSeconds: 3             # plus a random 0..3 s
+  maxConcurrentPerHost: 1
+  maxPagesPerPoll: 3           # how far back to page through busy threads/boards
+  backoffMaxHours: 6           # cap for exponential backoff after 429/503
+  circuitBreakerFailures: 5    # pause a site after this many failures in a row
+
+retention:
+  keepDays: 0                  # delete unsaved items older than this; 0 = keep forever
+
+# Sites are added in milestone M1. Shape (for reference):
+# sites:
+#   - id: bikeforums
+#     type: xenforo
+#     url: https://www.bikeforums.net/
+#     polling:
+#       intervalMinutes: 60
+sites: []
