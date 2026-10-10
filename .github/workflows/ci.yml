@@ -35,8 +35,11 @@ jobs:
           TEST_DATABASE_URL: postgres://fa_test:fa_test@localhost:5432/fa_test
       - run: npm run build
 
-  # Publishes a multi-arch image (x86 server + Raspberry Pi) to GitHub Container Registry
-  # on every push to main: ghcr.io/<owner>/forumaggregator:latest
+  # Publishes a multi-arch image (x86 server + Raspberry Pi) on every push to main:
+  #   ghcr.io/<owner>/forumaggregator:latest           (always)
+  #   docker.io/<DOCKERHUB_USERNAME>/forumaggregator   (when the Docker Hub secrets are set)
+  # Docker Hub setup: repo Settings → Secrets and variables → Actions → add secrets
+  # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token with Read & Write).
   image:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -44,6 +47,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -53,10 +58,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: images
+        # Image names must be lowercase; GitHub owners and Docker Hub users may not be.
+        run: |
+          {
+            echo "list<<EOF"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/forumaggregator"
+            if [ -n "$DOCKERHUB_USERNAME" ]; then echo "docker.io/${DOCKERHUB_USERNAME,,}/forumaggregator"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/forumaggregator
+          images: ${{ steps.images.outputs.list }}
           tags: |
             type=raw,value=latest
             type=sha,format=short

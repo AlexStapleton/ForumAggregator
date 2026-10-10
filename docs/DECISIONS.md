@@ -14,6 +14,7 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 | D-031 | Authelia/Authentik supported later via `AUTH_MODE=both`. The header is trusted only from the proxy's exact IP; don't publish port 8080 when using it | User (considering SSO) + Claude | Forward auth can be spoofed by anything reaching the app directly |
 | D-032 | Node 22 LTS for now (what the build and tests ran on); move to Node 24 LTS in a later milestone | Claude | Tested parity over novelty. Node 22 is supported until April 2027 |
 | D-033 | Docker: Debian slim base (prebuilt native binaries need glibc), `npm ci --ignore-scripts`, runs as uid 1000, healthcheck on `/healthz`. CI builds amd64+arm64 to GHCR on push to `main` | Claude | Small attack surface, no compiler needed, Pi-ready |
+| D-035 | Images are public: GHCR (made public once by hand) **and** the user's Docker Hub. Docker Hub push runs only when the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets exist. Every build is tagged `latest` + `sha-<commit>` | User + Claude | Easy pulls on the server and Pi; SHA tags allow pinning and rollback |
 | D-034 | npm workspaces monorepo: `packages/shared` (API types, zod schemas on a separate subpath so the UI bundle stays small), `packages/server`, `packages/web` | Claude | Shared contract for UI, server and a future Android app |
 
 ## 2026-10-10 (round 2)
@@ -55,6 +56,7 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 
 Resolved: Q-LOGIN (D-019), Q-ACCESS (D-020), Q-STACK (D-021), Q-PI (D-023), Q-RETENTION (D-022), Q-YOUTUBE (D-024), Q-NOTIFY (D-025), Q-2FA (D-026), Q-PROXY (D-030, D-031).
 
-- **Q-GHCR**: OK for CI to publish the image to GHCR on pushes to `main`? Should the package be public (easy `docker pull` on the server) or private (needs `docker login`)?
-- **Q-PI-TEST**: Is a Pi available to try the arm64 image once it's published? (Not testable in the build environment.)
+Resolved: Q-GHCR (D-035), Q-PI-TEST (user has a Pi; checklist in DEPLOY.md).
+
+- **Q-FORUM-ACCESS**: The build environment's network policy blocks the forum sites. To build M1 against real pages, allow `thehotpepper.com`, `www.overclock.net`, `www.bikeforums.net`, or provide saved pages.
 - **Q-REDDIT**: Subreddits only, or also your home feed and saved posts? Deferred until after YouTube.

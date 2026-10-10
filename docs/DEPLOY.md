@@ -33,11 +33,34 @@ working once the account exists. It changes on every restart until then.
 > **Do the first-run setup before exposing the app publicly**, or soon after. Without the
 > code nobody can claim the account, but there's no reason to leave it waiting.
 
-Image: `ghcr.io/alexstapleton/forumaggregator:latest` is built for amd64 and arm64 by CI
-on every push to `main`. GitHub makes a new package **private** at first, so either set it to public
-(GitHub → your profile → Packages → forumaggregator → Package settings → Change visibility)
-or `docker login ghcr.io` on the server with a token that can read packages. To build it
-yourself instead, run `docker compose build` (on a Pi this takes a few minutes).
+### Where the image comes from
+
+CI builds the image for amd64 and arm64 on every push to `main` and publishes it to:
+
+- **GitHub Container Registry:** `ghcr.io/alexstapleton/forumaggregator:latest`. GitHub makes a
+  new package private at first. Make it public once: GitHub → your profile → Packages →
+  forumaggregator → Package settings → Change visibility → Public.
+- **Docker Hub:** `<your-dockerhub-user>/forumaggregator:latest`. One-time setup:
+  1. Docker Hub → Account settings → Personal access tokens → generate one with **Read & Write**.
+  2. GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
+     `DOCKERHUB_USERNAME` (your Docker Hub username) and `DOCKERHUB_TOKEN` (the token).
+  3. The next push to `main` creates `docker.io/<user>/forumaggregator`. Docker Hub repos are public by default.
+
+  Until those secrets exist, CI simply skips Docker Hub.
+
+Every build is also tagged with its short commit SHA (e.g. `:sha-0243689`) so you can pin or
+roll back. To use Docker Hub, change `image:` in `docker-compose.yml`. To build locally
+instead, run `docker compose build` (a few minutes on a Pi).
+
+### Raspberry Pi check (first install)
+
+1. 64-bit OS: `uname -m` must print `aarch64`.
+2. Data on an SSD if possible: put the `forumaggregator` folder on it.
+3. Follow the steps above, then confirm:
+   - `docker compose ps` shows `(healthy)` after ~30 s
+   - `docker stats --no-stream forumaggregator` shows roughly 60–120 MB memory
+   - the setup page loads at `http://<pi-ip>:8080`, and logging in takes under ~1 s
+4. If the container keeps restarting, `docker compose logs forumaggregator` shows why.
 
 ## 3. Nginx Proxy Manager
 
