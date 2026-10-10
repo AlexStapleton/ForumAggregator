@@ -1,6 +1,6 @@
 # ForumAggregator — Design
 
-Status: **Draft v0.1** (2026-10-10). Nothing is built yet. This document records
+Status: **Draft v0.2** (2026-10-10). Nothing is built yet. This document records
 what we want, the decisions made so far, and the questions still open.
 Decisions are logged in [DECISIONS.md](DECISIONS.md).
 
@@ -20,199 +20,253 @@ I have already read.
 | thehotpepper.com | Whole site at first | Narrow it down later using board discovery |
 | overclock.net | RTX 5070 Ti and RTX 3080 boards, plus the 5070 Ti Owners Club thread | Huge site, so whole-site follow isn't practical |
 | bikeforums.net | Tandem Cycling board | |
+| YouTube | Specific creators | Phase 2 |
 | Reddit | Subreddits (to be decided) | Phase 2 |
-| YouTube | Creators I follow | Phase 2 |
 
 ### Requirements
 
-- **R1** Runs as a single Docker container on a Linux server or Raspberry Pi (arm64 + amd64), and serves everything on **one port**.
-- **R2** Logs in to every forum as me. This is a requirement, not an option.
-- **R3** I can follow different **levels**: a whole site, a board, a thread, or individual posts. (An author or a saved search are possible later.)
-- **R4** Each forum has a different structure, so the app learns that structure itself. I pick what to follow from the discovered tree instead of typing URLs.
-- **R5** Keyword filtering (include/exclude) per subscription and globally.
-- **R6** I read everything in this app through a web UI that works well on a phone. An Android app may come later, so the UI talks to a JSON API.
-- **R7** Polling rates, request delays and limits are **configurable**, so I can respond to blocking or API limits.
+- **R1** Runs as a single Docker container behind my reverse proxy at its own hostname (e.g. `forumaggregator.<domain>`), and serves everything on **one port**. It must run on both an x86 server and a Raspberry Pi (amd64 + arm64).
+- **R2** Logs in to every forum as me. Logging in must be easy, and it must not depend on me exporting cookies by hand.
+- **R3** I can follow different **levels**: a whole site, a board, a thread, or individual posts.
+- **R4** The app **discovers** each forum's structure. I can **correct** it, and my corrections survive later re-discovery.
+- **R5** Flexible filtering (§5).
+- **R6** I read everything in this app through a web UI that works well on a phone and can be installed as an app (PWA). An Android app may come later, so the UI talks to a JSON API.
+- **R7** Polling rates, request delays and limits are **configurable**.
 - **R8** Mark items read or unread, save them, and mute a thread.
 - **R9** Settings start out in a config file and move to a settings screen in the UI.
-- **R10** Single user for now.
-- **R11** No AI in the first version. The design leaves room to add it later (see §9).
+- **R10** Single user. Because the app is reachable from the internet, it needs a proper login of its own.
+- **R11** SQLite by default. Postgres is optional for people who want a more robust database.
+- **R12** No AI in the first version. The design leaves room to add it later (see §11).
+- **R13** No notifications for now. Opening the app is enough.
 
 ---
 
-## 2. Architecture
+## 2. Language and stack
 
-```
-                 ┌──────────────────── Docker container (one port, e.g. 8080) ───────────────────┐
-  Browser/phone ─┤  Web UI (server-rendered + HTMX, installable PWA)                              │
-                 │  JSON API  (/api/...)  ← future Android app                                    │
-                 │        │                                                                       │
-                 │  Core: subscriptions · filters · read state · search (SQLite FTS5)             │
-                 │        │                                                                       │
-                 │  Scheduler ──► Fetch queue ──► Per-host rate limiter ──► Source adapters       │
-                 │                                                     ├─ XenForo (cookies)      │
-                 │                                                     ├─ Reddit                 │
-                 │                                                     └─ YouTube (RSS)          │
-                 │  /data volume: app.db · config.yaml · secrets (encrypted cookies)              │
-                 └────────────────────────────────────────────────────────────────────────────────┘
-```
+### Options compared
 
-### Proposed stack (to be confirmed — see Q-STACK)
+| | Python | **TypeScript (Node)** | Rust | Go | C++ |
+|---|---|---|---|---|---|
+| Speed of building and changing it | Fast | Fast | Slow | Medium | Slow |
+| Tools for reading web pages | Excellent | Excellent | OK | Good | Poor |
+| Built-in browser automation (needed for login, §6) | Supported | **Native: Playwright is a Node project** | Community libraries only | Community libraries only | None worth using |
+| Memory at idle | ~60–100 MB | ~60–100 MB | ~10 MB | ~15 MB | ~10 MB |
+| Same language for UI, API and an Android app later | No | **Yes** (React / Capacitor / React Native) | No | No | No |
+| Database layer that handles both SQLite and Postgres | SQLAlchemy | Drizzle / Kysely | sqlx / diesel | sqlc / gorm | Hand-rolled |
 
-| Part | Choice | Why |
-|---|---|---|
-| Language | Python 3.12 | Strongest scraping ecosystem, easy to read |
-| Web/API | FastAPI + Jinja2 + HTMX | One process and one port. Needs no JS build step. The API is reusable by an Android app |
-| Database | SQLite (WAL mode, FTS5) | No separate database server. Fine on a Pi. Full-text search is built in |
-| HTTP | httpx (HTTP/2, cookie jar) | Async and fast. Keeps cookies per site |
-| HTML parsing | selectolax (lxml fallback) | Fast on a Pi |
-| Scheduler | APScheduler (in-process) | No Redis or Celery needed for one user |
-| Headless browser | Playwright, **optional and not installed by default** | Only needed if a site sits behind a JS challenge. Keeps the image small |
-| Packaging | Multi-arch Docker image (amd64/arm64) and `docker-compose.yml` | Matches R1 |
+**Why not Rust or C++:** the app spends nearly all its time *waiting*, partly on the network and mostly on the polite delays we add deliberately (§7). Raw speed gains us nothing here. Meanwhile, forum page parsers break whenever a site changes its theme, so it matters most that the code is quick to fix. A Pi runs Node or Python comfortably for this workload.
+
+### Recommendation: TypeScript
+
+My earlier draft suggested Python. I now recommend TypeScript, for three reasons:
+
+1. **Login** (§6) relies on a real browser that the app controls. Playwright is a Node project, so TypeScript uses it directly.
+2. The server, the web UI and a possible Android app later can **share code and data types**.
+3. A good database layer (Drizzle) handles both SQLite and Postgres (R11).
+
+| Part | Choice |
+|---|---|
+| Runtime | Node.js (current LTS) |
+| Server/API | Fastify, with Zod for checking config and API input |
+| Database | Drizzle ORM. **SQLite** (better-sqlite3, WAL mode) by default; **Postgres** if `DATABASE_URL` is set |
+| Search | Behind an interface: SQLite FTS5, or Postgres `tsvector` |
+| Fetching and parsing | undici (HTTP with a cookie jar), cheerio (HTML) |
+| Browser | Playwright with Chromium, used for logins (§6) and for sites that need it |
+| Scheduler | In-process job queue with a per-host rate limiter |
+| UI | React + Vite, built into static files the server delivers. PWA, so it installs on a phone home screen. Capacitor can wrap the same app for Android later |
+| Packaging | Multi-arch Docker image (amd64/arm64) and `docker-compose.yml` |
 
 ---
 
 ## 3. Data model (first cut)
 
-- **Site**: one per forum or service. Holds the adapter type (`xenforo`, `reddit`, `youtube`), the base URL, login state and the rate-limit settings.
-- **Node**: a discovered piece of a site's structure: category → board → sub-board. This is a tree (`parent_id`). It holds the forum's own ID, title and URL. Refreshed from time to time.
-- **Subscription**: what I follow:
-  - `target`: a site, node (board), thread, author, search, subreddit or channel
-  - `level`: what counts as a new item (see §4)
-  - `include_subboards`: yes/no
-  - `filters`: keyword rules (§5)
-  - `poll_interval`: overrides the site default
-  - `enabled`, `priority`
-- **Thread**: a forum thread or Reddit post. Holds title, author, reply count, last-post time, and muted/followed flags.
-- **Item**: what appears in my feed. Either a new thread, a new post, a video or a digest. Holds source, URL, author, time, an excerpt, the full text (for search) and a content hash for de-duplication.
-- **ItemState**: read, saved, hidden.
-- **FetchLog**: one row per request. Holds status code, timing and errors. Feeds the health page and the backoff logic.
+- **Site**: one per forum or service. Holds the adapter type, the base URL, login state and rate-limit settings.
+- **Node**: a discovered piece of a site's structure (category → board → sub-board). Holds the forum's own ID, title, URL and parent. Holds `discovered_*` fields **and** separate `user_*` override fields (§8).
+- **Subscription**: what I follow. Holds the target, `level`, item mode (§4), `include_subboards`, filter rules (§5), `poll_interval`, and `enabled`.
+- **Thread**: a forum thread, Reddit post or video. Holds title, author, reply count, last-post time, and muted/followed flags.
+- **Item**: what appears in my feed. Holds source, URL, author, time, an excerpt, the full text and a content hash.
+- **ItemState**: read, saved, hidden-by-filter (with the rule that hid it), tags and highlight.
+- **Rule** / **KeywordSet**: filtering (§5).
+- **FetchLog**: one row per request. Feeds the health page and the backoff logic.
+- **ItemEnrichment**: reserved for AI (§11). Empty at first.
+
+Retention is configurable and defaults to keeping everything. Saved items are never deleted automatically.
 
 ---
 
 ## 4. "Levels": what I follow vs. what I get
 
-Every forum is a tree:
-
 ```
 Site ─► Category ─► Board ─► (Sub-board) ─► Thread ─► Post
 ```
 
-A subscription sets **where** in the tree I'm following and **what counts as an item**:
-
-| Follow at… | Item mode `new_threads` | Item mode `all_posts` | Item mode `activity` |
+| Follow at… | `new_threads` | `all_posts` | `activity` |
 |---|---|---|---|
-| Site | Every new thread on the site | (too noisy, not offered) | Threads with new replies, grouped by thread |
-| Board | New threads in this board (and sub-boards if chosen) | Every new post in the board | Threads with new replies since I last looked |
-| Thread | — | Every new reply | One rolled-up entry: "12 new replies in X" |
+| Site | Every new thread on the site | (too noisy, not offered) | Threads with new replies, one card per thread |
+| Board | New threads in the board (and sub-boards if chosen) | Every new post | One card per active thread: "12 new replies" |
+| Thread | — | Every new reply | One rolled-up card |
 
-- **`activity`** answers "a way to see recent activity". The feed shows one card per thread with the number of new replies and the newest snippet. It doesn't show every post. This is the recommended default for big boards like the GPU ones.
-- **Promote and demote from the feed**: any thread card has **Follow thread**, which creates a thread-level `all_posts` subscription, and **Mute thread**, which hides that thread from every subscription.
-- Rules for overlapping subscriptions: the same post is never shown twice. The most specific subscription wins: thread over board over site.
+- Every card has **Follow thread** and **Mute thread** buttons.
+- The same post never appears twice. The most specific subscription wins: thread over board over site.
+- `activity` is the suggested mode for the busy GPU boards.
 
 ---
 
-## 5. Filters vs. search
+## 5. Filtering
 
-These are two separate features:
+### Principles
 
-- **Filters** decide what goes into the feed. They are stored on a subscription, or globally.
-  - `include`: any of these words or phrases (matched on title, body, or both)
-  - `exclude`: none of these
-  - `authors_include` / `authors_exclude`
-  - `min_replies` (good for `activity` mode)
-  - Matching is case-insensitive and on whole words, and `"quoted phrases"` are supported. Regex is available as an advanced option.
-  - Filtered-out items are **kept but hidden**. If I change a filter later, it applies to past items too.
-- **Search** finds things in everything already collected. It uses SQLite FTS5 over titles and bodies and can be narrowed by site, board, author and date. This runs locally and doesn't touch the forums.
+1. **Highlight rather than hide.** The safest default is to show everything and highlight what I care about. Hiding is an explicit choice, so nothing goes missing silently.
+2. **Nothing is deleted.** Hidden items go into a **Filtered** view where I can see which rule hid each one.
+3. **Preview before saving.** While I edit a rule, the app shows how many of the last 7 days' items it would affect, with examples.
+4. **Reusable keyword sets.** For example, a "GPU tuning" set (undervolt\*, curve, "power limit", "memory OC", coil whine) can be used on both GPU boards and a subreddit.
+
+### Simple mode (default): three boxes per subscription
+
+| Box | Effect |
+|---|---|
+| **Highlight if it mentions** | Shows a badge and colour, and offers a "Highlighted only" view |
+| **Only show if it mentions** | Hides everything else |
+| **Hide if it mentions** | For example: "for sale", WTB, "which should I buy" |
+
+There's also an **authors** list (always show / always hide) and **minimum replies** (for `activity` mode).
+
+### Advanced mode: rules
+
+A rule is *conditions → action*. Rules run in order: global rules first, then the subscription's own. The first rule that hides or shows an item decides. Highlight and tag actions add up.
+
+- **Fields:** title, body, author, board, reply count, age, source type
+- **Operators:** has word or phrase, wildcard (`undervolt*`), regex, `>=` / `<=`
+- **Combine:** all of / any of
+- **Actions:** hide, show, highlight, tag, set priority
+
+Matching ignores case, matches whole words, and `"quoted phrases"` work. A word also matches its simple plurals.
+
+The simple boxes are stored as rules too, so moving to advanced mode later loses nothing.
 
 ---
 
 ## 6. Logging in (R2)
 
-Most forums block or challenge automated password logins with captchas, 2FA and bot protection. The plan has two options:
+Cookie export is out. Instead, the app **gets and refreshes the session by itself**. There are three ways, and the app tries them in this order:
 
-1. **Cookie import (default, most reliable).** I log in normally in my browser and export that site's cookies using a cookies.txt exporter extension. Then I paste or upload them in Settings. XenForo's "Stay logged in" cookie lasts a long time.
-2. **Username and password (optional).** The app submits the site's login form. This only works when the site shows no captcha or JS challenge.
+### A. Username and password (automatic)
+I enter my username and password once. The app logs in the way the browser would: it loads the login form, sends the hidden security token along with my details, and ticks "stay logged in".
+- **Re-logs in automatically** when the session expires, so I never have to think about it.
+- Fails if the site shows a captcha or asks for a two-factor code. Then the app falls back to B and tells me.
 
-For both options:
+### B. Built-in login browser (for captchas and 2FA)
+I tap **Log in** in Settings. The app opens a real Chromium browser on the server and shows it to me **inside the app's web page**, on my phone or my desktop, over the same port. I log in normally: captcha, 2FA code, "stay logged in". When the app sees I'm logged in, it saves the session and closes the browser.
+- Works for any site, including Reddit if needed.
+- The browser only runs during login, using ~300–500 MB of RAM for a minute.
+- How it works: Playwright drives Chromium; screenshots are streamed to the page and my clicks and typing are sent back, all through the app's own port. No VNC and no extra ports.
 
-- Secrets are **encrypted at rest** in `/data` using a key from an environment variable (`FA_SECRET_KEY`).
-- Each poll checks that the session is still logged in, for example by looking for the logged-in username or a logout link on the page. If the session has expired, the site is marked **"needs login"** and a banner appears in the UI. The app doesn't keep making anonymous requests.
-- The app uses a realistic browser User-Agent. Optionally I can set the same User-Agent as the browser the cookies came from.
-- Logging in at all means the app acts as my account. Request rates stay low and human-like (§7) to protect the account.
+### C. Paste cookies (advanced, last resort)
+Kept for odd cases. Never required.
 
-**Reddit**: The official API now appears to need approval even for a personal "script" app, and reports in 2026 vary. Fallback: Reddit's per-user **private RSS feeds** (front page, subreddits, saved) authenticated by a feed token, plus `/r/<sub>/.rss`. Not confirmed yet; we'll try it in Phase 2.
+### For all three
+- My passwords and sessions are **encrypted at rest** with a key from an environment variable (`FA_SECRET_KEY`).
+- Before each poll, the app checks that it's still logged in. If it isn't, it tries A, and if that fails it marks the site **"needs login"** and shows a banner. It never keeps fetching while logged out without telling me.
+- Request rates stay low and human-like (§7) to protect my accounts.
 
-**YouTube**: Following creators doesn't need a login. Each channel has a public feed: `https://www.youtube.com/feeds/videos.xml?channel_id=…`. I can import my subscriptions once from a Google Takeout file (`subscriptions.csv`). That avoids YouTube Data API quotas and OAuth.
+### Logging in to the app itself (it's on the internet)
+- One user, with a strong password (Argon2 hash) and optional TOTP 2FA. Session cookies are HttpOnly, Secure and SameSite. Repeated failed logins are slowed down.
+- Works behind the reverse proxy: it honours `X-Forwarded-*` headers from a trusted proxy IP.
+- Optionally, it can trust a header from a single-sign-on proxy such as Authelia or Authentik.
 
 ---
 
 ## 7. Politeness, rate limits and blocking (R7)
 
-All settings below are configurable globally, per site and per subscription:
+All settings are configurable globally, per site and per subscription:
 
 | Setting | Default (proposed) |
 |---|---|
 | `poll_interval` | 30 min for a site or board, 15 min for a followed thread |
 | `min_delay_between_requests` (per host) | 5 s, plus 0–3 s random jitter |
 | `max_concurrent_requests` (per host) | 1 |
-| `max_pages_per_poll` | 3 (how far back to page through a busy thread) |
-| `quiet_hours` | None |
+| `max_pages_per_poll` | 3 |
 | Backoff | On 429/503: wait ×2 each time, up to 6 h. Honours `Retry-After` |
 | Circuit breaker | 5 failures in a row → pause the site and show it in the UI |
 
-- **Incremental fetching**: the app remembers the last post ID or time per thread and board, so it only fetches what's new. For a thread it jumps to the last page and works backward until it reaches known posts.
-- **Prefer feeds**: if a site serves an RSS feed for a board or thread, the app uses it first because it's cheaper. It falls back to reading the HTML for the full post body or when no feed exists.
+- Fetching is **incremental**: the app remembers the newest post it has seen in each thread and board. For a thread, it starts at the last page and works backward until it reaches posts it already has.
+- If a site has an RSS feed, the app uses it first because it's cheaper. It falls back to reading the HTML page when it needs the full post.
 - A **Health page** shows each site's last success, error rate, login state and next poll.
 
 ---
 
-## 8. Board discovery (R4)
+## 8. Board discovery and corrections (R4)
 
-1. Add a site: enter the base URL and set up login.
-2. The adapter fetches the forum index (for XenForo, `/forums/`) and builds the **Node** tree.
-3. Settings shows the tree with checkboxes, each with a choice of level and item mode.
-4. Discovery re-runs weekly so new or renamed boards appear. Boards that vanish are flagged, not deleted.
+1. **Discover:** the site adapter reads the forum index and builds the board tree.
+2. **Review:** Settings shows the tree. For each board I can:
+   - follow it (choose the level and mode)
+   - **rename** it, **hide** it, or **move** it under a different parent
+   - mark it as "not a board" (link-only nodes)
+   - **add a board manually** by pasting its URL, if discovery missed it
+   - press **Test**, which fetches one page and shows what was parsed (threads, authors, dates), so I can confirm it reads correctly
+3. **Re-discovery** runs weekly. My corrections are stored separately from what was discovered, so re-discovery never overwrites them. New boards are flagged as "new". Boards that disappear are flagged as "missing", not deleted.
+4. **Parsing profiles:** the page parsing for each type of forum software uses CSS selector profiles. A site can override individual selectors if its theme differs. When **Test** shows a broken result, I fix that site's selectors in config instead of waiting for a code change.
 
-**Unverified assumption:** all three forums appear to run XenForo, but I couldn't check them from the build environment. Overclock.net and BikeForums are both VerticalScope sites, which reportedly use a shared, customised XenForo. If that holds, one `xenforo` adapter covers all three. The adapter will use per-site **CSS selector profiles** so differences in themes only need config changes, not code. The first milestone checks this against the real sites.
+**Unverified assumption:** all three forums appear to run XenForo (Overclock.net and BikeForums are VerticalScope sites). I couldn't check this from the build environment. M1 checks it against the real sites.
 
 ---
 
-## 9. AI proposal (not in the first version)
+## 9. YouTube and Reddit
 
-AI would be a **plug-in stage** in the pipeline, **off by default**:
-`fetch → store → filter → [AI enrich] → feed`.
+- **YouTube, specific creators:** I paste a channel URL or `@handle`. The app finds the channel ID and follows the channel's public feed (`/feeds/videos.xml?channel_id=…`). No login or API key needed. The feed only lists a channel's ~15 newest videos, which is fine when checking every 30–60 minutes. There's an option to hide Shorts.
+- **Reddit:** Phase 2, after YouTube. Reddit's API now appears to need approval even for personal use (not confirmed). Fallbacks: subreddit RSS feeds, or a logged-in session using login method B.
+
+---
+
+## 10. Hardware: i3 server vs Raspberry Pi
+
+The app runs on both from **the same multi-arch image**. Differences:
+
+| | i3-10105 server (+GTX 1060 6 GB) | Raspberry Pi 4/5 |
+|---|---|---|
+| Normal polling and UI | Plenty of headroom | Fine. The workload is light (~100–150 MB RAM) |
+| Built-in login browser (§6B) | Instant | Works on arm64 but takes a few seconds to start. Needs ~0.5 GB of free RAM while open, so a **4 GB+ Pi is recommended** |
+| Storage | SSD | **Use an SSD over USB, not the SD card**: constant database writes wear out SD cards and slow SQLite down |
+| Search | Fast | Fine for a single user's data (hundreds of thousands of items) |
+| Local AI (§11) | The 1060 can run small (~3–8B) quantized models with Ollama for scoring and short summaries. **To verify:** current NVIDIA drivers and CUDA releases are dropping Pascal (GTX 10-series), so the driver and Ollama versions need checking | Not practical. It would have to call a hosted API or the i3 server |
+| Postgres option | Easy | Works, but uses more RAM. SQLite is the better fit |
+
+AI never runs inside this container. The app calls an AI endpoint over HTTP (local Ollama or a hosted API), so the container stays small and identical on both machines.
+
+---
+
+## 11. AI proposal (not in the first version)
+
+AI would be a plug-in stage that is **off by default**: `fetch → store → filter → [AI enrich] → feed`.
 
 | Feature | What it does | When it runs | Cost control |
 |---|---|---|---|
-| **Catch me up** | Summarizes the new replies in a big thread, e.g. "the last 3 pages of the 5070 Ti club: people are discussing driver 58x.xx crashes…" | Only when I press the button | Summaries are cached per thread and post range |
-| **Relevance scoring** | Scores each item 0–100 against a short interest profile I write per subscription, e.g. "undervolting, memory overclocks, coil whine. Not: buying advice". The feed can sort or filter by score | On new items in subscriptions where I turn it on | Uses a small, cheap model. Scores only titles and excerpts. Has a daily budget cap |
-| **Natural-language filters** | "Hide sale posts and 'which should I buy' threads" compiles to a classifier prompt | With relevance scoring | Same as above |
-| **Daily digest** | One readable briefing across all sources | Once a day on a schedule | One call per day |
-| **Cross-source de-duplication** | Groups the same story across forum, Reddit and YouTube | Later | Can use local embeddings |
+| **Catch me up** | Summarizes new replies in a big thread | Only when I press the button | Cached |
+| **Relevance scoring** | Scores items 0–100 against a short interest profile, which becomes a filter field (§5) | Per subscription, when I turn it on | Small model, titles and excerpts only, daily cap |
+| **Natural-language filters** | e.g. "hide buying-advice threads" | With scoring | Same |
+| **Daily digest** | One briefing across all sources | Once a day | One call |
+| **Cross-source de-duplication** | Groups the same story across sources | Later | Local embeddings |
 
-Implementation notes:
-- A provider interface (`LLMProvider`) supports a hosted API (e.g. Claude) or a **local model** via Ollama on a stronger machine. A Raspberry Pi is too slow to run useful models itself.
-- Settings has a **monthly spend cap** and an AI on/off switch per subscription.
-- **Privacy**: forum content, some of it from members-only boards, would be sent to the provider. The UI makes that explicit for each subscription.
-- The data model gets an `ItemEnrichment` table (score, summary, model, cost) now, so adding AI later needs no migration.
+- Providers are pluggable: a hosted API (e.g. Claude) or local Ollama (the 1060 server, see §10). There's a monthly spend cap.
+- **Privacy:** forum content, some of it from members-only boards, would be sent to the provider. The UI makes that explicit for each subscription.
 
 ---
 
-## 10. Milestones
+## 12. Milestones
 
 | # | Scope | Done when |
 |---|---|---|
-| **M0** | Skeleton: FastAPI app, SQLite, config file, Dockerfile and compose file (multi-arch), health endpoint, app password | `docker compose up` serves a login page on one port on the Pi |
-| **M1** | XenForo adapter: cookie login, board discovery, `new_threads` / `activity` / `all_posts`, incremental fetch, rate limiter | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
-| **M2** | Feed UI: read/unread, save, mute, follow-from-card, mobile layout, PWA install | Usable daily on my phone |
-| **M3** | Filters and full-text search | Keyword rules work. Search returns results |
-| **M4** | Settings screen (sites, login, discovery tree, subscriptions, rate limits). The config file becomes an import/export | No file editing needed |
-| **M5** | YouTube (RSS and Takeout import) and Reddit adapters | Videos and subreddit posts appear in the feed |
-| **M6** | Notifications (web push or ntfy), health page polish | |
-| **M7** | AI stage (§9) | |
+| **M0** | Skeleton: Fastify + React app, SQLite/Postgres through Drizzle, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi |
+| **M1** | XenForo adapter: login methods A and B, discovery and corrections, `new_threads` / `activity` / `all_posts`, rate limiter, health page | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
+| **M2** | Feed UI: read/unread, save, follow/mute from a card, mobile layout, PWA | Usable daily on my phone |
+| **M3** | Filters (simple and advanced, with preview) and full-text search | |
+| **M4** | Settings screen. The config file becomes an import/export | No file editing needed |
+| **M5** | YouTube creators, then Reddit | |
+| **M6** | AI stage (§11) | |
+| later | Notifications, Android wrapper | |
 
 ---
 
-## 11. Open questions
+## 13. Open questions
 
 See the bottom of [DECISIONS.md](DECISIONS.md#open-questions).
