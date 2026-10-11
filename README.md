@@ -5,11 +5,13 @@ YouTube creators you choose, logs in to forums as you, filters by keywords, and 
 read everything in one place on desktop or phone.
 
 **Status: milestone M0 done.** The app runs in Docker with its own secure login (password +
-optional authenticator-app 2FA) behind a reverse proxy. Reading forums starts in M1.
+optional authenticator-app 2FA) behind a reverse proxy. Reading forums (M1) is waiting on a
+decision about how to read each site: see [Site access](docs/SITE-ACCESS.md).
 
 - [Design](docs/DESIGN.md): requirements, architecture, milestones
 - [Decision log](docs/DECISIONS.md): what was decided and why, plus open questions
 - [Deployment](docs/DEPLOY.md): Docker, Nginx Proxy Manager, first-run setup, SSO
+- [Site access](docs/SITE-ACCESS.md): what each forum allows, and the options for reading it
 
 ## Quick start (Docker)
 

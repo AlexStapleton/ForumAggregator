@@ -2,6 +2,15 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-11 (round 4: site access)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-036 | Claude does not fetch the forums from the build environment. Parser fixtures come from pages the user saves in their own browser and attaches in chat (never committed; the repo is public) | Claude | thehotpepper.com and overclock.net robots.txt explicitly disallow AI agents (ClaudeBot, anthropic-ai, ChatGPT-User…) |
+| D-037 | The app identifies itself honestly (`ForumAggregator/<ver> (personal feed reader)`), follows the `*` robots.txt rules, and never disguises automation or circumvents bot challenges. This replaces DESIGN v0.2's "realistic browser user agent" | Claude | Bot checks are the site owners' explicit wishes. A personal reader can be polite without pretending to be a browser |
+| D-038 | Added a `check-sites` diagnostic, run on the user's server, to learn what each forum serves to that IP (page, RSS, challenge, robots) before choosing a reading method per site | Claude | Challenges seen from the data-centre IP may not apply to a home IP; only the user's server can tell |
+| D-039 | CI gets a manual "Run workflow" trigger. `latest` is published only from `main`; manual runs on other branches publish a branch-name tag plus `sha-…` | Claude | Re-publish after fixing Docker Hub secrets without a code push; test images without moving `latest` |
+
 ## 2026-10-10 (round 3: M0 build)
 
 | ID | Decision | Source | Rationale |
@@ -58,5 +67,7 @@ Resolved: Q-LOGIN (D-019), Q-ACCESS (D-020), Q-STACK (D-021), Q-PI (D-023), Q-RE
 
 Resolved: Q-GHCR (D-035), Q-PI-TEST (user has a Pi; checklist in DEPLOY.md).
 
-- **Q-FORUM-ACCESS**: The build environment's network policy blocks the forum sites. To build M1 against real pages, allow `thehotpepper.com`, `www.overclock.net`, `www.bikeforums.net`, or provide saved pages.
+- **Q-FORUM-ACCESS**: How should the app read each forum? Options A–D in [SITE-ACCESS.md](SITE-ACCESS.md). Needs the `check-sites` output from the user's server, plus saved sample pages.
+- **Q-EMAIL**: Is reading forum email notifications from a mailbox (option C) acceptable?
+- **Q-DOCKERHUB**: Docker Hub push was skipped on the 2026-10-11 run (`DOCKERHUB_USERNAME` empty at run time). Check the secret names and location, then re-run.
 - **Q-REDDIT**: Subreddits only, or also your home feed and saved posts? Deferred until after YouTube.

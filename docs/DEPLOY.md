@@ -154,7 +154,20 @@ AUTH_PROXY_TRUSTED=172.20.0.5  # NPM's container IP, and nothing broader
 What to follow and how politely to fetch it lives in `data/config.yaml`; see
 `config.example.yaml`.
 
-## 7. Backups and upgrades
+## 7. Checking what the forums allow from your server
+
+```bash
+docker compose exec forumaggregator node packages/server/dist/tools/check-sites.js [url ...]
+```
+
+For each forum it reports whether pages and RSS are readable from this server or hit a bot
+check, which forum software it runs, and what robots.txt allows. It makes at most 3 requests
+per site, 5 s apart. See [SITE-ACCESS.md](SITE-ACCESS.md) for what to do with the results.
+
+If your server reaches the internet through an outbound proxy, add `NODE_USE_ENV_PROXY=1`
+alongside `HTTPS_PROXY` in `.env`.
+
+## 8. Backups and upgrades
 
 - Back up `./data` and your `.env` (it holds `FA_SECRET_KEY`). For a consistent SQLite
   copy while the app runs: `sqlite3 data/forumaggregator.db ".backup backup.db"`.
