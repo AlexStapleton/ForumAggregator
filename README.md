@@ -4,11 +4,12 @@ A self-hosted personal news feed. It follows the forum boards and threads, subre
 YouTube creators you choose, logs in to forums as you, filters by keywords, and lets you
 read everything in one place on desktop or phone.
 
-**Status: milestone M0 done.** The app runs in Docker with its own secure login (password +
-optional authenticator-app 2FA) behind a reverse proxy. Reading forums (M1) is waiting on a
-decision about how to read each site: see [Site access](docs/SITE-ACCESS.md).
+**Status: not usable as a feed reader yet.** The foundation (M0) is done: one-command Docker
+install, secure login with optional 2FA, reverse-proxy support. Following sources starts in M1.
+See the [roadmap](docs/ROADMAP.md).
 
-- [Design](docs/DESIGN.md): requirements, architecture, milestones
+- [Roadmap and progress](docs/ROADMAP.md): what's done, what's next, what's blocked
+- [Design](docs/DESIGN.md): requirements, architecture, how each part works
 - [Decision log](docs/DECISIONS.md): what was decided and why, plus open questions
 - [Deployment](docs/DEPLOY.md): Docker, Nginx Proxy Manager, first-run setup, SSO
 - [Site access](docs/SITE-ACCESS.md): what each forum allows, and the options for reading it

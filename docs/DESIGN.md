@@ -273,16 +273,10 @@ AI would be a plug-in stage that is **off by default**: `fetch → store → fil
 
 ## 12. Milestones
 
-| # | Scope | Done when |
-|---|---|---|
-| **M0** ✅ (install simplified in D-040–D-043) | Skeleton: Fastify + React app, SQLite/Postgres through Kysely, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi. *Verified on amd64; arm64 is built by CI but untested on a real Pi yet* |
-| **M1** | XenForo adapter: login methods A and B, discovery and corrections, `new_threads` / `activity` / `all_posts`, rate limiter, health page | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
-| **M2** | Feed UI: read/unread, save, follow/mute from a card, mobile layout, PWA | Usable daily on my phone |
-| **M3** | Filters (simple and advanced, with preview) and full-text search | |
-| **M4** | Settings screen. The config file becomes an import/export | No file editing needed |
-| **M5** | YouTube creators, then Reddit | |
-| **M6** | AI stage (§11) | |
-| later | Notifications, Android wrapper | |
+Milestones, progress and blockers are tracked in **[ROADMAP.md](ROADMAP.md)**, the only
+copy, so it can't drift from this document. Short version (reordered 2026-10-11): M0
+foundation ✅ → M1 first usable reader (RSS/Atom, YouTube, feed screen) → M2 forums →
+M3 filters and search → M4 settings screen and PWA → M5 Reddit → M6 AI.
 
 ---
 
