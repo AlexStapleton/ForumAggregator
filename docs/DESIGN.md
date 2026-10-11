@@ -1,6 +1,6 @@
 # ForumAggregator — Design
 
-Status: **v0.3** (2026-10-10). Milestone M0 (skeleton, app login, Docker) is built. This document records
+Status: **v0.4** (2026-10-11). M0 is built and released. M1 is waiting on the site-access decision ([SITE-ACCESS.md](SITE-ACCESS.md)). This document records
 what we want, the decisions made so far, and the questions still open.
 Decisions are logged in [DECISIONS.md](DECISIONS.md).
 
@@ -169,6 +169,10 @@ Kept for odd cases. Never required.
 - My passwords and sessions are **encrypted at rest** with a key from an environment variable (`FA_SECRET_KEY`).
 - Before each poll, the app checks that it's still logged in. If it isn't, it tries A, and if that fails it marks the site **"needs login"** and shows a banner. It never keeps fetching while logged out without telling me.
 - Request rates stay low and human-like (§7) to protect my accounts.
+- The app identifies itself honestly as `ForumAggregator/<version> (personal feed reader)` and
+  follows each site's robots.txt rules for general clients (`*`). It never disguises itself
+  or tries to get past bot checks. See [SITE-ACCESS.md](SITE-ACCESS.md) for what that means
+  for each forum.
 
 ### What if a forum adds 2FA later?
 Nothing in the design changes. Logins go through a pluggable *login strategy* per site:
@@ -222,7 +226,7 @@ All settings are configurable globally, per site and per subscription:
 3. **Re-discovery** runs weekly. My corrections are stored separately from what was discovered, so re-discovery never overwrites them. New boards are flagged as "new". Boards that disappear are flagged as "missing", not deleted.
 4. **Parsing profiles:** the page parsing for each type of forum software uses CSS selector profiles. A site can override individual selectors if its theme differs. When **Test** shows a broken result, I fix that site's selectors in config instead of waiting for a code change.
 
-**Unverified assumption:** all three forums appear to run XenForo (Overclock.net and BikeForums are VerticalScope sites). I couldn't check this from the build environment. M1 checks it against the real sites.
+**Checked 2026-10-11** (details in [SITE-ACCESS.md](SITE-ACCESS.md)): The Hot Pepper is XenForo (confirmed from its cookies). Overclock.net serves XenForo RSS and `xf_` cookies, so it's XenForo too. BikeForums was hidden behind a Cloudflare challenge, so it's still unconfirmed. Two of the three serve bot challenges to data-centre IPs, so *how* the app reads each site is an open decision (SITE-ACCESS.md options A–D).
 
 ---
 

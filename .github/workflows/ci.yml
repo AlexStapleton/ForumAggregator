@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # "Run workflow" button in the Actions tab: tests + publishes an image from any branch.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,7 +44,7 @@ jobs:
   # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token with Read & Write).
   image:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -76,8 +78,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.images.outputs.list }}
+          # latest only from main; manual runs on other branches get a branch-name tag.
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
             type=sha,format=short
       - uses: docker/build-push-action@v6
         with:
