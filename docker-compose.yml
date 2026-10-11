@@ -8,7 +8,7 @@
 # is generated on first start and stored with the data.
 services:
   forumaggregator:
-    image: ghcr.io/alexstapleton/forumaggregator:latest   # or <dockerhub-user>/forumaggregator:latest
+    image: alexstapo/forumaggregator:latest   # or ghcr.io/alexstapleton/forumaggregator:latest
     container_name: forumaggregator
     restart: unless-stopped
     ports:

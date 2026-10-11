@@ -20,7 +20,7 @@ No configuration needed. Either:
 ```bash
 docker run -d --name forumaggregator --restart unless-stopped \
   -p 8080:8080 -v forumaggregator-data:/data \
-  ghcr.io/alexstapleton/forumaggregator:latest
+  alexstapo/forumaggregator:latest
 ```
 
 or with Docker Compose:

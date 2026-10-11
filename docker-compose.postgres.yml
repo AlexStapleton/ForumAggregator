@@ -9,7 +9,7 @@
 # Postgres backups or want the database on a separate machine.
 services:
   forumaggregator:
-    image: ghcr.io/alexstapleton/forumaggregator:latest
+    image: alexstapo/forumaggregator:latest
     container_name: forumaggregator
     restart: unless-stopped
     ports:

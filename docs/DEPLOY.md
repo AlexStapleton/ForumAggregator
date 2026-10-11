@@ -18,7 +18,7 @@ Nothing to configure first: no `.env` file, no folders, no keys. Pick either opt
 ```bash
 docker run -d --name forumaggregator --restart unless-stopped \
   -p 8080:8080 -v forumaggregator-data:/data \
-  ghcr.io/alexstapleton/forumaggregator:latest
+  alexstapo/forumaggregator:latest
 docker logs forumaggregator          # shows the first-run setup code
 ```
 
@@ -68,7 +68,7 @@ code stops working once the account exists; until then it changes on every resta
 
 ```bash
 docker compose pull && docker compose up -d          # Option B
-docker pull ghcr.io/alexstapleton/forumaggregator:latest && \
+docker pull alexstapo/forumaggregator:latest && \
   docker rm -f forumaggregator && <the docker run command again>   # Option A
 ```
 
@@ -89,7 +89,8 @@ CI builds the image for amd64 and arm64 on every push to `main` and publishes it
 - **GitHub Container Registry:** `ghcr.io/alexstapleton/forumaggregator:latest`. GitHub makes a
   new package private at first. Make it public once: GitHub → your profile → Packages →
   forumaggregator → Package settings → Change visibility → Public.
-- **Docker Hub:** `<your-dockerhub-user>/forumaggregator:latest`. One-time setup:
+- **Docker Hub (default in the docs):** `alexstapo/forumaggregator:latest`
+  ([hub.docker.com/r/alexstapo/forumaggregator](https://hub.docker.com/r/alexstapo/forumaggregator)). How CI publishes there:
   1. Docker Hub → Account settings → Personal access tokens → generate one with **Read & Write**.
   2. GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
      `DOCKERHUB_USERNAME` (your Docker Hub username) and `DOCKERHUB_TOKEN` (the token).
@@ -98,9 +99,9 @@ CI builds the image for amd64 and arm64 on every push to `main` and publishes it
   Until those secrets exist, CI simply skips Docker Hub.
 
 Every build is also tagged with its short commit SHA (e.g. `:sha-0243689`) so you can pin or
-roll back. To use Docker Hub, replace `ghcr.io/alexstapleton/forumaggregator` with
-`<dockerhub-user>/forumaggregator` in the commands or compose file. To build the image yourself
-from a clone of the repo: `docker build -t ghcr.io/alexstapleton/forumaggregator:latest .`
+roll back. To pull from GitHub instead, use `ghcr.io/alexstapleton/forumaggregator` in place of
+`alexstapo/forumaggregator`. To build the image yourself
+from a clone of the repo: `docker build -t alexstapo/forumaggregator:latest .`
 (a few minutes on a Pi).
 
 ### Raspberry Pi check (first install)
