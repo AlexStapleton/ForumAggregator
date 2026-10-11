@@ -1,0 +1,74 @@
+import { useCallback, useEffect, useState } from "react";
+import type { AuthStatus } from "@fa/shared";
+import { api, errorMessage } from "./api";
+import { Alert } from "./components";
+import { FeedPage } from "./pages/FeedPage";
+import { LoginPage } from "./pages/LoginPage";
+import { SecurityPage } from "./pages/SecurityPage";
+import { SetupPage } from "./pages/SetupPage";
+
+type Route = "feed" | "settings";
+
+function routeFromHash(): Route {
+  return location.hash === "#/settings" ? "settings" : "feed";
+}
+
+export function App() {
+  const [status, setStatus] = useState<AuthStatus>();
+  const [loadError, setLoadError] = useState<string>();
+  const [route, setRoute] = useState<Route>(routeFromHash);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api<AuthStatus>("GET", "/api/auth/status"));
+      setLoadError(undefined);
+    } catch (err) {
+      setLoadError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const onHash = () => setRoute(routeFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [refresh]);
+
+  if (loadError) {
+    return (
+      <main className="auth-page">
+        <Alert>{loadError}</Alert>
+        <button onClick={() => void refresh()}>Retry</button>
+      </main>
+    );
+  }
+  if (!status) return <main className="auth-page" aria-busy="true" />;
+  if (status.setupRequired) return <SetupPage onDone={refresh} />;
+  if (!status.authenticated) return <LoginPage authMode={status.authMode} onDone={refresh} />;
+
+  const logout = async () => {
+    await api("POST", "/api/auth/logout").catch(() => undefined);
+    await refresh();
+  };
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <a className="brand" href="#/">
+          <img src="/icon.svg" alt="" width={24} height={24} />
+          <span>ForumAggregator</span>
+        </a>
+        <nav>
+          <a href="#/" aria-current={route === "feed" ? "page" : undefined}>Feed</a>
+          <a href="#/settings" aria-current={route === "settings" ? "page" : undefined}>Settings</a>
+          {status.via === "session" && (
+            <button className="link" onClick={() => void logout()}>Log out</button>
+          )}
+        </nav>
+      </header>
+      <main className="content">
+        {route === "feed" ? <FeedPage /> : <SecurityPage status={status} onChange={refresh} />}
+      </main>
+    </div>
+  );
+}
