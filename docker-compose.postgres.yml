@@ -1,0 +1,45 @@
+# ForumAggregator with Postgres instead of the built-in SQLite file.
+#
+#   curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/main/docker-compose.postgres.yml
+#   echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" > .env
+#   docker compose -f docker-compose.postgres.yml up -d
+#   docker compose -f docker-compose.postgres.yml logs forumaggregator   # first-run setup code
+#
+# SQLite is the better fit for a single user and a Raspberry Pi. Use this if you already run
+# Postgres backups or want the database on a separate machine.
+services:
+  forumaggregator:
+    image: ghcr.io/alexstapleton/forumaggregator:latest
+    container_name: forumaggregator
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - forumaggregator-data:/data   # still used for the encryption key and config.yaml
+    environment:
+      DATABASE_URL: postgres://forumaggregator:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/forumaggregator
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    container_name: forumaggregator-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: forumaggregator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: forumaggregator
+    volumes:
+      - forumaggregator-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forumaggregator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  forumaggregator-data:
+    name: forumaggregator-data   # fixed name, so backups and `docker run` find it
+  forumaggregator-db:
+    name: forumaggregator-db   # fixed name, so backups and `docker run` find it

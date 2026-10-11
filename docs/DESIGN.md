@@ -275,7 +275,7 @@ AI would be a plug-in stage that is **off by default**: `fetch → store → fil
 
 | # | Scope | Done when |
 |---|---|---|
-| **M0** ✅ | Skeleton: Fastify + React app, SQLite/Postgres through Kysely, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi. *Verified on amd64; arm64 is built by CI but untested on a real Pi yet* |
+| **M0** ✅ (install simplified in D-040–D-043) | Skeleton: Fastify + React app, SQLite/Postgres through Kysely, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi. *Verified on amd64; arm64 is built by CI but untested on a real Pi yet* |
 | **M1** | XenForo adapter: login methods A and B, discovery and corrections, `new_threads` / `activity` / `all_posts`, rate limiter, health page | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
 | **M2** | Feed UI: read/unread, save, follow/mute from a card, mobile layout, PWA | Usable daily on my phone |
 | **M3** | Filters (simple and advanced, with preview) and full-text search | |

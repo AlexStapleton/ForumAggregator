@@ -44,7 +44,7 @@ export async function createTestApp(
   });
   const db: Db = openDb({ databaseUrl: env.DATABASE_URL, dataDir });
   await migrate(db);
-  const app = await buildApp({ env, config: ConfigSchema.parse({}), db, now: () => clock.now });
+  const app = await buildApp({ env, secretKey: SECRET, config: ConfigSchema.parse({}), db, now: () => clock.now });
   await app.auth.initSetup(SETUP_CODE);
   return {
     ...app,

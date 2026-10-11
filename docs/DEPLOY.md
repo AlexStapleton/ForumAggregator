@@ -5,33 +5,82 @@ Target setup: one Docker container on a Linux server or Raspberry Pi, published 
 
 ## 1. Requirements
 
-- Docker with the Compose plugin.
+- Docker (with the Compose plugin if you use option B).
 - x86-64 or **arm64** (Raspberry Pi 4/5 running a 64-bit OS). 32-bit Raspberry Pi OS is not supported.
-- On a Pi: keep `./data` on an SSD rather than the SD card (DESIGN.md §10).
+- On a Pi: keep Docker's data on an SSD rather than the SD card (DESIGN.md §10).
 
-## 2. Start the container
+## 2. Install
+
+Nothing to configure first: no `.env` file, no folders, no keys. Pick either option.
+
+### Option A: one `docker run` command
+
+```bash
+docker run -d --name forumaggregator --restart unless-stopped \
+  -p 8080:8080 -v forumaggregator-data:/data \
+  ghcr.io/alexstapleton/forumaggregator:latest
+docker logs forumaggregator          # shows the first-run setup code
+```
+
+### Option B: Docker Compose
 
 ```bash
 mkdir forumaggregator && cd forumaggregator
-# Get docker-compose.yml and .env.example from the repo, then:
-cp .env.example .env
-echo "FA_SECRET_KEY=$(openssl rand -base64 48)" >> .env   # keep a backup of this value
-mkdir -p data && sudo chown 1000:1000 data                # the app runs as uid 1000, not root
+curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/main/docker-compose.yml
 docker compose up -d
-docker compose logs forumaggregator | grep "FIRST RUN"
+docker compose logs forumaggregator  # shows the first-run setup code
 ```
 
-The log shows a line like:
+Prefer Postgres to the built-in SQLite? Use `docker-compose.postgres.yml` instead (instructions
+at the top of that file). For one user, SQLite is simpler and lighter, especially on a Pi.
+
+### First run
+
+The log shows:
 
 ```
-FIRST RUN: open the app in your browser and create your account with setup code ABCDE-FGHJK
+  ┌──────────────────────────────────────────────────────────┐
+  │  ForumAggregator first-run setup                         │
+  │  Setup code: ABCDE-FGHJK                                 │
+  │  Open the app in your browser and enter this code.       │
+  └──────────────────────────────────────────────────────────┘
 ```
 
-Open the app and enter that code with your new username and password. The code stops
-working once the account exists. It changes on every restart until then.
+Open `http://<server-ip>:8080`, enter the code, and choose your username and password. The
+code stops working once the account exists; until then it changes on every restart.
 
 > **Do the first-run setup before exposing the app publicly**, or soon after. Without the
 > code nobody can claim the account, but there's no reason to leave it waiting.
+
+### What happens automatically
+
+- **Encryption key:** on first start the app generates the key that protects stored
+  passwords and 2FA secrets, and saves it as `secret.key` in the data volume (readable only by
+  the app). Backing up the volume backs up the key. To manage the key yourself, set
+  `FA_SECRET_KEY` instead.
+- **Permissions:** the container starts as root only to make `/data` owned by `PUID:PGID`
+  (default `1000:1000`), then drops to that user with no privileges before starting the app.
+  So a host folder (`-v ./data:/data`) works as well as a Docker volume, with no `chown`.
+  If you run the container with a fixed `user:` / `--user`, this step is skipped and the
+  folder must already be writable by that user.
+
+### Updating
+
+```bash
+docker compose pull && docker compose up -d          # Option B
+docker pull ghcr.io/alexstapleton/forumaggregator:latest && \
+  docker rm -f forumaggregator && <the docker run command again>   # Option A
+```
+
+Database migrations run automatically on start. Your data lives in the
+`forumaggregator-data` volume, so it survives updates and switching between options A and B.
+
+> **Installed before October 11, 2026 (with a `.env` file and a `./data` folder)?** Your key is
+> `FA_SECRET_KEY` in `.env`. Either keep using that `.env` (add `env_file: .env` and
+> `./data:/data` to the new compose file), or move the key into the data folder once:
+> `grep '^FA_SECRET_KEY=' .env | cut -d= -f2- > data/secret.key && chmod 600 data/secret.key`.
+> Starting without it would generate a *new* key, and the app couldn't read secrets saved
+> under the old one.
 
 ### Where the image comes from
 
@@ -49,18 +98,21 @@ CI builds the image for amd64 and arm64 on every push to `main` and publishes it
   Until those secrets exist, CI simply skips Docker Hub.
 
 Every build is also tagged with its short commit SHA (e.g. `:sha-0243689`) so you can pin or
-roll back. To use Docker Hub, change `image:` in `docker-compose.yml`. To build locally
-instead, run `docker compose build` (a few minutes on a Pi).
+roll back. To use Docker Hub, replace `ghcr.io/alexstapleton/forumaggregator` with
+`<dockerhub-user>/forumaggregator` in the commands or compose file. To build the image yourself
+from a clone of the repo: `docker build -t ghcr.io/alexstapleton/forumaggregator:latest .`
+(a few minutes on a Pi).
 
 ### Raspberry Pi check (first install)
 
 1. 64-bit OS: `uname -m` must print `aarch64`.
-2. Data on an SSD if possible: put the `forumaggregator` folder on it.
+2. Data on an SSD if possible: Docker's data directory, or a host folder on the SSD
+   (`-v /mnt/ssd/forumaggregator:/data`).
 3. Follow the steps above, then confirm:
-   - `docker compose ps` shows `(healthy)` after ~30 s
+   - `docker ps` shows `(healthy)` after ~30 s
    - `docker stats --no-stream forumaggregator` shows roughly 60–120 MB memory
    - the setup page loads at `http://<pi-ip>:8080`, and logging in takes under ~1 s
-4. If the container keeps restarting, `docker compose logs forumaggregator` shows why.
+4. If the container keeps restarting, `docker logs forumaggregator` shows why.
 
 ## 3. Nginx Proxy Manager
 
@@ -138,7 +190,8 @@ AUTH_PROXY_TRUSTED=172.20.0.5  # NPM's container IP, and nothing broader
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FA_SECRET_KEY` | required | Encrypts stored secrets. 32+ characters. Never change it after setup |
+| `PUID` / `PGID` | `1000` / `1000` | User and group the app runs as; the data folder is made theirs |
+| `FA_SECRET_KEY` | generated | Encrypts stored secrets (32+ characters). Unset: generated once and kept in `/data/secret.key`. Never change it after setup |
 | `PORT` | `8080` | Listen port inside the container |
 | `DATA_DIR` | `/data` | Database, `config.yaml` |
 | `DATABASE_URL` | SQLite in `DATA_DIR` | `postgres://user:pass@host:5432/db` to use Postgres |
@@ -157,19 +210,28 @@ What to follow and how politely to fetch it lives in `data/config.yaml`; see
 ## 7. Checking what the forums allow from your server
 
 ```bash
-docker compose exec forumaggregator node packages/server/dist/tools/check-sites.js [url ...]
+docker exec forumaggregator node packages/server/dist/tools/check-sites.js [url ...]
 ```
 
 For each forum it reports whether pages and RSS are readable from this server or hit a bot
 check, which forum software it runs, and what robots.txt allows. It makes at most 3 requests
 per site, 5 s apart. See [SITE-ACCESS.md](SITE-ACCESS.md) for what to do with the results.
 
-If your server reaches the internet through an outbound proxy, add `NODE_USE_ENV_PROXY=1`
-alongside `HTTPS_PROXY` in `.env`.
+If your server reaches the internet through an outbound proxy, give the container
+`NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY=…` environment variables.
 
-## 8. Backups and upgrades
+## 8. Backups
 
-- Back up `./data` and your `.env` (it holds `FA_SECRET_KEY`). For a consistent SQLite
-  copy while the app runs: `sqlite3 data/forumaggregator.db ".backup backup.db"`.
-- Upgrade: `docker compose pull && docker compose up -d`. Database migrations run
-  automatically on start.
+Everything lives in the `forumaggregator-data` volume: the database, `secret.key` and
+`config.yaml`. Stop the app briefly so the SQLite files are consistent:
+
+```bash
+docker stop forumaggregator
+docker run --rm -v forumaggregator-data:/data -v "$PWD":/backup busybox \
+  tar czf /backup/forumaggregator-$(date +%F).tgz -C /data .
+docker start forumaggregator
+```
+
+Restore by extracting the archive into an empty `forumaggregator-data` volume the same way
+(`tar xzf … -C /data`). With Postgres, also back up the database (`pg_dump`). With your own
+`FA_SECRET_KEY`, keep a copy of it too.

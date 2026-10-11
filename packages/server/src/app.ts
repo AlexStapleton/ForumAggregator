@@ -18,6 +18,8 @@ import { VERSION } from "./version.js";
 
 export interface AppDeps {
   env: Env;
+  /** Resolved by resolveSecretKey(): FA_SECRET_KEY or the key file in DATA_DIR. */
+  secretKey: string;
   config: AppConfig;
   db: Db;
   now?: () => number;
@@ -34,7 +36,7 @@ function trustProxySetting(value: string): boolean | string[] {
   return splitList(value);
 }
 
-export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> {
+export async function buildApp({ env, secretKey, config, db, now }: AppDeps): Promise<App> {
   const fastify = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -44,7 +46,7 @@ export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> 
     bodyLimit: 256 * 1024,
   });
 
-  const box = createSecretBox(env.FA_SECRET_KEY);
+  const box = createSecretBox(secretKey);
   const auth = new AuthService(db, box, env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000, now);
 
   await fastify.register(helmet, {

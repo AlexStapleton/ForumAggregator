@@ -18,10 +18,14 @@ const EnvSchema = z
     /** postgres://… for Postgres. Empty means SQLite at $DATA_DIR/forumaggregator.db. */
     DATABASE_URL: z.string().optional(),
     CONFIG_FILE: z.string().optional(),
-    /** Encrypts stored secrets (forum passwords, TOTP secret). Never change it after first run. */
+    /**
+     * Encrypts stored secrets (forum passwords, TOTP secret). Optional: when unset, a key is
+     * generated on first start and kept in $DATA_DIR/secret.key (see secretKey.ts).
+     */
     FA_SECRET_KEY: z
-      .string({ error: "FA_SECRET_KEY is required (generate one with: openssl rand -base64 48)" })
-      .min(32, "FA_SECRET_KEY must be at least 32 characters (openssl rand -base64 48)"),
+      .string()
+      .min(32, "FA_SECRET_KEY must be at least 32 characters (openssl rand -base64 48)")
+      .optional(),
     /** Optional fixed first-run setup code; otherwise a random one is printed to the log. */
     FA_SETUP_CODE: z.string().min(8).optional(),
     /**
