@@ -141,7 +141,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M2 start: FlareSolverr route, forum threads in the reader | branch, unmerged |
+| 2026-10-19 | M2 start: FlareSolverr route, forum threads in the reader; version 1.2.0 | PR, unmerged |
 | 2026-10-19 | **v1.1.0 released** (M1.3: Reddit pictures, source checkboxes, whole-card tap) | [#6](https://github.com/AlexStapleton/ForumAggregator/pull/6), tag `v1.1.0` |
 | 2026-10-19 | **v1.0.1 released** (M1.2: layout, timeline, OPML, reader selectors, YouTube and Reddit comments) | [#5](https://github.com/AlexStapleton/ForumAggregator/pull/5), tag `v1.0.1` |
 | 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |
