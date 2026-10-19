@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { OpmlImportResult, ReaderPreview, Source } from "@fa/shared";
+import type { FlareSolverrStatus, OpmlImportResult, ReaderPreview, Source } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert, Field } from "../components";
@@ -20,6 +20,7 @@ export function SourcesPage() {
   const [editing, setEditing] = useState<string>();
   const [defaults, setDefaults] = useState<Defaults>({ intervalMinutes: 30, keepDays: 0 });
   const [adding, setAdding] = useState(false);
+  const [flareOn, setFlareOn] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
   const [busy, setBusy] = useState<string>();
 
@@ -35,6 +36,9 @@ export function SourcesPage() {
     void load();
     api<{ polling: { intervalMinutes: number }; retention: { keepDays: number } }>("GET", "/api/config")
       .then((c) => setDefaults({ intervalMinutes: c.polling.intervalMinutes, keepDays: c.retention.keepDays }))
+      .catch(() => undefined);
+    api<FlareSolverrStatus>("GET", "/api/settings/flaresolverr")
+      .then((f) => setFlareOn(!!f.url))
       .catch(() => undefined);
   }, [load]);
 
@@ -113,6 +117,7 @@ export function SourcesPage() {
               <EditSource
                 source={s}
                 defaults={defaults}
+                flareOn={flareOn}
                 onCancel={() => setEditing(undefined)}
                 onSaved={async (updated) => {
                   setEditing(undefined);
@@ -129,6 +134,7 @@ export function SourcesPage() {
               </div>
               <span className={`status status-${s.status}`}>{STATUS_LABEL[s.status]}</span>
             </div>
+            {s.viaFlareSolverr && <p className="muted small">Fetched through FlareSolverr</p>}
             <p className="muted small break">
               {s.siteUrl ? (
                 <a href={s.siteUrl} target="_blank" rel="noopener noreferrer">
@@ -308,11 +314,13 @@ const RETENTION: Array<[number | null, string]> = [
 function EditSource({
   source,
   defaults,
+  flareOn,
   onCancel,
   onSaved,
 }: {
   source: Source;
   defaults: Defaults;
+  flareOn: boolean;
   onCancel: () => void;
   onSaved: (s: Source) => void;
 }) {
@@ -323,6 +331,7 @@ function EditSource({
   const [retention, setRetention] = useState<number | null>(source.retentionDays);
   const [articleSelector, setArticleSelector] = useState(source.articleSelector ?? "");
   const [removeSelector, setRemoveSelector] = useState(source.removeSelector ?? "");
+  const [viaFlare, setViaFlare] = useState(source.viaFlareSolverr);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -338,6 +347,7 @@ function EditSource({
       pollIntervalMinutes: pollInterval,
       retentionDays: retention,
     };
+    if (viaFlare !== source.viaFlareSolverr) patch.viaFlareSolverr = viaFlare;
     // Only feed sources are read from their pages (D-074).
     if (source.kind === "feed") Object.assign(patch, { articleSelector, removeSelector });
     const originalAddress = source.siteUrl ?? source.feedUrl;
@@ -400,6 +410,15 @@ function EditSource({
         </select>
         <small className="hint">Saved items are never deleted.</small>
       </div>
+      {(flareOn || source.viaFlareSolverr) && source.kind === "feed" && (
+        <label className="choice">
+          <input type="checkbox" checked={viaFlare} onChange={(e) => setViaFlare(e.target.checked)} />
+          <span>
+            <strong>Fetch through FlareSolverr</strong>
+            <span className="muted small block">For sites behind a Cloudflare check. Turned on by itself when adding such a site.</span>
+          </span>
+        </label>
+      )}
       {source.kind === "feed" && (
         <ReaderSelectors
           sourceId={source.id}

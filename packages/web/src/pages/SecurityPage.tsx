@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { AuthStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
+import type { AuthStatus, FlareSolverrStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
 import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout } from "../prefs";
@@ -14,6 +14,7 @@ export function SecurityPage({ status, onChange }: { status: AuthStatus; onChang
       </p>
       <ThisDevice />
       <YouTubeComments />
+      <FlareSolverrSettings />
       {status.via === "session" && <ChangePassword />}
       <TwoFactor enabled={!!status.totpEnabled} onChange={onChange} />
     </>
@@ -45,6 +46,81 @@ function ThisDevice() {
           </label>
         ))}
       </fieldset>
+    </section>
+  );
+}
+
+/** Optional FlareSolverr instance for forums behind a Cloudflare check (D-080). */
+function FlareSolverrSettings() {
+  const [status, setStatus] = useState<FlareSolverrStatus>();
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
+  const [fields, setFields] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api<FlareSolverrStatus>("GET", "/api/settings/flaresolverr").then(
+      (s) => {
+        setStatus(s);
+        setUrl(s.url ?? "");
+      },
+      (err) => setMessage({ kind: "error", text: errorMessage(err) }),
+    );
+  }, []);
+
+  const save = async (value: string | null) => {
+    setBusy(true);
+    setMessage(undefined);
+    setFields({});
+    try {
+      const s = await api<FlareSolverrStatus>("PUT", "/api/settings/flaresolverr", { url: value });
+      setStatus(s);
+      setUrl(s.url ?? "");
+      setMessage({ kind: "ok", text: value ? `Connected to FlareSolverr ${s.version ?? ""}. Sites behind a Cloudflare check now go through it.` : "FlareSolverr removed." });
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+      setFields(fieldErrors(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>FlareSolverr</h2>
+      <p className="muted">
+        {status?.url ? (
+          <>On: <code>{status.url}</code>{status.version ? ` (version ${status.version})` : ""}.</>
+        ) : (
+          "Off. For forums behind a Cloudflare check: the app asks your FlareSolverr to open the page, then reuses its pass."
+        )}
+      </p>
+      {message && <Alert kind={message.kind}>{message.text}</Alert>}
+      <form onSubmit={(e) => { e.preventDefault(); void save(url.trim()); }} noValidate>
+        <Field
+          label="Address"
+          name="url"
+          value={url}
+          onChange={setUrl}
+          error={fields.url}
+          hint="e.g. http://192.168.1.50:8191, or http://flaresolverr:8191 on the same Docker network. Checked before saving."
+          autoComplete="off"
+        />
+        <div className="row">
+          <button type="submit" disabled={busy || !url.trim()}>
+            {busy ? "Checking…" : "Save and test"}
+          </button>
+          {status?.url && (
+            <button type="button" className="secondary danger-text" disabled={busy} onClick={() => void save(null)}>
+              Remove
+            </button>
+          )}
+        </div>
+      </form>
+      <p className="muted small">
+        Only sources marked "Fetch through FlareSolverr" use it. Adding a site that answers with a Cloudflare check turns it on for that
+        source by itself.
+      </p>
     </section>
   );
 }

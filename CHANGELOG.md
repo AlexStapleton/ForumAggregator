@@ -6,6 +6,19 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-19
+
+Forums behind Cloudflare through your own FlareSolverr, and forum threads shown as posts.
+Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.2.0`. Database migration 0005 runs automatically.
+
+### Added
+- Forums behind a Cloudflare check, through your own FlareSolverr (Settings → FlareSolverr; opt-in per source, turned on by itself when adding such a site). See docs/DEPLOY.md §7.
+- Forum threads in the reader show the posts (author, time, quotes, images), re-read for new replies.
+
+### Fixed
+- `check-sites`: a feed address is checked as given (it used to add a second `/index.rss`).
+
 ## [1.1.0] - 2026-10-19
 
 Reddit pictures, source checkboxes and tap-to-open cards. Upgrade with

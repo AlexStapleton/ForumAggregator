@@ -50,6 +50,8 @@ export interface SourcesTable {
   /** Reader: CSS selectors applied to the original page; null = automatic (Readability). */
   article_selector: Generated<string | null>;
   remove_selector: Generated<string | null>;
+  /** 1 = fetched through the user's FlareSolverr (D-080). */
+  via_flaresolverr: Generated<number>;
   /** HTTP validators for conditional requests (304 Not Modified). */
   etag: string | null;
   last_modified: string | null;

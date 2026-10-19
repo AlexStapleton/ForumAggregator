@@ -7,6 +7,7 @@ import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
 import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
+import type { FlareSolverr } from "./flaresolverr.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
 import { nextCheck } from "./schedule.js";
@@ -38,6 +39,8 @@ const INTERACTIVE = { minDelayMs: 1000, jitterMs: 500 };
 /** On a source's first fetch, items older than this start out as read. */
 const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
 const INSERT_CHUNK = 50;
+/** SourceError codes for a bot check (FetchError kinds). */
+const CHALLENGE_CODES = new Set(["cloudflare_challenge", "pow_challenge"]);
 
 export interface CheckResult {
   ok: boolean;
@@ -46,10 +49,11 @@ export interface CheckResult {
   error?: string;
 }
 
-function friendlyFetchError(err: FetchError, url: string): string {
+function friendlyFetchError(err: FetchError, url: string, viaFlareSolverr = false): string {
   const host = new URL(url).host;
   if (err.isChallenge) {
-    return `${host} answered with a bot check, so it can't be read automatically from this server. ForumAggregator doesn't try to get around these.`;
+    if (viaFlareSolverr) return `${host}: ${err.message}.`;
+    return `${host} answered with a bot check, so the app can't read it by itself. If you run FlareSolverr, add it in Settings → FlareSolverr and turn it on for this source (D-080).`;
   }
   switch (err.kind) {
     case "blocked":
@@ -79,14 +83,33 @@ export class FeedService {
     private readonly limiter: HostLimiter,
     private readonly now: () => number = Date.now,
     private readonly log?: Logger,
+    private readonly flare?: FlareSolverr,
   ) {}
+
+  private flareFetcher?: Fetcher;
+
+  /** The fetcher for a source: direct, or through FlareSolverr when the source is set to (D-080). */
+  private fetcherFor(viaFlareSolverr: boolean): Fetcher {
+    if (!viaFlareSolverr || !this.flare) return this.fetcher;
+    this.flareFetcher ??= this.flare.wrap(this.fetcher);
+    return this.flareFetcher;
+  }
 
   // ---- adding ------------------------------------------------------------------------
 
   async addSource(input: AddSourceRequest): Promise<Source> {
     let resolved: Awaited<ReturnType<FeedService["resolve"]>>;
+    let via = false;
     try {
-      resolved = await this.resolve(input.url);
+      try {
+        resolved = await this.resolve(input.url);
+      } catch (err) {
+        // A Cloudflare-style check, and the user has FlareSolverr: try again through it (D-080).
+        if (!(err instanceof SourceError && CHALLENGE_CODES.has(err.code) && (await this.flare?.configured()))) throw err;
+        this.log?.info({ input: input.url }, "bot check; retrying through FlareSolverr");
+        via = true;
+        resolved = await this.resolve(input.url, true);
+      }
     } catch (err) {
       // Shows up in `docker logs`, so failures can be diagnosed without the UI.
       if (err instanceof SourceError) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
@@ -107,6 +130,7 @@ export class FeedService {
         site_url: resolved.siteUrl,
         feed_url: resolved.feedUrl,
         status: "pending",
+        via_flaresolverr: via ? 1 : 0,
         last_error: null,
         last_checked_at: null,
         last_success_at: null,
@@ -187,7 +211,7 @@ export class FeedService {
   }
 
   /** Works out the feed URL for whatever the user pasted, fetching as little as possible. */
-  private async resolve(raw: string): Promise<{ kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed }> {
+  private async resolve(raw: string, via = false): Promise<{ kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed }> {
     let input = normaliseYouTubeInput(raw);
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = `https://${input}`;
     let url: URL;
@@ -205,7 +229,7 @@ export class FeedService {
       let feedUrl: string;
       let siteUrl: string;
       if (yt.kind === "lookup") {
-        const page = await this.fetchInteractive(yt.pageUrl, "html");
+        const page = await this.fetchInteractive(yt.pageUrl, "html", via);
         if (isConsentPage(page.url)) {
           throw new SourceError(
             "youtube_consent",
@@ -229,7 +253,7 @@ export class FeedService {
       }
       let res;
       try {
-        res = await this.fetchInteractive(feedUrl, "feed");
+        res = await this.fetchInteractive(feedUrl, "feed", via);
       } catch (err) {
         if (err instanceof SourceError) {
           throw new SourceError(
@@ -247,7 +271,7 @@ export class FeedService {
     if (reddit) {
       let res;
       try {
-        res = await this.fetchInteractive(reddit.feedUrl, "feed");
+        res = await this.fetchInteractive(reddit.feedUrl, "feed", via);
       } catch (err) {
         if (err instanceof SourceError && ["blocked", "rate_limited", "cloudflare_challenge", "pow_challenge"].includes(err.code)) {
           throw new SourceError(
@@ -275,7 +299,7 @@ export class FeedService {
     if (board) {
       const feedUrl = `${url.origin}${board[1]}/index.rss`;
       try {
-        const feedRes = await this.fetchInteractive(feedUrl, "feed");
+        const feedRes = await this.fetchInteractive(feedUrl, "feed", via);
         if (looksLikeFeed(feedRes.body)) return { kind: "feed", feedUrl, siteUrl: url.href, parsed: this.parse(feedRes.body, feedUrl) };
       } catch (err) {
         if (!(err instanceof SourceError)) throw err;
@@ -283,7 +307,7 @@ export class FeedService {
       }
     }
 
-    const res = await this.fetchInteractive(url.href, "feed");
+    const res = await this.fetchInteractive(url.href, "feed", via);
     if (looksLikeFeed(res.body)) {
       const parsed = this.parse(res.body, url.href);
       return { kind: "feed", feedUrl: url.href, siteUrl: parsed.siteUrl ?? url.origin + "/", parsed };
@@ -296,18 +320,18 @@ export class FeedService {
         "No RSS or Atom feed found at this address. If the site has one, paste the feed's own address (often ending in /feed, /rss or .xml).",
       );
     }
-    const feedRes = await this.fetchInteractive(first.url, "feed");
+    const feedRes = await this.fetchInteractive(first.url, "feed", via);
     return { kind: "feed", feedUrl: first.url, siteUrl: url.href, parsed: this.parse(feedRes.body, first.url) };
   }
 
-  private async fetchInteractive(url: string, expect: "feed" | "html") {
+  private async fetchInteractive(url: string, expect: "feed" | "html", via = false) {
     await this.limiter.wait(url, INTERACTIVE);
     try {
-      const res = await this.fetcher(url, { expect });
+      const res = await this.fetcherFor(via)(url, { expect });
       if (res.kind !== "ok") throw new SourceError("unexpected", "The site answered without content.");
       return res;
     } catch (err) {
-      if (err instanceof FetchError) throw new SourceError(err.kind, friendlyFetchError(err, url), 422);
+      if (err instanceof FetchError) throw new SourceError(err.kind, friendlyFetchError(err, url, via), 422);
       throw err;
     }
   }
@@ -339,7 +363,7 @@ export class FeedService {
     await this.limiter.wait(row.feed_url);
     const startedAt = this.now();
     try {
-      const res = await this.fetcher(row.feed_url, { expect: "feed", etag: row.etag, lastModified: row.last_modified });
+      const res = await this.fetcherFor(row.via_flaresolverr === 1)(row.feed_url, { expect: "feed", etag: row.etag, lastModified: row.last_modified });
       if (res.kind === "not_modified") {
         await this.recordSuccess(id, startedAt, row.etag, row.last_modified, row);
         return { ok: true, newItems: 0, notModified: true };
@@ -351,7 +375,7 @@ export class FeedService {
       return { ok: true, newItems };
     } catch (err) {
       const message =
-        err instanceof FetchError ? friendlyFetchError(err, row.feed_url)
+        err instanceof FetchError ? friendlyFetchError(err, row.feed_url, row.via_flaresolverr === 1)
         : err instanceof FeedParseError ? `The feed couldn't be read: ${err.message}`
         : "Unexpected error while checking this source";
       if (!(err instanceof FetchError || err instanceof FeedParseError)) this.log?.warn({ err, sourceId: id }, "check failed");
@@ -584,6 +608,14 @@ export class FeedService {
     if (patch.title !== undefined) set.title = patch.title;
     if (patch.pollIntervalMinutes !== undefined) set.poll_interval_minutes = patch.pollIntervalMinutes;
     if (patch.retentionDays !== undefined) set.retention_days = patch.retentionDays;
+    const via = patch.viaFlareSolverr ?? row.via_flaresolverr === 1;
+    if (patch.viaFlareSolverr !== undefined && via !== (row.via_flaresolverr === 1)) {
+      set.via_flaresolverr = via ? 1 : 0;
+      // A different route: start fresh (no validators, check soon).
+      set.etag = null;
+      set.last_modified = null;
+      if (row.enabled === 1) set.next_check_at = this.now();
+    }
     const selectorsChanged =
       (patch.articleSelector !== undefined && patch.articleSelector !== row.article_selector) ||
       (patch.removeSelector !== undefined && patch.removeSelector !== row.remove_selector);
@@ -597,7 +629,7 @@ export class FeedService {
     let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
     if (patch.url !== undefined && patch.url !== row.feed_url && patch.url !== row.site_url) {
       try {
-        moved = await this.resolve(patch.url);
+        moved = await this.resolve(patch.url, via);
       } catch (err) {
         if (err instanceof SourceError) this.log?.warn({ input: patch.url, code: err.code, reason: err.message }, "could not change source address");
         throw err;
@@ -718,6 +750,7 @@ export class FeedService {
       retentionDays: r.retention_days,
       articleSelector: r.article_selector,
       removeSelector: r.remove_selector,
+      viaFlareSolverr: r.via_flaresolverr === 1,
       tags,
       unreadCount: c?.unread ?? 0,
       itemCount: c?.total ?? 0,

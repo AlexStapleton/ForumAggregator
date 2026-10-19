@@ -2,6 +2,14 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 13: forums via FlareSolverr)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-080 | **FlareSolverr for forums behind Cloudflare, opt-in per source.** This **overrides D-037 for those sources only**: Claude advised against it (it works around a check the site owner chose; FlareSolverr is fragile) and offered email notifications or asking the admins instead; the user chose it for their own reader ("I want to view the forum from my aggregator"). How: Settings → FlareSolverr (address checked against its `GET /`); a source marked "Fetched through FlareSolverr" is fetched by having FlareSolverr open the page once (`request.get`), then reusing its `cf_clearance` cookie *and its browser User-Agent* for plain requests until Cloudflare asks again (at most 2 h), with FlareSolverr's own copy of the page (or of the feed, found inside Chrome's XML view) used when it's what was asked for. Adding a source that answers with a Cloudflare check retries through FlareSolverr automatically when it's set up. Kept polite: per-site spacing and check intervals unchanged, one solve per host at a time, read-only (no login), robots.txt `*` rules still apply to page crawling. All other sources keep the app's honest User-Agent | User | Thehotpepper.com blocks plain requests from the user's home server (page and RSS, HTTP 403), and the user wants the forum itself, not email |
+| D-082 | Release **v1.2.0** (minor: new features; migration 0005 adds a column with a default, nothing to do by hand) | User ("open a PR as 1.2.0") | Follows RELEASING.md |
+| D-081 | **Forum threads in the reader show the posts.** For XenForo thread links (`/threads/title.123/`), the reader reads the thread page (like a source with selectors) instead of the feed's first-post excerpt: each post with author and time, quotes and images kept, "Click to expand" and signatures dropped, up to 50 posts of the first page, and "Page 1 of N" when there are more. A thread read over 30 minutes ago is read again for new replies; if that fails, the earlier copy is shown with a notice. Built from XenForo 2's standard markup with a test page shaped like it; not yet checked against a real forum page | User ("view the forum from my aggregator") | The board feed gives new threads; the conversation is in the thread |
+
 ## 2026-10-19 (round 12: feedback on v1.0.1)
 
 | ID | Decision | Source | Rationale |

@@ -8,10 +8,11 @@
 import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
+import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractWithSelectors, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { extractWithSelectors, isForumThreadUrl, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -23,6 +24,8 @@ const INTERACTIVE = { minDelayMs: 1000, jitterMs: 300 };
 /** Feed text shorter than this is a teaser: try the article page instead (except Reddit). */
 const FEED_FULL_TEXT_MIN = 500;
 const COMMENTS_TTL_MS = 15 * 60_000;
+/** A forum thread read more than this long ago is read again, for new replies (D-081). */
+const THREAD_REFRESH_MS = 30 * 60_000;
 const MAX_COMMENTS = 30;
 
 class SelectorMiss extends Error {
@@ -35,7 +38,10 @@ class SelectorMiss extends Error {
 }
 
 function pageErrorMessage(err: unknown): string {
-  return err instanceof FetchError && err.isChallenge ? "The site answered with a bot check, so the article can't be shown here."
+  return err instanceof FetchError && err.isChallenge
+    ? /FlareSolverr/.test(err.message)
+      ? `${err.message}.`
+      : "The site answered with a bot check, so the article can't be shown here. If you run FlareSolverr, turn it on for this source (Edit source)."
     : err instanceof FetchError ? `The article couldn't be loaded (${err.message}).`
     : (err as Error).message;
 }
@@ -51,7 +57,17 @@ export class ReaderService {
     private readonly now: () => number = Date.now,
     private readonly settings?: SettingsService,
     private readonly fetchJson?: JsonFetcher,
+    private readonly flare?: FlareSolverr,
   ) {}
+
+  private flareFetcher?: Fetcher;
+
+  /** Direct, or through FlareSolverr for sources set to use it (D-080). */
+  private fetcherFor(viaFlareSolverr: boolean): Fetcher {
+    if (!viaFlareSolverr || !this.flare) return this.fetcher;
+    this.flareFetcher ??= this.flare.wrap(this.fetcher);
+    return this.flareFetcher;
+  }
 
   /** null if the item doesn't exist. Concurrent opens of the same item share the work. */
   get(itemId: string): Promise<ReaderContent | null> {
@@ -78,6 +94,7 @@ export class ReaderService {
         "sources.kind as source_kind",
         "sources.article_selector",
         "sources.remove_selector",
+        "sources.via_flaresolverr",
         "item_content.origin",
         "item_content.status",
         "item_content.html",
@@ -106,8 +123,18 @@ export class ReaderService {
     const selectors: ReaderSelectors | null =
       !isReddit && (item.article_selector || item.remove_selector) ? { article: item.article_selector, remove: item.remove_selector } : null;
 
+    // Forum threads are read from the page (the posts), like sources with selectors (D-081).
+    const isThread = !isReddit && isForumThreadUrl(item.url);
+    const preferPage = !!selectors || isThread;
+    const via = item.via_flaresolverr === 1;
+    // A thread read a while ago may have new replies: read it again, keeping the old copy in case.
+    const stalePage =
+      isThread && item.status === "ok" && item.origin === "page" && item.html && item.fetched_at !== null && this.now() - item.fetched_at > THREAD_REFRESH_MS
+        ? item.html
+        : null;
+
     // Cached result (from the feed or a previous extraction).
-    if (item.status === "ok" && item.html && !(selectors && item.origin === "feed")) {
+    if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed") && !stalePage) {
       // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
       const html = isReddit ? layoutRedditPost(item.html, null, item.title) : item.html;
       return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(html, item.title), videoId: null, notice: null };
@@ -123,12 +150,12 @@ export class ReaderService {
         html = layoutRedditPost(html, redditPostLink(item.html), item.title);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
-      if (!selectors && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
+      if (!preferPage && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
       feedHtml = html || null;
-    } else if (selectors && item.status === "ok" && item.origin === "feed") {
+    } else if (preferPage && item.status === "ok" && item.origin === "feed") {
       feedHtml = item.html;
     }
     // Reddit pages need JavaScript and count against Reddit's request limit: never fetch them.
@@ -141,15 +168,18 @@ export class ReaderService {
     if (!item.url) return this.summaryOnly(base, "This item has no link to an article.");
 
     try {
-      const { article } = await this.readPage(item.url, selectors ?? {});
+      const { article } = await this.readPage(item.url, selectors ?? {}, via);
       await this.store(item.id, "page", "ok", article.html, null);
       return { ...base, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
     } catch (err) {
       const message = pageErrorMessage(err);
+      if (stalePage) {
+        return { ...base, kind: "page", html: polishArticle(stalePage, item.title), videoId: null, notice: `Couldn't load new replies: ${message} Showing the copy read earlier.` };
+      }
       // The feed's own body still beats the one-line summary.
       if (feedHtml) {
-        // With selectors, keep retrying the page on later opens (the user may be fixing them).
-        if (selectors) {
+        // With selectors or a thread, keep retrying the page on later opens.
+        if (preferPage) {
           return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: `${message} Showing the feed's text instead.` };
         }
         await this.store(item.id, "feed", "ok", feedHtml, null);
@@ -161,9 +191,13 @@ export class ReaderService {
   }
 
   /** Fetches an article page and extracts it; throws with a user-facing reason. */
-  private async readPage(url: string, selectors: ReaderSelectors): Promise<SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> }> {
+  private async readPage(
+    url: string,
+    selectors: ReaderSelectors,
+    viaFlareSolverr = false,
+  ): Promise<SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> }> {
     await this.limiter.wait(url, INTERACTIVE);
-    const res = await this.fetcher(url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
+    const res = await this.fetcherFor(viaFlareSolverr)(url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
     if (res.kind !== "ok") throw new Error("The site answered without content.");
     if (!/html/i.test(res.contentType)) throw new Error("The link isn't a web page (it may be a file or video).");
     const result = extractWithSelectors(res.body, res.url, selectors);
@@ -184,7 +218,7 @@ export class ReaderService {
    * Nothing is stored. null if the source doesn't exist.
    */
   async preview(sourceId: string, req: ReaderPreviewRequest): Promise<ReaderPreview | { error: string } | null> {
-    const source = await this.db.kysely.selectFrom("sources").select(["id", "kind"]).where("id", "=", sourceId).executeTakeFirst();
+    const source = await this.db.kysely.selectFrom("sources").select(["id", "kind", "via_flaresolverr"]).where("id", "=", sourceId).executeTakeFirst();
     if (!source) return null;
     if (source.kind !== "feed") return { error: "Reader selectors are for feed sources; YouTube and Reddit items aren't read from their pages." };
     let q = this.db.kysely
@@ -198,7 +232,7 @@ export class ReaderService {
 
     const out: ReaderPreview = { itemId: item.id, itemTitle: item.title, url: item.url, html: null, matched: null, removed: null, notice: null };
     try {
-      const result = await this.readPage(item.url, { article: req.articleSelector, remove: req.removeSelector });
+      const result = await this.readPage(item.url, { article: req.articleSelector, remove: req.removeSelector }, source.via_flaresolverr === 1);
       return { ...out, html: polishArticle(result.article.html, item.title), matched: result.matched, removed: result.removed };
     } catch (err) {
       const partial = err instanceof SelectorMiss ? err.result : null;

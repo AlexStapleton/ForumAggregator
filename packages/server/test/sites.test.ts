@@ -75,6 +75,8 @@ describe("rssUrlFor", () => {
   it("maps boards, threads and the site root to XenForo feed URLs", () => {
     expect(rssUrlFor(new URL("https://f.example/tandem-cycling/"))).toBe("https://f.example/tandem-cycling/index.rss");
     expect(rssUrlFor(new URL("https://f.example/forums/gpus.12/"))).toBe("https://f.example/forums/gpus.12/index.rss");
+    // A feed address is checked as is (it used to get a second /index.rss).
+    expect(rssUrlFor(new URL("https://f.example/forums/gpus.12/index.rss"))).toBe("https://f.example/forums/gpus.12/index.rss");
     expect(rssUrlFor(new URL("https://f.example/threads/owners-club.1816698/"))).toBe("https://f.example/forums/-/index.rss");
     expect(rssUrlFor(new URL("https://f.example/"))).toBe("https://f.example/forums/-/index.rss");
   });

@@ -64,6 +64,9 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
         removed,
       };
     }
+    // A XenForo thread: the posts, not Readability's guess (D-081).
+    const thread = xenforoThread(doc, pageUrl);
+    if (thread) return { article: thread, matched: null, removed };
     const article = new Readability(doc, { charThreshold: MIN_ARTICLE_TEXT }).parse();
     if (!article?.content) return { article: null, matched: null, removed };
     const html = sanitizeHtml(article.content, pageUrl);
@@ -73,6 +76,52 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
   } finally {
     dom.window.close();
   }
+}
+
+/** Posts shown from one thread page (XenForo shows 20 by default). */
+const MAX_THREAD_POSTS = 50;
+
+/** True for XenForo thread links (…/threads/title.123/, any page). */
+export function isForumThreadUrl(url: string | null): boolean {
+  if (!url) return false;
+  try {
+    return /\/threads\/[^/]+\.\d+(\/|$)/.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * XenForo 2 thread page → its posts: author and time above each post's text (quotes, images and
+ * links kept), plus a note when the thread has more pages. Null if this isn't a thread page.
+ */
+function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
+  const posts = Array.from(doc.querySelectorAll("article.message")).filter((p) => p.querySelector(".bbWrapper"));
+  if (!posts.length) return null;
+  const parts: string[] = [];
+  let firstAuthor: string | null = null;
+  for (const post of posts.slice(0, MAX_THREAD_POSTS)) {
+    const author = post.getAttribute("data-author") ?? post.querySelector(".message-name, .username")?.textContent?.trim() ?? null;
+    firstAuthor ??= author;
+    const time = post.querySelector("time.u-dt, time[datetime]");
+    const body = post.querySelector(".message-body .bbWrapper, .bbWrapper")!;
+    // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
+    for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const head = [
+      author ? `<strong>${esc(author)}</strong>` : "",
+      time ? `<time datetime="${esc(time.getAttribute("datetime") ?? "")}">${esc(time.textContent?.trim() ?? "")}</time>` : "",
+    ].filter(Boolean).join(" · ");
+    parts.push(`<section><p>${head}</p>${body.innerHTML}</section><hr>`);
+  }
+  // Page count from the page navigation ("1 2 3 … 40").
+  const pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
+  const current = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
+  if (pages > 1) parts.push(`<p><em>Page ${current} of ${pages}. Open the original for the rest of the thread.</em></p>`);
+  const html = sanitizeHtml(parts.join("\n"), pageUrl);
+  const textLength = htmlToText(html).length;
+  if (!textLength) return null;
+  return { html, title: doc.querySelector("h1.p-title-value")?.textContent?.trim() || doc.title || null, byline: firstAuthor, textLength };
 }
 
 const validator = new JSDOM("<!doctype html><p></p>").window.document;
