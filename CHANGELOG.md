@@ -7,6 +7,21 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ## [Unreleased]
 
 ### Added
+- Source checkboxes in the feed: show any mix of sources (remembered per device).
+- Tap anywhere on a feed card to open it in the reader.
+
+### Changed
+- Reddit posts in the reader: pictures are shown full width (image posts show the full image; screenshots linked in the text appear as pictures; the thumbnail table is gone). Gallery and video posts say to open Reddit.
+
+### Fixed
+- Posts fetched by v1.0.0 that showed "Open the original" get their text when the feed lists them again.
+
+## [1.0.1] - 2026-10-19
+
+Note: the 1.0.1 image still reports version 1.0.0 (in `/api/version` and its user agent); the
+package versions weren't bumped before tagging.
+
+### Added
 - Side-by-side layout on wide screens: the list on the left, the reader on the right. Choose Automatic, Side by side or Full-screen reader in Settings → This device (saved per device).
 - Timeline: the feed is grouped under day headings (Today, Yesterday, dates), with a Newest first / Oldest first order (saved per device).
 - Reader selectors per source (Edit source → "Reader: article selectors"): choose the article and elements to remove with CSS selectors, with a preview, for sites where the reader picks the wrong part of the page.

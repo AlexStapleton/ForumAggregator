@@ -6,6 +6,7 @@ import { Alert } from "../components";
 import { usePrefs, useSplitView } from "../prefs";
 import { dayLabel, fullDate, relativeTime, startOfDay } from "../time";
 import { Reader } from "./Reader";
+import { SourcePicker } from "./SourcePicker";
 
 const FILTERS: Array<{ value: ItemsFilter; label: string }> = [
   { value: "unread", label: "Unread" },
@@ -15,12 +16,13 @@ const FILTERS: Array<{ value: ItemsFilter; label: string }> = [
 
 export function FeedPage() {
   const [filter, setFilter] = useState<ItemsFilter>("unread");
-  const [sourceId, setSourceId] = useState("");
   const [tag, setTag] = useState("");
   const [tags, setTags] = useState<TagCount[]>([]);
   const [prefs, setPrefs] = usePrefs();
   const order = prefs.order;
   const split = useSplitView(prefs.layout);
+  const hidden = prefs.hiddenSources;
+  const hiddenKey = hidden.join(",");
   // The open item is tracked by id, so a refresh or "load older" keeps it open in the split view.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sources, setSources] = useState<Source[]>();
@@ -40,12 +42,12 @@ export function FeedPage() {
   const query = useCallback(
     (after?: string | null) => {
       const p = new URLSearchParams({ filter, order, limit: "40" });
-      if (sourceId) p.set("sourceId", sourceId);
+      if (hiddenKey) p.set("excludeSourceIds", hiddenKey);
       if (tag) p.set("tag", tag);
       if (after) p.set("cursor", after);
       return `/api/items?${p}`;
     },
-    [filter, order, sourceId, tag],
+    [filter, order, hiddenKey, tag],
   );
 
   const load = useCallback(async () => {
@@ -135,7 +137,7 @@ export function FeedPage() {
     // Only up to the newest item on screen (whichever end of the list it is at),
     // so anything that arrived meanwhile stays unread.
     const upTo = Math.max(...items.map((i) => i.publishedAt));
-    await api("POST", "/api/items/mark-read", { ...(sourceId ? { sourceId } : {}), ...(tag ? { tag } : {}), upTo });
+    await api("POST", "/api/items/mark-read", { ...(hidden.length ? { excludeSourceIds: hidden } : {}), ...(tag ? { tag } : {}), upTo });
     await load();
   };
 
@@ -152,7 +154,8 @@ export function FeedPage() {
     return out;
   }, [items]);
 
-  const unreadTotal = sources?.reduce((n, s) => n + s.unreadCount, 0) ?? 0;
+  const unreadTotal = sources?.reduce((n, s) => n + (hidden.includes(s.id) ? 0 : s.unreadCount), 0) ?? 0;
+  const noneSelected = !!sources?.length && sources.every((s) => hidden.includes(s.id));
 
   if (sources && sources.length === 0) {
     return (
@@ -185,15 +188,7 @@ export function FeedPage() {
             </button>
           ))}
         </div>
-        <select aria-label="Source" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-          <option value="">All sources</option>
-          {sources?.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.title}
-              {s.unreadCount ? ` (${s.unreadCount})` : ""}
-            </option>
-          ))}
-        </select>
+        <SourcePicker sources={sources ?? []} hidden={hidden} onChange={(next) => setPrefs({ hiddenSources: next })} />
         {tags.length > 0 && (
           <select aria-label="Tag" value={tag} onChange={(e) => setTag(e.target.value)}>
             <option value="">All tags</option>
@@ -225,7 +220,8 @@ export function FeedPage() {
 
       {!loading && items.length === 0 && (
         <p className="muted empty">
-          {filter === "unread" ? "All caught up. Nothing unread." : filter === "saved" ? "Nothing saved yet." : "No items yet."}
+          {noneSelected ? "No sources are ticked. Choose some in the Sources list above."
+          : filter === "unread" ? "All caught up. Nothing unread." : filter === "saved" ? "Nothing saved yet." : "No items yet."}
         </p>
       )}
 
@@ -293,7 +289,18 @@ function ItemCard({
   onTag: (tag: string) => void;
 }) {
   return (
-    <li id={`item-${item.id}`} className={`item card${item.read ? " read" : ""}${selected ? " selected" : ""}`} aria-current={selected || undefined}>
+    <li
+      id={`item-${item.id}`}
+      className={`item card clickable${item.read ? " read" : ""}${selected ? " selected" : ""}`}
+      aria-current={selected || undefined}
+      // Anywhere on the card opens it (D-078), except its own links and buttons, or when selecting text.
+      // Keyboard users have the title button, so the card itself isn't another tab stop.
+      onClick={(e) => {
+        if ((e.target as Element).closest("a, button, input, select, label")) return;
+        if (window.getSelection()?.toString()) return;
+        onOpen();
+      }}
+    >
       <div className="item-body">
         <div className="item-meta">
           <span className={`kind kind-${item.sourceKind}`}>{KIND_LABEL[item.sourceKind]}</span>

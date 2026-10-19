@@ -21,7 +21,7 @@ export class ItemService {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async list(opts: { filter: ItemsFilter; order?: ItemsOrder; sourceId?: string; tag?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
+  async list(opts: { filter: ItemsFilter; order?: ItemsOrder; sourceId?: string; excludeSourceIds?: string[]; tag?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
     const asc = opts.order === "oldest";
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), MAX_LIMIT);
     let q = this.db.kysely
@@ -44,6 +44,8 @@ export class ItemService {
     if (opts.filter === "unread") q = q.where("items.read", "=", 0);
     if (opts.filter === "saved") q = q.where("items.saved", "=", 1);
     if (opts.sourceId) q = q.where("items.source_id", "=", opts.sourceId);
+    // The feed's source checkboxes (D-077): unticked sources are left out.
+    if (opts.excludeSourceIds?.length) q = q.where("items.source_id", "not in", opts.excludeSourceIds);
     const tag = opts.tag;
     if (tag) {
       q = q.where("items.source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
@@ -105,6 +107,7 @@ export class ItemService {
   async markRead(req: MarkReadRequest): Promise<number> {
     let q = this.db.kysely.updateTable("items").set({ read: 1, read_at: this.now() }).where("read", "=", 0);
     if (req.sourceId) q = q.where("source_id", "=", req.sourceId);
+    if (req.excludeSourceIds?.length) q = q.where("source_id", "not in", req.excludeSourceIds);
     const tag = req.tag;
     if (tag) q = q.where("source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
     if (req.upTo !== undefined) q = q.where("published_at", "<=", req.upTo);
