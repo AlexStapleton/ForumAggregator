@@ -11,8 +11,8 @@ _Last updated: 2026-10-19 (M1.2 built)_
 | | |
 |---|---|
 | **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
-| **Current release** | **v1.0.1** (2026-10-19), images `alexstapo/forumaggregator:1.0.1` |
-| **Current milestone** | M1.3: feedback on v1.0.1 (Reddit pictures, source checkboxes, whole-card tap), in the v1.1.0 PR |
+| **Current release** | **v1.1.0** (2026-10-19), images `alexstapo/forumaggregator:1.1.0` |
+| **Current milestone** | M2: forums. FlareSolverr route and thread reading built on the branch |
 | **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
@@ -80,8 +80,12 @@ Goal: YouTube and Reddit work, sources can be organised and edited, and articles
 - ✅ Tap anywhere on a card to open it (D-078)
 - ✅ Tests: 171 automated (SQLite + Postgres), plus a browser run-through at phone and desktop widths
 
-### M2: Forums 💤 *(needs your input first)*
+### M2: Forums 🔄 *(started 2026-10-19)*
 Goal: follow forum boards and threads, including members-only content.
+- ✅ thehotpepper.com checked from your server: Cloudflare blocks page and RSS
+- ✅ **FlareSolverr route**, opt-in per source, retried automatically on a Cloudflare check (D-080). ⏳ Needs your test against thehotpepper.com with your FlareSolverr
+- ✅ **Threads in the reader show the posts** (author, time, quotes, images; re-read for new replies) (D-081). ⏳ Needs a real thread to confirm the markup
+- ⏳ **Activity:** old threads with new replies (board RSS only announces new threads)
 - ⛔ `check-sites` output from your server/Pi (what the forums allow from your IP)
 - ⛔ Saved example pages (forum list, board, thread) from each forum, attached in chat
 - ⛔ Decision: forum email notifications as a fallback (SITE-ACCESS.md option C)?
@@ -137,7 +141,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M1.3: Reddit pictures, source checkboxes, whole-card tap; version 1.1.0 | PR, unmerged |
+| 2026-10-19 | M2 start: FlareSolverr route, forum threads in the reader | branch, unmerged |
+| 2026-10-19 | **v1.1.0 released** (M1.3: Reddit pictures, source checkboxes, whole-card tap) | [#6](https://github.com/AlexStapleton/ForumAggregator/pull/6), tag `v1.1.0` |
 | 2026-10-19 | **v1.0.1 released** (M1.2: layout, timeline, OPML, reader selectors, YouTube and Reddit comments) | [#5](https://github.com/AlexStapleton/ForumAggregator/pull/5), tag `v1.0.1` |
 | 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |
 | 2026-10-19 | **v1.0.0 released** | tag `v1.0.0` |

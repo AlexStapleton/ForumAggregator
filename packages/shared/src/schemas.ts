@@ -83,6 +83,17 @@ export const YouTubeKeyRequest = z.object({
 });
 export type YouTubeKeyRequest = z.infer<typeof YouTubeKeyRequest>;
 
+/** Address of the user's FlareSolverr instance (D-080); null removes it. */
+export const FlareSolverrRequest = z.object({
+  url: z
+    .string()
+    .trim()
+    .max(500)
+    .regex(/^https?:\/\/[^\s/]+(:\d+)?\/?$/i, "Enter the address only, like http://192.168.1.50:8191")
+    .nullable(),
+});
+export type FlareSolverrRequest = z.infer<typeof FlareSolverrRequest>;
+
 /** The text of an OPML file (sent as JSON so the CSRF header rules stay the same). */
 export const OpmlImportRequest = z.object({
   opml: z.string().min(1, "The file is empty").max(2_000_000, "The file is too large (2 MB at most)"),
@@ -102,6 +113,8 @@ export const UpdateSourceRequest = z.object({
   articleSelector: selector,
   /** Reader: CSS selector for elements to remove from the original page; "" or null = none. */
   removeSelector: selector,
+  /** Fetch through the user's FlareSolverr (D-080). */
+  viaFlareSolverr: z.boolean().optional(),
 });
 export type UpdateSourceRequest = z.infer<typeof UpdateSourceRequest>;
 

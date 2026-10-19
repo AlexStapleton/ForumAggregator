@@ -18,6 +18,7 @@ export type {
   OpmlImportRequest,
   ReaderPreviewRequest,
   YouTubeKeyRequest,
+  FlareSolverrRequest,
 } from "./schemas.js";
 
 export type AuthMode = "local" | "proxy" | "both";
@@ -85,6 +86,8 @@ export interface Source {
   /** Reader overrides (D-074): CSS selectors applied to the original page; null = automatic. */
   articleSelector: string | null;
   removeSelector: string | null;
+  /** Fetched through the user's FlareSolverr, for sites behind a Cloudflare check (D-080). */
+  viaFlareSolverr: boolean;
   tags: string[];
   unreadCount: number;
   itemCount: number;
@@ -203,6 +206,13 @@ export interface YouTubeKeyStatus {
   configured: boolean;
   /** e.g. "…x9Qz" */
   keyHint: string | null;
+}
+
+/** The FlareSolverr instance the app uses for opted-in sources (D-080). */
+export interface FlareSolverrStatus {
+  url: string | null;
+  /** Reported by the instance when it was last checked (on save). */
+  version: string | null;
 }
 
 export interface ReaderComments {

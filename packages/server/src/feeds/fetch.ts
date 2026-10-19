@@ -10,6 +10,12 @@ export interface FetchOptions {
   expect: "feed" | "html";
   timeoutMs?: number;
   maxBytes?: number;
+  /**
+   * Only for sources the user routes through FlareSolverr (D-080): the clearance cookie and the
+   * browser identity it was issued to. Everything else sends the app's own User-Agent.
+   */
+  cookie?: string;
+  userAgent?: string;
 }
 
 export type FetchResult =
@@ -99,7 +105,8 @@ async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> 
 }
 
 export const httpFetch: Fetcher = async (url, options) => {
-  const headers: Record<string, string> = { "user-agent": USER_AGENT, accept: ACCEPT[options.expect] };
+  const headers: Record<string, string> = { "user-agent": options.userAgent ?? USER_AGENT, accept: ACCEPT[options.expect] };
+  if (options.cookie) headers.cookie = options.cookie;
   if (options.etag) headers["if-none-match"] = options.etag;
   if (options.lastModified) headers["if-modified-since"] = options.lastModified;
 

@@ -20,6 +20,7 @@ import { ItemService } from "./feeds/items.js";
 import { Poller } from "./feeds/poller.js";
 import { registerFeedRoutes } from "./feeds/routes.js";
 import { FeedService } from "./feeds/service.js";
+import { FlareSolverr, httpPostJson, type JsonPoster } from "./feeds/flaresolverr.js";
 import { ReaderService } from "./reader/service.js";
 import { registerSettingsRoutes, SettingsService } from "./settings.js";
 
@@ -36,6 +37,8 @@ export interface AppDeps {
   limiter?: HostLimiter;
   /** HTTP client for JSON APIs (YouTube Data API); tests pass a fake. */
   fetchJson?: JsonFetcher;
+  /** JSON POSTs (FlareSolverr); tests pass a fake. */
+  postJson?: JsonPoster;
 }
 
 export interface App {
@@ -53,7 +56,7 @@ function trustProxySetting(value: string): boolean | string[] {
   return splitList(value);
 }
 
-export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter, fetchJson }: AppDeps): Promise<App> {
+export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter, fetchJson, postJson }: AppDeps): Promise<App> {
   const fastify = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -105,14 +108,15 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
 
   const sharedFetcher = fetcher ?? httpFetch;
   const sharedLimiter = limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000);
-  const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log);
-  const items = new ItemService(db, now);
   const settings = new SettingsService(db, box, fastify.log);
   const sharedJson = fetchJson ?? httpJson;
-  const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson);
+  const flare = new FlareSolverr(() => settings.flaresolverrUrl(), postJson ?? httpPostJson, sharedJson, now);
+  const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log, flare);
+  const items = new ItemService(db, now);
+  const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson, flare);
   const poller = new Poller(feeds, fastify.log);
   registerFeedRoutes(fastify, feeds, items, reader);
-  registerSettingsRoutes(fastify, settings, sharedJson);
+  registerSettingsRoutes(fastify, settings, sharedJson, flare);
 
   fastify.get("/healthz", async (_request, reply) => {
     try {

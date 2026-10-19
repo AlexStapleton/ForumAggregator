@@ -4,6 +4,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildApp } from "../src/app.js";
 import { HostLimiter, type Fetcher, type JsonFetcher } from "../src/feeds/fetch.js";
+import type { JsonPoster } from "../src/feeds/flaresolverr.js";
 import { ConfigSchema } from "../src/config.js";
 import { migrate, openDb, type Db } from "../src/db/index.js";
 import { loadEnv } from "../src/env.js";
@@ -27,7 +28,7 @@ export async function createTestApp(
   backend: "sqlite" | "postgres",
   envOverrides: Record<string, string> = {},
   clock: { now: number } = { now: Date.now() },
-  deps: { fetcher?: Fetcher; fetchJson?: JsonFetcher } = {},
+  deps: { fetcher?: Fetcher; fetchJson?: JsonFetcher; postJson?: JsonPoster } = {},
 ) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fa-test-"));
   let databaseUrl: string | undefined;
@@ -55,6 +56,8 @@ export async function createTestApp(
     fetcher: deps.fetcher,
     // Never reach the real YouTube API from tests.
     fetchJson: deps.fetchJson ?? (async () => ({ status: 503, body: null })),
+    // Never reach a real FlareSolverr from tests.
+    postJson: deps.postJson ?? (async () => ({ status: 503, body: null })),
     // No waiting between requests in tests.
     limiter: new HostLimiter(0, 0, async () => {}),
   });

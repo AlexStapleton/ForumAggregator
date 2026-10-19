@@ -18,7 +18,7 @@ visitor's IP address (a cloud data-centre IP is treated with more suspicion than
 
 | Site | Board page | Board RSS | Result |
 |---|---|---|---|
-| thehotpepper.com (`/forums/hot-pepper-growing.4/`) | ❌ Cloudflare "Just a moment…" [HTTP 403] | ❌ same [HTTP 403] | **Not readable directly**, even from a home IP. Logging in can't help: Cloudflare checks the visitor before XenForo (or its login page) sees the request. Needs email (C) or the admins letting feed readers through to their RSS |
+| thehotpepper.com (`/forums/hot-pepper-growing.4/`) | ❌ Cloudflare "Just a moment…" [HTTP 403] | ❌ same [HTTP 403] | **Not readable directly**, even from a home IP. Logging in can't help: Cloudflare checks the visitor before XenForo (or its login page) sees the request. **The user chose option E (FlareSolverr, D-080)** |
 | overclock.net | not yet checked from your server | | |
 | bikeforums.net | not yet checked from your server | | |
 
@@ -71,6 +71,12 @@ the emails into feed items with links.
 Its RSS works even for us. Board-level "new threads" for the RTX 5070 Ti and 3080 boards could
 come from `<board>/index.rss` with no scraping at all. Replies in the owners' club thread would
 still need A, B or C.
+
+### E. FlareSolverr (chosen by the user for thehotpepper.com, D-080)
+The user's own FlareSolverr opens the page in a real browser and passes the check; the app
+reuses that pass. Opt-in per source, see [DEPLOY.md](DEPLOY.md) §7. This works around the
+site's check, which this project otherwise doesn't do (D-037); the user decided it for their own
+reader after the alternatives above were laid out.
 
 ## Recommendation
 

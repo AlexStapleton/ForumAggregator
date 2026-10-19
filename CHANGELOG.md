@@ -6,6 +6,10 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- Forums behind a Cloudflare check, through your own FlareSolverr (Settings → FlareSolverr; opt-in per source, turned on by itself when adding such a site). See docs/DEPLOY.md §7.
+- Forum threads in the reader show the posts (author, time, quotes, images), re-read for new replies.
+
 ### Fixed
 - `check-sites`: a feed address is checked as given (it used to add a second `/index.rss`).
 

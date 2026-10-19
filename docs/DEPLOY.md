@@ -221,6 +221,30 @@ per site, 5 s apart. See [SITE-ACCESS.md](SITE-ACCESS.md) for what to do with th
 If your server reaches the internet through an outbound proxy, give the container
 `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY=…` environment variables.
 
+### Forums behind a Cloudflare check: FlareSolverr (optional)
+
+If the check above shows a Cloudflare browser check ("Just a moment…") for a forum you want to
+follow, and you run [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr), the app can
+use it for that forum (D-080):
+
+1. **Settings → FlareSolverr:** enter its address, e.g. `http://192.168.1.50:8191`, or
+   `http://flaresolverr:8191` if both containers share a Docker network. **Save and test**
+   checks that it answers.
+2. **Add the board** as usual (e.g. `https://thehotpepper.com/forums/hot-pepper-growing.4/`).
+   When the site answers with a Cloudflare check, the app retries through FlareSolverr and marks
+   the source "Fetched through FlareSolverr". You can switch it per source in **Edit**.
+
+How it behaves:
+- FlareSolverr opens the page once; the app then reuses the pass it got (cookie plus that
+  browser's identity) for plain requests until Cloudflare asks again, so most checks cost one
+  ordinary request. The usual per-site spacing and check interval still apply.
+- The pass only works from the **same public IP** as FlareSolverr. Run both on the same home
+  network, without a VPN in front of only one of them. Otherwise every request has to go through
+  FlareSolverr (it still works, just slower and heavier).
+- Opening a forum thread shows its posts (first page). Threads are read again after 30 minutes
+  for new replies.
+- Nothing logs in; you see what a guest sees.
+
 ## 8. Backups
 
 Everything lives in the `forumaggregator-data` volume: the database, `secret.key` and

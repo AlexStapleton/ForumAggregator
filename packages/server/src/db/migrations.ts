@@ -144,6 +144,15 @@ const migrations: Record<string, Migration> = {
       await db.schema.alterTable("sources").dropColumn("article_selector").execute();
     },
   },
+  "0005_flaresolverr": {
+    async up(db: Kysely<any>) {
+      // Fetch this source through the user's FlareSolverr (D-080); 0 = directly.
+      await db.schema.alterTable("sources").addColumn("via_flaresolverr", "integer", (c) => c.notNull().defaultTo(0)).execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("sources").dropColumn("via_flaresolverr").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {
