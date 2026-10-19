@@ -18,13 +18,19 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * Content already loaded this visit. Keyed by the item *as listed*, not just its ID: a followed
+ * thread keeps one card whose date and summary change with new replies (D-084).
+ */
 const cache = new Map<string, ReaderContent>();
+const cacheKey = (item: FeedItem) => `${item.id}|${item.publishedAt}|${item.summary ?? ""}`;
 
-async function loadContent(itemId: string): Promise<ReaderContent> {
-  const hit = cache.get(itemId);
+async function loadContent(item: FeedItem): Promise<ReaderContent> {
+  const key = cacheKey(item);
+  const hit = cache.get(key);
   if (hit) return hit;
-  const content = await api<ReaderContent>("GET", `/api/items/${itemId}/reader`);
-  cache.set(itemId, content);
+  const content = await api<ReaderContent>("GET", `/api/items/${item.id}/reader`);
+  cache.set(key, content);
   return content;
 }
 
@@ -68,15 +74,15 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     setError(undefined);
     scroller.current?.scrollTo({ top: 0 });
     if (!item.read) onUpdate(item, { read: true });
-    loadContent(item.id)
+    loadContent(item)
       .then((c) => !cancelled && setContent(c))
       .catch((err) => !cancelled && setError(errorMessage(err)));
     const next = items[index + 1];
-    if (next) void loadContent(next.id).catch(() => undefined);
+    if (next) void loadContent(next).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [item?.id]); // only when the item changes
+  }, [item ? cacheKey(item) : null]); // only when the item (or a thread card's replies) changes
 
   const go = useCallback(
     async (delta: 1 | -1) => {

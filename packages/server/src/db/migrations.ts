@@ -153,6 +153,27 @@ const migrations: Record<string, Migration> = {
       await db.schema.alterTable("sources").dropColumn("via_flaresolverr").execute();
     },
   },
+  "0006_thread_following": {
+    async up(db: Kysely<any>) {
+      // Followed forum threads (D-084).
+      await db.schema.alterTable("sources").addColumn("thread_batch_from", "bigint").execute();
+      await db.schema
+        .createTable("thread_posts")
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("post_id", "text", (c) => c.notNull())
+        .addColumn("author", "text")
+        .addColumn("posted_at", "bigint")
+        .addColumn("posted_label", "text")
+        .addColumn("html", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "bigint", (c) => c.notNull())
+        .addPrimaryKeyConstraint("thread_posts_pk", ["source_id", "post_id"])
+        .execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.dropTable("thread_posts").execute();
+      await db.schema.alterTable("sources").dropColumn("thread_batch_from").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

@@ -10,6 +10,9 @@ import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import type { FlareSolverr } from "./flaresolverr.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
+import { latestPageUrl, parseThreadPage, postNumber, threadAddress, threadPageUrl, threadSummary } from "./thread.js";
+import type { ForumThreadPage } from "../reader/extract.js";
+import { htmlToText } from "./text.js";
 import { nextCheck } from "./schedule.js";
 import { isValidSelector } from "../reader/extract.js";
 import { cleanRedditSummary, planReddit } from "./reddit.js";
@@ -39,6 +42,14 @@ const INTERACTIVE = { minDelayMs: 1000, jitterMs: 500 };
 /** On a source's first fetch, items older than this start out as read. */
 const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
 const INSERT_CHUNK = 50;
+/** Posts kept per followed thread (D-084). */
+const THREAD_POSTS_KEPT = 300;
+/** Extra (older) pages read in one check when a whole page of replies is new. */
+const THREAD_MAX_BACK_PAGES = 2;
+
+/** A thread page without posts we can read. */
+class ThreadParseError extends Error {}
+
 /** SourceError codes for a bot check (FetchError kinds). */
 const CHALLENGE_CODES = new Set(["cloudflare_challenge", "pow_challenge"]);
 
@@ -98,6 +109,8 @@ export class FeedService {
   // ---- adding ------------------------------------------------------------------------
 
   async addSource(input: AddSourceRequest): Promise<Source> {
+    const thread = threadFromInput(input.url);
+    if (thread) return this.addThread(input, thread);
     let resolved: Awaited<ReturnType<FeedService["resolve"]>>;
     let via = false;
     try {
@@ -149,6 +162,180 @@ export class FeedService {
     await this.recordSuccess(id, now, null, null);
     this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
     return (await this.getSource(id))!;
+  }
+
+  // ---- following a forum thread (D-084) ------------------------------------------------
+
+  private async addThread(input: AddSourceRequest, address: string): Promise<Source> {
+    const existing = await this.db.kysely.selectFrom("sources").select("title").where("feed_url", "=", address).executeTakeFirst();
+    if (existing) throw new SourceError("duplicate", `You already follow this thread as “${existing.title}”.`, 409);
+    let via = false;
+    let read: Awaited<ReturnType<FeedService["readThread"]>>;
+    try {
+      try {
+        read = await this.readThread(address, false, null, true);
+      } catch (err) {
+        if (!(err instanceof SourceError && CHALLENGE_CODES.has(err.code) && (await this.flare?.configured()))) throw err;
+        this.log?.info({ input: input.url }, "bot check; retrying through FlareSolverr");
+        via = true;
+        read = await this.readThread(address, true, null, true);
+      }
+    } catch (err) {
+      if (err instanceof SourceError) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
+      throw err;
+    }
+    const now = this.now();
+    const id = crypto.randomUUID();
+    const title = input.title || read.pages.at(-1)?.title || new URL(address).hostname;
+    await this.db.kysely
+      .insertInto("sources")
+      .values({
+        id,
+        kind: "thread",
+        title,
+        site_url: address,
+        feed_url: address,
+        status: "pending",
+        via_flaresolverr: via ? 1 : 0,
+        last_error: null,
+        last_checked_at: null,
+        last_success_at: null,
+        next_check_at: null,
+        poll_interval_minutes: null,
+        retention_days: null,
+        etag: null,
+        last_modified: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+    await this.setTags(id, input.tags ?? []);
+    const added = await this.ingestThread(id, read.pages, read.lastUrl, true);
+    await this.recordSuccess(id, now, null, null);
+    this.log?.info({ sourceId: id, thread: address, posts: added }, "thread followed");
+    return (await this.getSource(id))!;
+  }
+
+  /**
+   * Reads a thread's newest page; if every post on it is newer than `knownMax`, also the page(s)
+   * before it, so a busy thread doesn't lose replies between checks. Pages come back oldest first.
+   */
+  private async readThread(address: string, via: boolean, knownMax: number | null, interactive: boolean): Promise<{ pages: ForumThreadPage[]; lastUrl: string }> {
+    const get = async (url: string) => {
+      if (interactive) return this.fetchInteractive(url, "html", via);
+      await this.limiter.wait(url);
+      const res = await this.fetcherFor(via)(url, { expect: "html" });
+      if (res.kind !== "ok") throw new FetchError("error", "The site answered without content");
+      return res;
+    };
+    const latest = await get(latestPageUrl(address));
+    const lastUrl = latest.url.replace(/#.*$/, "");
+    const page = parseThreadPage(latest.body, lastUrl);
+    if (!page) {
+      const message = "Couldn't find any posts on that page. It may not be a XenForo thread, or the forum shows it only to members.";
+      if (interactive) throw new SourceError("not_a_thread", message, 422);
+      throw new ThreadParseError(message);
+    }
+    const pages = [page];
+    let current = page;
+    for (let back = 0; back < THREAD_MAX_BACK_PAGES && knownMax !== null && current.page > 1; back++) {
+      const oldest = Math.min(...current.posts.map((p) => (p.id ? postNumber(p.id) : Infinity)));
+      if (oldest <= knownMax) break; // this page already reaches posts we have
+      const previous = await get(threadPageUrl(address, current.page - 1));
+      const parsed = parseThreadPage(previous.body, previous.url);
+      if (!parsed) break;
+      pages.unshift(parsed);
+      current = parsed;
+    }
+    return { pages, lastUrl };
+  }
+
+  /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
+  private async ingestThread(sourceId: string, pages: ForumThreadPage[], lastUrl: string, firstFetch: boolean): Promise<number> {
+    const now = this.now();
+    const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
+    const knownIds = new Set(known.map((k) => k.post_id));
+    const knownMax = Math.max(0, ...known.map((k) => postNumber(k.post_id)));
+    const fresh = new Map<string, ForumThreadPage["posts"][number]>();
+    for (const post of pages.flatMap((p) => p.posts)) {
+      if (!post.id || knownIds.has(post.id) || fresh.has(post.id)) continue;
+      if (!firstFetch && postNumber(post.id) <= knownMax) continue; // an old post we trimmed or skipped
+      fresh.set(post.id, post);
+    }
+    if (fresh.size) {
+      await this.db.kysely
+        .insertInto("thread_posts")
+        .values(
+          [...fresh.values()].map((p) => ({
+            source_id: sourceId,
+            post_id: p.id!,
+            author: p.author,
+            posted_at: p.postedAt,
+            posted_label: p.timeLabel,
+            html: p.html,
+            fetched_at: now,
+          })),
+        )
+        .onConflict((oc) => oc.columns(["source_id", "post_id"]).doNothing())
+        .execute();
+      // Keep the newest posts only.
+      const all = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
+      const drop = all.map((r) => r.post_id).sort((a, b) => postNumber(b) - postNumber(a)).slice(THREAD_POSTS_KEPT);
+      if (drop.length) await this.db.kysely.deleteFrom("thread_posts").where("source_id", "=", sourceId).where("post_id", "in", drop).execute();
+    }
+    if (!fresh.size && !firstFetch) return 0;
+
+    // The card: unread again, with the count since the user last read it.
+    const source = await this.db.kysely.selectFrom("sources").select(["title", "thread_batch_from"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
+    const card = await this.db.kysely.selectFrom("items").select(["id", "read"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
+    const batchFrom = !card || card.read === 1 || source.thread_batch_from === null ? now : source.thread_batch_from;
+    await this.db.kysely.updateTable("sources").set({ thread_batch_from: batchFrom }).where("id", "=", sourceId).execute();
+    const batch = await this.db.kysely
+      .selectFrom("thread_posts")
+      .select(["post_id", "author", "html", "posted_at"])
+      .where("source_id", "=", sourceId)
+      .where("fetched_at", ">=", batchFrom)
+      .execute();
+    const latest = batch.sort((a, b) => postNumber(b.post_id) - postNumber(a.post_id))[0];
+    const summary = firstFetch && !card
+      ? threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null).replace(/new (reply|replies)/, "latest $1")
+      : threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
+    const values = {
+      title: pages.at(-1)?.title ?? source.title,
+      url: lastUrl,
+      author: latest?.author ?? null,
+      summary,
+      image_url: null,
+      published_at: Math.min(latest?.posted_at ?? now, now),
+      fetched_at: now,
+      read: 0,
+      read_at: null,
+    };
+    if (card) await this.db.kysely.updateTable("items").set(values).where("id", "=", card.id).execute();
+    else await this.db.kysely.insertInto("items").values({ ...values, id: crypto.randomUUID(), source_id: sourceId, guid: "thread", saved: 0 }).execute();
+    return fresh.size;
+  }
+
+  private async checkThread(row: SourceRow): Promise<CheckResult> {
+    const startedAt = this.now();
+    const via = row.via_flaresolverr === 1;
+    try {
+      const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", row.id).execute();
+      const knownMax = known.length ? Math.max(...known.map((k) => postNumber(k.post_id))) : null;
+      const read = await this.readThread(row.feed_url, via, knownMax, false);
+      const newItems = await this.ingestThread(row.id, read.pages, read.lastUrl, knownMax === null);
+      await this.recordSuccess(row.id, startedAt, null, null, row);
+      if (newItems) this.log?.info({ sourceId: row.id, newPosts: newItems }, "new replies");
+      return { ok: true, newItems };
+    } catch (err) {
+      const message =
+        err instanceof FetchError ? friendlyFetchError(err, row.feed_url, via)
+        : err instanceof ThreadParseError ? err.message
+        : "Unexpected error while checking this thread";
+      if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ err, sourceId: row.id }, "check failed");
+      await this.recordFailure(row, startedAt, message, err instanceof FetchError ? err : undefined);
+      return { ok: false, newItems: 0, error: message };
+    }
   }
 
   // ---- OPML import/export (D-073) ---------------------------------------------------
@@ -203,7 +390,8 @@ export class FeedService {
   }
 
   async exportOpml(): Promise<string> {
-    const sources = await this.listSources();
+    // Followed threads aren't feeds other readers could use.
+    const sources = (await this.listSources()).filter((s) => s.kind !== "thread");
     return buildOpml(
       sources.map((s) => ({ title: s.title, feedUrl: s.feedUrl, siteUrl: s.siteUrl, tags: s.tags })),
       this.now(),
@@ -285,14 +473,6 @@ export class FeedService {
       return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl, parsed: this.parse(res.body, reddit.feedUrl) };
     }
 
-    // XenForo threads (…/threads/name.123/) never have a feed; say so without contacting the site.
-    if (/^\/threads\/[^/]+\.\d+(\/|$)/.test(url.pathname)) {
-      throw new SourceError(
-        "forum_thread",
-        `This is a forum thread. Forum threads don't have RSS feeds, so they can't be followed yet. Following threads directly is planned (roadmap M2). For now, follow the board the thread is in: open that board on ${url.hostname} and paste its address here, or add the whole forum's feed: ${url.origin}/forums/-/index.rss`,
-      );
-    }
-
     // XenForo boards (…/forums/name.12/) have their feed at …/index.rss. Try it first: it's one
     // request, and some forums answer feeds even when their pages show a bot check.
     const board = /^(\/forums\/[^/]+\.\d+)\/?$/.exec(url.pathname);
@@ -359,6 +539,7 @@ export class FeedService {
   private async doCheck(id: string): Promise<CheckResult> {
     const row = await this.db.kysely.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return { ok: false, newItems: 0, error: "Source no longer exists" };
+    if (row.kind === "thread") return this.checkThread(row);
 
     await this.limiter.wait(row.feed_url);
     const startedAt = this.now();
@@ -628,6 +809,9 @@ export class FeedService {
     // A new address is checked before anything is saved; existing items are kept.
     let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
     if (patch.url !== undefined && patch.url !== row.feed_url && patch.url !== row.site_url) {
+      if (row.kind === "thread" || threadFromInput(patch.url)) {
+        throw new SourceError("thread_address", "A followed thread keeps its address. To follow another thread, add it as a new source.", 400, { url: "Add the other thread as a new source" });
+      }
       try {
         moved = await this.resolve(patch.url, via);
       } catch (err) {
@@ -781,4 +965,17 @@ function planImport(raw: string): { kind: SourceKind; feedUrl: string; siteUrl: 
   const reddit = planReddit(url);
   if (reddit) return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl };
   return { kind: "feed", feedUrl: url.href, siteUrl: null };
+}
+
+/** A forum thread link in what the user pasted (D-084), as the thread's own address. */
+function threadFromInput(raw: string): string | null {
+  let input = raw.trim();
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = `https://${input}`;
+  try {
+    const url = new URL(input);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return threadAddress(url);
+  } catch {
+    return null;
+  }
 }

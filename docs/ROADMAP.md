@@ -11,7 +11,7 @@ _Last updated: 2026-10-19 (M1.2 built)_
 | | |
 |---|---|
 | **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
-| **Current release** | **v1.1.0** (2026-10-19), images `alexstapo/forumaggregator:1.1.0` |
+| **Current release** | **v1.2.0** (2026-10-19), images `alexstapo/forumaggregator:1.2.0` |
 | **Current milestone** | M2: forums. FlareSolverr route and thread reading built on the branch |
 | **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
 
@@ -85,7 +85,9 @@ Goal: follow forum boards and threads, including members-only content.
 - ✅ thehotpepper.com checked from your server: Cloudflare blocks page and RSS
 - ✅ **FlareSolverr route**, opt-in per source, retried automatically on a Cloudflare check (D-080). ⏳ Needs your test against thehotpepper.com with your FlareSolverr
 - ✅ **Threads in the reader show the posts** (author, time, quotes, images; re-read for new replies) (D-081). ⏳ Needs a real thread to confirm the markup
-- ⏳ **Activity:** old threads with new replies (board RSS only announces new threads)
+- ✅ FlareSolverr fix: pages that passed Cloudflare's check were mistaken for the check (D-083)
+- ✅ **Follow a thread** with one updating card ("N new replies") (D-084). ⏳ Needs your test on the 5070 Ti owners' club (Overclock.net's own bot check is not Cloudflare's; FlareSolverr may or may not pass it)
+- ⏳ **Board activity:** older threads in a board with new replies (board RSS only announces new threads)
 - ⛔ `check-sites` output from your server/Pi (what the forums allow from your IP)
 - ⛔ Saved example pages (forum list, board, thread) from each forum, attached in chat
 - ⛔ Decision: forum email notifications as a fallback (SITE-ACCESS.md option C)?
@@ -141,7 +143,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M2 start: FlareSolverr route, forum threads in the reader; version 1.2.0 | PR, unmerged |
+| 2026-10-19 | FlareSolverr detection fix; follow a thread with an updating card; version 1.3.0 | PR, unmerged |
+| 2026-10-19 | **v1.2.0 released** (M2 start: FlareSolverr route, forum threads in the reader) | [#7](https://github.com/AlexStapleton/ForumAggregator/pull/7), tag `v1.2.0` |
 | 2026-10-19 | **v1.1.0 released** (M1.3: Reddit pictures, source checkboxes, whole-card tap) | [#6](https://github.com/AlexStapleton/ForumAggregator/pull/6), tag `v1.1.0` |
 | 2026-10-19 | **v1.0.1 released** (M1.2: layout, timeline, OPML, reader selectors, YouTube and Reddit comments) | [#5](https://github.com/AlexStapleton/ForumAggregator/pull/5), tag `v1.0.1` |
 | 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |

@@ -6,6 +6,18 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-19
+
+Follow forum threads with one updating card, and a fix for threads read through FlareSolverr.
+Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.3.0`. Database migration 0006 runs automatically.
+
+### Added
+- Follow a forum thread: paste a thread link (e.g. an owners' club) and get one card that says how many new replies there are; opening it shows just those replies. Works through FlareSolverr for sites that need it.
+
+### Fixed
+- Forum threads through FlareSolverr showed only the feed's first post ("the site still refused the app's follow-up request"): pages that passed Cloudflare's check were mistaken for the check itself. Sites that refuse the app's own requests now go straight to FlareSolverr.
+
 ## [1.2.0] - 2026-10-19
 
 Forums behind Cloudflare through your own FlareSolverr, and forum threads shown as posts.

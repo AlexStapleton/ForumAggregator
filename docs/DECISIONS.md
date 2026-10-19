@@ -2,6 +2,14 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 14: FlareSolverr fixes, thread following)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-085 | Release **v1.3.0** (minor: new feature; migration 0006 adds a table and a nullable column, nothing to do by hand) | User | Follows RELEASING.md |
+| D-084 | **Follow a forum thread with one updating card.** Pasting a XenForo thread link (any page or post anchor) adds a "Thread" source for the thread's own address, read through FlareSolverr when the site needs it (same automatic retry as boards). Each check reads `…/latest` (XenForo's newest page); posts with IDs above the newest stored one are kept (up to 300 per thread), and if a whole page is new, up to 2 earlier pages are read too. The thread has **one card** (`guid "thread"`): when replies arrive it becomes unread, moves up, and says "N new replies · author: excerpt"; replies keep adding to the same count until the card is read, then a new count starts. Opening the card shows those replies oldest first (up to 100), from storage, without fetching. A thread keeps its address (add another thread as a new source) and isn't exported to OPML. The web app's in-memory copy of opened items is keyed by the item's date and summary, so an updated card loads afresh. Replaces the "threads can't be followed yet" message of D-068 | User ("an updating card could be cool"), for the Overclock.net 5070 Ti owners' club | One card per thread keeps a busy owners' club from flooding the feed; storing the posts makes the card readable without hitting the site again |
+| D-083 | **Cloudflare challenge detection narrowed; plain-request refusals remembered.** A page counts as a Cloudflare challenge only with the `cf-mitigated: challenge` header, the "Just a moment..." title, `window._cf_chl_opt`, or a `/cdn-cgi/challenge-platform/h/…` script. Pages that *passed* also load `/cdn-cgi/challenge-platform/scripts/jsd/main.js`, which the old check mistook for a challenge, so FlareSolverr's good copy of a thread page was thrown away. When a site refuses the app's plain requests even with FlareSolverr's clearance (Cloudflare can tell a program from Chrome), that host is fetched only through FlareSolverr for 6 hours instead of wasting a request each time | User's thehotpepper thread: "FlareSolverr got past the check, but the site still refused the app's follow-up request" | The thread page was there; the detector was wrong |
+
 ## 2026-10-19 (round 13: forums via FlareSolverr)
 
 | ID | Decision | Source | Rationale |

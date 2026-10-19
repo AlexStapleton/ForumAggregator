@@ -167,6 +167,37 @@ describe("FlareSolverr client", () => {
     expect(site.seen.at(-1)).toMatchObject({ cookie: "cf_clearance=granted", userAgent: BROWSER_UA });
   });
 
+  it("uses FlareSolverr's copy of pages carrying Cloudflare's background script, and stops trying plain requests a site refuses", async () => {
+    let now = NOW;
+    const url = "https://forum.example/threads/seeds.555/";
+    // A real page that passed the check still loads Cloudflare's detection script.
+    const page = `<html><head><title>Seeds | Forum</title></head><body>${THREAD([{ author: "Valdus", text: "What's best to store them?" }, { author: "Reply1", text: "Paper envelopes in the fridge." }], 1)}<script>window.__CF$cv$params={r:'8f'};a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';</script></body></html>`;
+    let plainTries = 0;
+    // Cloudflare tells the app's requests from Chrome's: plain requests are refused even with the cookie.
+    const refusing: Fetcher = async () => {
+      plainTries++;
+      throw new FetchError("cloudflare_challenge", "Cloudflare browser check [HTTP 403]", 403);
+    };
+    let solves = 0;
+    const post: JsonPoster = async () => {
+      solves++;
+      return { status: 200, body: { status: "ok", solution: { url, status: 200, response: page, userAgent: BROWSER_UA, cookies: [{ name: "cf_clearance", value: "granted", domain: ".forum.example" }] } } };
+    };
+    const fetcher = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => now).wrap(refusing);
+    for (let i = 0; i < 4; i++) {
+      const res = await fetcher(url, { expect: "html" });
+      expect(res.kind === "ok" && res.body).toContain("Paper envelopes");
+    }
+    expect(solves).toBe(4);
+    expect(plainTries).toBe(1); // tried once with the clearance, then FlareSolverr only
+    // After a while plain requests get another chance (once a fresh clearance is held).
+    now += 7 * 3_600_000;
+    await fetcher(url, { expect: "html" }); // old clearance expired too: FlareSolverr first
+    expect(plainTries).toBe(1);
+    await fetcher(url, { expect: "html" });
+    expect(plainTries).toBe(2);
+  });
+
   it("reports FlareSolverr's own failure", async () => {
     const web = new FakeWeb();
     const site = cloudflared(web, "forum.example");

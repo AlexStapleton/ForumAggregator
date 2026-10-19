@@ -96,7 +96,7 @@ export function SourcesPage() {
             name="url"
             value={url}
             onChange={setUrl}
-            hint="A YouTube channel (link or @handle), a website, or an RSS/Atom feed address. Forum board RSS works too, e.g. …/forums/board-name.12/index.rss"
+            hint="A YouTube channel (link or @handle), a website, an RSS/Atom feed, a forum board (…/forums/board-name.12/) or a forum thread to follow for new replies (…/threads/title.123/)."
             autoComplete="url"
           />
           <Field label="Tags (optional)" name="tags" value={newTags} onChange={setNewTags} hint="Comma-separated, e.g. news, politics" autoComplete="off" />
@@ -383,7 +383,12 @@ function EditSource({
         value={address}
         onChange={setAddress}
         error={fields.url}
-        hint="Changing it re-checks the new address before saving. Existing items are kept."
+        readOnly={source.kind === "thread"}
+        hint={
+          source.kind === "thread"
+            ? "A followed thread keeps its address. To follow another thread, add it as a new source."
+            : "Changing it re-checks the new address before saving. Existing items are kept."
+        }
         autoComplete="url"
       />
       <Field label="Tags" name="tags" value={tags} onChange={setTags} hint="Comma-separated. Changes apply to existing items too." autoComplete="off" />
@@ -410,7 +415,7 @@ function EditSource({
         </select>
         <small className="hint">Saved items are never deleted.</small>
       </div>
-      {(flareOn || source.viaFlareSolverr) && source.kind === "feed" && (
+      {(flareOn || source.viaFlareSolverr) && (source.kind === "feed" || source.kind === "thread") && (
         <label className="choice">
           <input type="checkbox" checked={viaFlare} onChange={(e) => setViaFlare(e.target.checked)} />
           <span>

@@ -12,7 +12,7 @@ import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractWithSelectors, isForumThreadUrl, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { extractWithSelectors, isForumThreadUrl, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -26,6 +26,8 @@ const FEED_FULL_TEXT_MIN = 500;
 const COMMENTS_TTL_MS = 15 * 60_000;
 /** A forum thread read more than this long ago is read again, for new replies (D-081). */
 const THREAD_REFRESH_MS = 30 * 60_000;
+/** Replies shown on a followed thread's card (D-084). */
+const THREAD_CARD_MAX_POSTS = 100;
 const MAX_COMMENTS = 30;
 
 class SelectorMiss extends Error {
@@ -90,6 +92,8 @@ export class ReaderService {
         "items.author",
         "items.summary",
         "items.published_at",
+        "items.source_id",
+        "sources.thread_batch_from",
         "sources.title as source_title",
         "sources.kind as source_kind",
         "sources.article_selector",
@@ -115,6 +119,7 @@ export class ReaderService {
       summary: item.source_kind === "reddit" ? cleanRedditSummary(item.summary) : item.summary,
     };
     const isReddit = item.source_kind === "reddit";
+    if (item.source_kind === "thread") return this.threadCard(base, item.source_id, item.thread_batch_from);
 
     const videoId = youtubeVideoId(item.url);
     if (videoId) return { ...base, kind: "video", html: null, videoId, notice: null };
@@ -188,6 +193,23 @@ export class ReaderService {
       await this.store(item.id, "page", "failed", null, message);
       return this.summaryOnly(base, message);
     }
+  }
+
+  /**
+   * A followed thread's card (D-084): the replies since it was last read, oldest first, from the
+   * posts stored at each check (no page fetch). Before any batch, the newest stored posts.
+   */
+  private async threadCard(base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">, sourceId: string, batchFrom: number | null): Promise<ReaderContent> {
+    let q = this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId);
+    if (batchFrom !== null) q = q.where("fetched_at", ">=", batchFrom);
+    const rows = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
+    const shown = rows.slice(-THREAD_CARD_MAX_POSTS);
+    if (!shown.length) return this.summaryOnly(base, "No replies stored yet. They appear here after the next check.");
+    const html = renderForumPosts(
+      shown.map((p) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html })),
+    );
+    const notice = rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null;
+    return { ...base, kind: "page", html, videoId: null, notice };
   }
 
   /** Fetches an article page and extracts it; throws with a user-facing reason. */
