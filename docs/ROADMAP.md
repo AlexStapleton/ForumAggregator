@@ -12,7 +12,7 @@ _Last updated: 2026-10-19 (M1.2 built)_
 |---|---|
 | **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
 | **Current release** | **v1.0.1** (2026-10-19), images `alexstapo/forumaggregator:1.0.1` |
-| **Current milestone** | M1.3: feedback on v1.0.1 (Reddit pictures, source checkboxes, whole-card tap), built on the branch |
+| **Current milestone** | M1.3: feedback on v1.0.1 (Reddit pictures, source checkboxes, whole-card tap), in the v1.1.0 PR |
 | **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
@@ -126,7 +126,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | After the M1.3 PR is merged: `docker compose pull && docker compose up -d` (the `latest` image) | Trying M1.3 |
+| 1 | Merge the v1.1.0 PR, then create the `v1.1.0` release ([RELEASING.md](RELEASING.md)); update with `docker compose pull && docker compose up -d` | Trying M1.3 |
 | 2 | Check the NPR item that showed the broken iframe, and the new layout on your desktop and phone | M1.2 sign-off |
 | 2a | Optional: add a YouTube Data API key in Settings and open a video (confirms D-075 against the real API) | M1.2 sign-off |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
@@ -137,7 +137,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M1.3: Reddit pictures, source checkboxes, whole-card tap | branch, unmerged |
+| 2026-10-19 | M1.3: Reddit pictures, source checkboxes, whole-card tap; version 1.1.0 | PR, unmerged |
 | 2026-10-19 | **v1.0.1 released** (M1.2: layout, timeline, OPML, reader selectors, YouTube and Reddit comments) | [#5](https://github.com/AlexStapleton/ForumAggregator/pull/5), tag `v1.0.1` |
 | 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |
 | 2026-10-19 | **v1.0.0 released** | tag `v1.0.0` |

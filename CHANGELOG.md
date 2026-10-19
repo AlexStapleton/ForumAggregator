@@ -6,6 +6,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-19
+
+Reddit pictures, source checkboxes and tap-to-open cards. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.1.0`.
+This release reports its version correctly (1.1.0).
+
 ### Added
 - Source checkboxes in the feed: show any mix of sources (remembered per device).
 - Tap anywhere on a feed card to open it in the reader.
