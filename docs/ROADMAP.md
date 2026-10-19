@@ -51,8 +51,8 @@ new items appear on your phone.
 
 ### M1.1: Fixes and reading features ⏳ *(requested 2026-10-19)*
 Goal: YouTube and Reddit work, sources can be organised and edited, and articles can be read inside the app.
-- ⛔ **Fix: YouTube links don't add**, waiting on the error message shown
-- ⛔ **Fix: Reddit links don't add**, waiting on the error message shown. Likely fix: turn subreddit links into their `.rss` feed automatically
+- 🔄 **Fix: YouTube links don't add.** Diagnosed with one request to your channel page (`@ImKibitz`): YouTube redirects the app to its mobile site, and the app *does* find the channel there. So the failure is fetching the channel's feed from your Pi. Done: uses the feed the page advertises, accepts a bare `UC…` ID, detects consent pages, gives a specific error, and logs failures to `docker logs`. ⏳ Needs your retry on the Pi to see YouTube's actual answer
+- 🔄 **Fix: Reddit links don't add.** Cause 1 (fixed): `old.reddit.com/r/…` is a web page, not a feed, and old.reddit's robots.txt disallows all bots. Links on any Reddit host now map to `https://www.reddit.com/r/<name>/.rss`. Cause 2 (Reddit's choice): Reddit blocked this cloud server outright ("blocked due to a network policy… register or sign in with your developer credentials"). Your home IP may fare better; if not, the app now says so plainly, and Reddit via your own account stays in M5. ⏳ Needs your retry on the Pi
 - ⏳ **Tags on sources**, shown on every item, with a filter by tag. Editing tags applies to existing items too
 - ⏳ **Edit a source**: name, tags, address (re-checked when changed), check interval
 - ⏳ **Reader view**: open an item inside the app (article text, or the video for YouTube), then go to the next/previous item with buttons, a swipe on the phone or the keyboard
@@ -102,7 +102,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | The exact error text shown when adding the YouTube and Reddit links, and the links you pasted | M1.1 fixes |
+| 1 | After the fix is merged: retry `@ImKibitz` and `old.reddit.com/r/overclocking/` on the Pi; send the red message (or `docker logs forumaggregator \| grep "could not add"`) if either still fails | M1.1 fixes |
 | 2 | Answers to the M1.1 design questions (tags, editing, reader) | M1.1 features |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |

@@ -33,7 +33,7 @@ export interface SettingsTable {
 
 export interface SourcesTable {
   id: string;
-  kind: "feed" | "youtube";
+  kind: "feed" | "youtube" | "reddit";
   title: string;
   site_url: string | null;
   feed_url: string;

@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { discoverFeeds } from "../src/feeds/discover.js";
 import { FeedParseError, looksLikeFeed, parseFeed } from "../src/feeds/parse.js";
 import { htmlToText, safeHttpUrl, truncate } from "../src/feeds/text.js";
-import { channelIdFromPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
+import { planReddit } from "../src/feeds/reddit.js";
+import { channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
 
 const fixture = (name: string) => fs.readFileSync(path.join(import.meta.dirname, "fixtures/feeds", name), "utf8");
 
@@ -131,5 +132,31 @@ describe("YouTube", () => {
     expect(channelIdFromPage('<link rel="canonical" href="https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv">')).toBe("UCabcdefghijklmnopqrstuv");
     expect(channelIdFromPage('..."externalId":"UCabcdefghijklmnopqrstuv",...')).toBe("UCabcdefghijklmnopqrstuv");
     expect(channelIdFromPage("<html>nothing</html>")).toBeNull();
+  });
+});
+
+describe("Reddit", () => {
+  const plan = (u: string) => planReddit(new URL(u));
+  it("maps subreddit and user links on any Reddit host to the www .rss feed", () => {
+    expect(plan("https://old.reddit.com/r/overclocking/")).toEqual({
+      feedUrl: "https://www.reddit.com/r/overclocking/.rss",
+      siteUrl: "https://www.reddit.com/r/overclocking/",
+    });
+    expect(plan("https://www.reddit.com/r/overclocking/comments/abc/x/")?.feedUrl).toBe("https://www.reddit.com/r/overclocking/.rss");
+    expect(plan("https://new.reddit.com/u/someone")?.feedUrl).toBe("https://www.reddit.com/user/someone/.rss");
+    expect(plan("https://old.reddit.com/r/overclocking/.rss")).toEqual({
+      feedUrl: "https://www.reddit.com/r/overclocking/.rss",
+      siteUrl: "https://www.reddit.com/r/overclocking/",
+    });
+    expect(plan("https://www.reddit.com/")).toBeNull();
+    expect(plan("https://notreddit.com/r/x")).toBeNull();
+  });
+});
+
+describe("YouTube input", () => {
+  it("accepts a bare channel ID and spots consent pages", () => {
+    expect(normaliseYouTubeInput("UCz9qw5nupdzCGwHwQiqs7qA")).toBe("https://www.youtube.com/channel/UCz9qw5nupdzCGwHwQiqs7qA");
+    expect(isConsentPage("https://consent.youtube.com/m?continue=x")).toBe(true);
+    expect(isConsentPage("https://m.youtube.com/@x")).toBe(false);
   });
 });

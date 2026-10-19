@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FeedItem, ItemsFilter, ItemsPage, Source } from "@fa/shared";
 import { api, errorMessage } from "../api";
+import { KIND_LABEL } from "../kinds";
 import { Alert } from "../components";
 import { fullDate, relativeTime } from "../time";
 
@@ -169,7 +170,7 @@ function ItemCard({ item, onUpdate }: { item: FeedItem; onUpdate: (p: { read?: b
     <li className={`item card${item.read ? " read" : ""}`}>
       <div className="item-body">
         <div className="item-meta">
-          <span className={`kind kind-${item.sourceKind}`}>{item.sourceKind === "youtube" ? "YouTube" : "Feed"}</span>
+          <span className={`kind kind-${item.sourceKind}`}>{KIND_LABEL[item.sourceKind]}</span>
           <span>{item.sourceTitle}</span>
           {item.author && item.author !== item.sourceTitle && <span>· {item.author}</span>}
           <time dateTime={new Date(item.publishedAt).toISOString()} title={fullDate(item.publishedAt)}>

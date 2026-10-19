@@ -2,6 +2,14 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 7: first real use)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-052 | Reddit links on any host (`www.`, `old.`, `new.`, `np.`, `m.`) map to `https://www.reddit.com/r/<name>/.rss` (or `/user/<name>/.rss`), shown with a "Reddit" badge. If Reddit refuses, say so plainly instead of retrying around it | User's failed `old.reddit.com` link + Claude | A subreddit page isn't a feed. old.reddit's robots.txt disallows all bots. Reddit's block page asks scripts to register, which stays the M5 route |
+| D-053 | To diagnose the failures, Claude made exactly one request each from the build environment: `www.reddit.com/robots.txt` (blocked: "network policy") and the `@ImKibitz` channel page (allowed by YouTube's robots.txt). Claude did **not** fetch the YouTube feed itself (D-045); the user's retry on the Pi provides that | Claude | Minimal, rule-respecting diagnosis; the feed step can only be judged from the user's own IP anyway |
+| D-054 | Every failed "add source" is logged (`could not add source`, with the input and reason), so `docker logs` shows the cause without the UI | Claude | First real use showed the error text is the key diagnostic |
+
 ## 2026-10-19 (round 6: M1, the first usable reader)
 
 | ID | Decision | Source | Rationale |

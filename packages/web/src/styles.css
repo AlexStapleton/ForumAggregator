@@ -166,6 +166,7 @@ a.button {
 .kind { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; border-radius: 4px; padding: 0.05rem 0.35rem; margin-right: 0.35rem; }
 .kind-youtube { background: #c4302b; color: #fff; }
 .kind-feed { background: var(--info-bg); color: var(--info-text); }
+.kind-reddit { background: #d93a00; color: #fff; }
 
 .source { margin-bottom: 0.75rem; }
 .source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }

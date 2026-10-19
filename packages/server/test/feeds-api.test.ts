@@ -108,6 +108,53 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     expect(all.items[0]).toMatchObject({ sourceKind: "youtube", imageUrl: "https://i1.ytimg.com/vi/vid00000001/hqdefault.jpg" });
   });
 
+  it("follows YouTube's redirect to the mobile page and uses the advertised feed", async () => {
+    await start();
+    // What YouTube actually served the app's User-Agent on 2026-10-19: a redirect to m.youtube.com,
+    // with the feed advertised in a <link> and the ID in itemprop="identifier".
+    web.set("https://www.youtube.com/@ImKibitz", {
+      finalUrl: "https://m.youtube.com/@ImKibitz",
+      contentType: "text/html",
+      body: '<html><head><link rel="canonical" href="https://www.youtube.com/@ImKibitz"><link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCz9qw5nupdzCGwHwQiqs7qA"><meta itemprop="identifier" content="UCz9qw5nupdzCGwHwQiqs7qA"></head></html>',
+    });
+    web.set("https://www.youtube.com/feeds/videos.xml?channel_id=UCz9qw5nupdzCGwHwQiqs7qA", { body: youtubeFeed });
+    const res = await addFeed("https://www.youtube.com/@ImKibitz");
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ kind: "youtube", siteUrl: "https://www.youtube.com/channel/UCz9qw5nupdzCGwHwQiqs7qA" });
+  });
+
+  it("says clearly when YouTube found the channel but not its feed, or showed a consent page", async () => {
+    await start();
+    web.set("https://www.youtube.com/@Broken", {
+      contentType: "text/html",
+      body: '<meta itemprop="identifier" content="UCabcdefghijklmnopqrstuv">',
+    });
+    web.set("https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv", { error: new FetchError("error", "unexpected response [HTTP 500]", 500) });
+    const broken = await addFeed("@Broken");
+    expect(broken.json()).toMatchObject({ error: "youtube_feed_failed" });
+    expect(broken.json().message).toMatch(/Found the channel, but YouTube didn't return its video feed .*HTTP 500/);
+
+    web.set("https://www.youtube.com/@EuViewer", { finalUrl: "https://consent.youtube.com/m?continue=x", contentType: "text/html", body: "<html>consent</html>" });
+    expect((await addFeed("@EuViewer")).json()).toMatchObject({ error: "youtube_consent" });
+  });
+
+  it("turns old.reddit links into the www .rss feed, and explains Reddit blocks", async () => {
+    await start();
+    web.set("https://www.reddit.com/r/overclocking/.rss", {
+      body: '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>overclocking</title><entry><id>t3_1</id><title>New BIOS</title><link href="https://www.reddit.com/r/overclocking/comments/1/new_bios/"/><updated>2026-10-15T11:00:00Z</updated></entry></feed>',
+    });
+    const ok = await addFeed("https://old.reddit.com/r/overclocking/");
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json()).toMatchObject({ kind: "reddit", feedUrl: "https://www.reddit.com/r/overclocking/.rss", siteUrl: "https://www.reddit.com/r/overclocking/" });
+    expect(web.requests.map((r) => r.url)).toEqual(["https://www.reddit.com/r/overclocking/.rss"]);
+
+    // What Reddit served this build environment: a 403 "blocked due to a network policy" page.
+    web.set("https://www.reddit.com/r/blocked/.rss", { error: new FetchError("blocked", "refused (401/403) [HTTP 403]", 403) });
+    const blocked = await addFeed("https://www.reddit.com/r/blocked/");
+    expect(blocked.json()).toMatchObject({ error: "reddit_blocked" });
+    expect(blocked.json().message).toMatch(/Reddit blocks apps that aren't registered/);
+  });
+
   it("explains why a source can't be added", async () => {
     await start();
     web.set("https://nofeed.example/", { body: "<html><head></head><body>hi</body></html>", contentType: "text/html" });

@@ -51,7 +51,7 @@ export interface VersionInfo {
 
 // ---- Sources and feed items (M1) -------------------------------------------------------
 
-export type SourceKind = "feed" | "youtube";
+export type SourceKind = "feed" | "youtube" | "reddit";
 
 /**
  * ok          last check succeeded

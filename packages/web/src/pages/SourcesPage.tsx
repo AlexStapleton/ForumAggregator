@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import type { Source } from "@fa/shared";
 import { api, errorMessage } from "../api";
+import { KIND_LABEL } from "../kinds";
 import { Alert, Field } from "../components";
 import { fullDate, relativeTime } from "../time";
 
@@ -102,7 +103,7 @@ export function SourcesPage() {
           <li key={s.id} className="card source">
             <div className="source-head">
               <div>
-                <span className={`kind kind-${s.kind}`}>{s.kind === "youtube" ? "YouTube" : "Feed"}</span>
+                <span className={`kind kind-${s.kind}`}>{KIND_LABEL[s.kind]}</span>
                 <strong className="source-title">{s.title}</strong>
               </div>
               <span className={`status status-${s.status}`}>{STATUS_LABEL[s.status]}</span>

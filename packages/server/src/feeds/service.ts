@@ -9,7 +9,8 @@ import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { nextCheck } from "./schedule.js";
-import { channelFeedUrl, channelIdFromPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
+import { planReddit } from "./reddit.js";
+import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 
 type SourceRow = Selectable<SourcesTable>;
 
@@ -80,7 +81,14 @@ export class FeedService {
   // ---- adding ------------------------------------------------------------------------
 
   async addSource(input: AddSourceRequest): Promise<Source> {
-    const resolved = await this.resolve(input.url);
+    let resolved: Awaited<ReturnType<FeedService["resolve"]>>;
+    try {
+      resolved = await this.resolve(input.url);
+    } catch (err) {
+      // Shows up in `docker logs`, so failures can be diagnosed without the UI.
+      if (err instanceof SourceError) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
+      throw err;
+    }
     const existing = await this.db.kysely.selectFrom("sources").select("id").where("feed_url", "=", resolved.feedUrl).executeTakeFirst();
     if (existing) throw new SourceError("duplicate", "You already follow this feed.", 409);
 
@@ -134,20 +142,59 @@ export class FeedService {
       let siteUrl: string;
       if (yt.kind === "lookup") {
         const page = await this.fetchInteractive(yt.pageUrl, "html");
-        const channelId = channelIdFromPage(page.body);
-        if (!channelId) {
+        if (isConsentPage(page.url)) {
           throw new SourceError(
-            "youtube_not_found",
-            "Couldn't find the channel on that YouTube page. Open the channel, use Share → Copy channel ID (or a URL containing /channel/UC…), and paste that instead.",
+            "youtube_consent",
+            "YouTube showed a cookie-consent page instead of the channel. Paste the channel ID instead: on the channel's page, About → Share channel → Copy channel ID (it starts with UC).",
           );
         }
-        feedUrl = channelFeedUrl(channelId);
-        siteUrl = `https://www.youtube.com/channel/${channelId}`;
+        // Prefer the feed the page advertises; fall back to finding the channel ID.
+        const advertised = discoverFeeds(page.body, page.url).find((f) => f.url.includes("/feeds/videos.xml"));
+        const channelId = channelIdFromPage(page.body);
+        if (!advertised && !channelId) {
+          throw new SourceError(
+            "youtube_not_found",
+            "Couldn't find the channel on that YouTube page. Paste the channel ID instead: on the channel's page, About → Share channel → Copy channel ID (it starts with UC).",
+          );
+        }
+        feedUrl = advertised?.url ?? channelFeedUrl(channelId!);
+        const id = new URL(feedUrl).searchParams.get("channel_id") ?? channelId;
+        siteUrl = id ? `https://www.youtube.com/channel/${id}` : yt.pageUrl;
       } else {
         ({ feedUrl, siteUrl } = yt);
       }
-      const res = await this.fetchInteractive(feedUrl, "feed");
+      let res;
+      try {
+        res = await this.fetchInteractive(feedUrl, "feed");
+      } catch (err) {
+        if (err instanceof SourceError) {
+          throw new SourceError(
+            "youtube_feed_failed",
+            `Found the channel, but YouTube didn't return its video feed (${err.message}). YouTube's feeds are sometimes briefly unavailable, so try again in a few minutes. Feed address: ${feedUrl}`,
+            err.status,
+          );
+        }
+        throw err;
+      }
       return { kind: "youtube", feedUrl, siteUrl, parsed: this.parse(res.body, feedUrl) };
+    }
+
+    const reddit = planReddit(url);
+    if (reddit) {
+      let res;
+      try {
+        res = await this.fetchInteractive(reddit.feedUrl, "feed");
+      } catch (err) {
+        if (err instanceof SourceError && ["blocked", "rate_limited", "cloudflare_challenge", "pow_challenge"].includes(err.code)) {
+          throw new SourceError(
+            "reddit_blocked",
+            "Reddit refused the request. Reddit blocks apps that aren't registered with it, so subreddit feeds may not work from your server. Reddit support through your own Reddit account is planned (roadmap M5).",
+            err.status,
+          );
+        }
+        throw err;
+      }
+      return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl, parsed: this.parse(res.body, reddit.feedUrl) };
     }
 
     const res = await this.fetchInteractive(url.href, "feed");
