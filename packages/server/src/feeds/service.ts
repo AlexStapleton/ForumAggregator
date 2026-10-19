@@ -1,15 +1,17 @@
 // Sources: adding (with feed discovery and YouTube lookup), checking, and storing new items.
 import crypto from "node:crypto";
 import type { Selectable } from "kysely";
-import type { AddSourceRequest, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
+import type { AddSourceRequest, OpmlImportResult, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
 import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
+import { buildOpml, parseOpml } from "./opml.js";
 import { nextCheck } from "./schedule.js";
-import { planReddit } from "./reddit.js";
+import { isValidSelector } from "../reader/extract.js";
+import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 
 type SourceRow = Selectable<SourcesTable>;
@@ -20,6 +22,7 @@ export class SourceError extends Error {
     readonly code: string,
     message: string,
     readonly status = 400,
+    readonly fields?: Record<string, string>,
   ) {
     super(message);
   }
@@ -124,6 +127,65 @@ export class FeedService {
     return (await this.getSource(id))!;
   }
 
+  // ---- OPML import/export (D-073) ---------------------------------------------------
+
+  /**
+   * Adds every feed in an OPML file that isn't followed yet. Nothing is fetched here: sources
+   * start as "pending" and the scheduler checks them (politely spaced per site) right away.
+   */
+  async importOpml(xml: string): Promise<OpmlImportResult> {
+    const entries = parseOpml(xml);
+    const existing = new Set((await this.db.kysely.selectFrom("sources").select("feed_url").execute()).map((r) => r.feed_url));
+    const result: OpmlImportResult = { added: 0, skipped: [] };
+    const now = this.now();
+    for (const e of entries) {
+      const planned = planImport(e.feedUrl);
+      if (!planned) {
+        result.skipped.push({ url: e.feedUrl, title: e.title, reason: "Not an http(s) feed address" });
+        continue;
+      }
+      if (existing.has(planned.feedUrl)) {
+        result.skipped.push({ url: planned.feedUrl, title: e.title, reason: "Already followed" });
+        continue;
+      }
+      existing.add(planned.feedUrl);
+      const id = crypto.randomUUID();
+      await this.db.kysely
+        .insertInto("sources")
+        .values({
+          id,
+          kind: planned.kind,
+          title: e.title || new URL(planned.feedUrl).hostname,
+          site_url: e.siteUrl ?? planned.siteUrl,
+          feed_url: planned.feedUrl,
+          status: "pending",
+          last_error: null,
+          last_checked_at: null,
+          last_success_at: null,
+          next_check_at: now,
+          poll_interval_minutes: null,
+          retention_days: null,
+          etag: null,
+          last_modified: null,
+          created_at: now,
+          updated_at: now,
+        })
+        .execute();
+      await this.setTags(id, e.tags);
+      result.added++;
+    }
+    this.log?.info({ added: result.added, skipped: result.skipped.length }, "OPML imported");
+    return result;
+  }
+
+  async exportOpml(): Promise<string> {
+    const sources = await this.listSources();
+    return buildOpml(
+      sources.map((s) => ({ title: s.title, feedUrl: s.feedUrl, siteUrl: s.siteUrl, tags: s.tags })),
+      this.now(),
+    );
+  }
+
   /** Works out the feed URL for whatever the user pasted, fetching as little as possible. */
   private async resolve(raw: string): Promise<{ kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed }> {
     let input = normaliseYouTubeInput(raw);
@@ -197,6 +259,28 @@ export class FeedService {
         throw err;
       }
       return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl, parsed: this.parse(res.body, reddit.feedUrl) };
+    }
+
+    // XenForo threads (…/threads/name.123/) never have a feed; say so without contacting the site.
+    if (/^\/threads\/[^/]+\.\d+(\/|$)/.test(url.pathname)) {
+      throw new SourceError(
+        "forum_thread",
+        `This is a forum thread. Forum threads don't have RSS feeds, so they can't be followed yet. Following threads directly is planned (roadmap M2). For now, follow the board the thread is in: open that board on ${url.hostname} and paste its address here, or add the whole forum's feed: ${url.origin}/forums/-/index.rss`,
+      );
+    }
+
+    // XenForo boards (…/forums/name.12/) have their feed at …/index.rss. Try it first: it's one
+    // request, and some forums answer feeds even when their pages show a bot check.
+    const board = /^(\/forums\/[^/]+\.\d+)\/?$/.exec(url.pathname);
+    if (board) {
+      const feedUrl = `${url.origin}${board[1]}/index.rss`;
+      try {
+        const feedRes = await this.fetchInteractive(feedUrl, "feed");
+        if (looksLikeFeed(feedRes.body)) return { kind: "feed", feedUrl, siteUrl: url.href, parsed: this.parse(feedRes.body, feedUrl) };
+      } catch (err) {
+        if (!(err instanceof SourceError)) throw err;
+        // fall through to reading the page itself
+      }
     }
 
     const res = await this.fetchInteractive(url.href, "feed");
@@ -334,7 +418,7 @@ export class FeedService {
    */
   private async ingest(sourceId: string, parsed: ParsedFeed, firstFetch: boolean): Promise<number> {
     const now = this.now();
-    const source = await this.db.kysely.selectFrom("sources").select("retention_days").where("id", "=", sourceId).executeTakeFirst();
+    const source = await this.db.kysely.selectFrom("sources").select(["retention_days", "kind"]).where("id", "=", sourceId).executeTakeFirst();
     const keepDays = source ? this.retentionDays(source) : 0;
     const cutoff = keepDays > 0 ? now - keepDays * 24 * 3_600_000 : -Infinity;
 
@@ -351,7 +435,7 @@ export class FeedService {
           url: it.url,
           title: it.title,
           author: it.author,
-          summary: it.summary,
+          summary: source?.kind === "reddit" ? cleanRedditSummary(it.summary) : it.summary,
           image_url: it.imageUrl,
           published_at: published,
           fetched_at: now,
@@ -471,6 +555,14 @@ export class FeedService {
     if (patch.title !== undefined) set.title = patch.title;
     if (patch.pollIntervalMinutes !== undefined) set.poll_interval_minutes = patch.pollIntervalMinutes;
     if (patch.retentionDays !== undefined) set.retention_days = patch.retentionDays;
+    const selectorsChanged =
+      (patch.articleSelector !== undefined && patch.articleSelector !== row.article_selector) ||
+      (patch.removeSelector !== undefined && patch.removeSelector !== row.remove_selector);
+    if (selectorsChanged) {
+      checkSelectors(patch);
+      if (patch.articleSelector !== undefined) set.article_selector = patch.articleSelector;
+      if (patch.removeSelector !== undefined) set.remove_selector = patch.removeSelector;
+    }
 
     // A new address is checked before anything is saved; existing items are kept.
     let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
@@ -511,6 +603,14 @@ export class FeedService {
       await this.recordSuccess(id, this.now(), null, null, { ...row, ...set } as SourceRow);
     }
     if (patch.retentionDays !== undefined) await this.applyRetention(id);
+    // Articles already read from the page used the old selectors: read them again next time.
+    if (selectorsChanged) {
+      await this.db.kysely
+        .deleteFrom("item_content")
+        .where("origin", "=", "page")
+        .where("item_id", "in", (eb) => eb.selectFrom("items").select("items.id").where("items.source_id", "=", id))
+        .execute();
+    }
     return (await this.getSource(id))!;
   }
 
@@ -587,10 +687,36 @@ export class FeedService {
       nextCheckAt: r.next_check_at,
       pollIntervalMinutes: r.poll_interval_minutes,
       retentionDays: r.retention_days,
+      articleSelector: r.article_selector,
+      removeSelector: r.remove_selector,
       tags,
       unreadCount: c?.unread ?? 0,
       itemCount: c?.total ?? 0,
       createdAt: r.created_at,
     };
   }
+}
+
+/** Rejects CSS selectors the browser engine can't parse, naming the field. */
+export function checkSelectors(s: { articleSelector?: string | null; removeSelector?: string | null }): void {
+  const fields: Record<string, string> = {};
+  if (s.articleSelector && !isValidSelector(s.articleSelector)) fields.articleSelector = "That isn't a valid CSS selector";
+  if (s.removeSelector && !isValidSelector(s.removeSelector)) fields.removeSelector = "That isn't a valid CSS selector";
+  if (Object.keys(fields).length) throw new SourceError("validation", "Some fields are invalid", 400, fields);
+}
+
+/** Kind and canonical feed address for an imported feed URL, without fetching anything. */
+function planImport(raw: string): { kind: SourceKind; feedUrl: string; siteUrl: string | null } | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const yt = planYouTube(url);
+  if (yt?.kind === "feed") return { kind: "youtube", feedUrl: yt.feedUrl, siteUrl: yt.siteUrl };
+  const reddit = planReddit(url);
+  if (reddit) return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl };
+  return { kind: "feed", feedUrl: url.href, siteUrl: null };
 }

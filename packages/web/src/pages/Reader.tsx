@@ -1,12 +1,14 @@
-// Full-screen reader: one item at a time, in the feed's current order.
-// Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc or Back closes.
+// Reader: one item at a time, in the feed's current order. Either full screen ("overlay", where
+// Back closes it) or as the right-hand pane of the split layout ("pane", D-070).
+// Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc closes.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeedItem, ReaderContent } from "@fa/shared";
+import type { FeedItem, ReaderComments, ReaderContent } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { fullDate, relativeTime } from "../time";
 
 interface Props {
+  mode: "overlay" | "pane";
   items: FeedItem[];
   index: number;
   hasMore: boolean;
@@ -26,7 +28,7 @@ async function loadContent(itemId: string): Promise<ReaderContent> {
   return content;
 }
 
-export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpdate, onClose }: Props) {
+export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore, onUpdate, onClose }: Props) {
   const item = items[index];
   const [content, setContent] = useState<ReaderContent>();
   const [error, setError] = useState<string>();
@@ -34,8 +36,10 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
   const touch = useRef<{ x: number; y: number } | null>(null);
   const closing = useRef(false);
 
-  // Browser/phone Back closes the reader instead of leaving the page.
+  // Full screen: browser/phone Back closes the reader instead of leaving the page.
   useEffect(() => {
+    if (mode !== "overlay") return;
+    closing.current = false;
     history.pushState({ faReader: true }, "");
     const onPop = () => {
       closing.current = true;
@@ -47,13 +51,14 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
       window.removeEventListener("popstate", onPop);
       document.body.classList.remove("reader-open");
     };
-  }, [onClose]);
+  }, [onClose, mode]);
 
   const close = useCallback(() => {
+    if (mode === "pane") return onClose();
     if (closing.current) return;
     closing.current = true;
     history.back(); // triggers popstate → onClose
-  }, []);
+  }, [mode, onClose]);
 
   // Load the current item; mark it read; warm up the next one.
   useEffect(() => {
@@ -88,7 +93,8 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === "ArrowRight" || e.key === "j") void go(1);
       else if (e.key === "ArrowLeft" || e.key === "k") void go(-1);
       else if (e.key === "Escape") close();
@@ -103,10 +109,10 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
   return (
     <div
-      className="reader"
-      role="dialog"
-      aria-modal="true"
-      aria-label={item.title}
+      className={mode === "pane" ? "reader reader-pane" : "reader"}
+      role={mode === "overlay" ? "dialog" : "region"}
+      aria-modal={mode === "overlay" || undefined}
+      aria-label={mode === "overlay" ? item.title : "Reader"}
       onTouchStart={(e) => {
         const t = e.touches[0];
         touch.current = t ? { x: t.clientX, y: t.clientY } : null;
@@ -176,9 +182,13 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
           {content?.notice && (
             <div className="alert alert-info">
-              {content.notice} {item.url && "Use “Open original” to read it on the site."}
+              {content.notice} {item.url && !/original/i.test(content.notice) && "Use “Open original” to read it on the site."}
             </div>
           )}
+
+          {item.sourceKind === "reddit" && <Comments key={item.id} itemId={item.id} site="Reddit" />}
+          {/* YouTube: loads by itself (1 unit of the user's API quota, cached); without a key the server just says how to add one. */}
+          {item.sourceKind === "youtube" && <Comments key={item.id} itemId={item.id} site="YouTube" autoLoad />}
         </article>
       </div>
 
@@ -199,5 +209,74 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
         </button>
       </footer>
     </div>
+  );
+}
+
+/**
+ * Comments under the article. Reddit: loaded only when asked (each load is a request against
+ * Reddit's limit). YouTube: top comments via the API key from Settings, loaded straight away.
+ */
+function Comments({ itemId, site, autoLoad = false }: { itemId: string; site: "Reddit" | "YouTube"; autoLoad?: boolean }) {
+  const [state, setState] = useState<"idle" | "loading" | "done">(autoLoad ? "loading" : "idle");
+  const [data, setData] = useState<ReaderComments>();
+  const [error, setError] = useState<string>();
+
+  const load = async () => {
+    setState("loading");
+    setError(undefined);
+    try {
+      setData(await api<ReaderComments>("GET", `/api/items/${itemId}/comments`));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setState("done");
+    }
+  };
+
+  useEffect(() => {
+    if (autoLoad) void load();
+  }, []); // once: the component is keyed by item
+
+  // No key set: a one-line hint instead of an empty section.
+  if (data && !data.available) {
+    return (
+      <p className="muted small comments-hint">
+        {data.notice} <a href="#/settings">Open Settings</a>
+      </p>
+    );
+  }
+
+  return (
+    <section className="comments" aria-label="Comments">
+      <h2 className="comments-title">{site === "YouTube" ? "Top comments" : "Comments"}</h2>
+      {state === "idle" && (
+        <button className="secondary" onClick={() => void load()}>
+          Show comments
+        </button>
+      )}
+      {state === "loading" && <p className="muted">Loading comments…</p>}
+      {error && <div className="alert alert-error">{error}</div>}
+      {data?.notice && <p className="muted">{data.notice}</p>}
+      {data && data.comments.length > 0 && (
+        <ol className="comment-list">
+          {data.comments.map((c, i) => (
+            <li key={c.url ?? i} className="comment">
+              <div className="item-meta">
+                <strong>{c.author ?? "someone"}</strong>
+                {c.publishedAt && <time title={fullDate(c.publishedAt)}>· {relativeTime(c.publishedAt)}</time>}
+                {c.likes ? <span title="Likes">· 👍 {c.likes.toLocaleString()}</span> : null}
+              </div>
+              {/* Sanitised on the server, like the article. */}
+              <div className="reader-content comment-body" dangerouslySetInnerHTML={{ __html: c.html }} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {data?.discussionUrl && state === "done" && (
+        <a href={data.discussionUrl} target="_blank" rel="noopener noreferrer" className="small">
+          Full discussion on {site} ↗
+        </a>
+      )}
+    </section>
   );
 }

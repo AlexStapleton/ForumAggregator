@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { Source } from "@fa/shared";
+import type { OpmlImportResult, ReaderPreview, Source } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert, Field } from "../components";
@@ -189,7 +189,83 @@ export function SourcesPage() {
           </li>
         ))}
       </ul>
+
+      <ImportExport hasSources={!!sources?.length} onImported={load} />
     </>
+  );
+}
+
+/** OPML: move subscriptions in from another reader, or back them up (D-073). */
+function ImportExport({ hasSources, onImported }: { hasSources: boolean; onImported: () => Promise<void> }) {
+  const [result, setResult] = useState<OpmlImportResult>();
+  const [error, setError] = useState<string>();
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const importFile = async (file: File) => {
+    setError(undefined);
+    setResult(undefined);
+    setImporting(true);
+    try {
+      const res = await api<OpmlImportResult>("POST", "/api/sources/opml", { opml: await file.text() });
+      setResult(res);
+      await onImported();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setImporting(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  return (
+    <section className="card opml">
+      <h2>Import and export</h2>
+      <p className="muted small">
+        OPML is the file other feed readers (FreshRSS, Feedly, Inoreader, NetNewsWire…) use for subscriptions. Folders and categories become tags.
+        Imported feeds are checked over the next few minutes.
+      </p>
+      {error && <Alert>{error}</Alert>}
+      {result && (
+        <Alert kind={result.added ? "ok" : "info"}>
+          Added {result.added} {result.added === 1 ? "source" : "sources"}
+          {result.skipped.length ? `, skipped ${result.skipped.length}.` : "."}
+          {result.skipped.length > 0 && (
+            <details>
+              <summary>Show skipped</summary>
+              <ul className="small">
+                {result.skipped.map((s, i) => (
+                  <li key={i} className="break">
+                    {s.title ?? s.url}: {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </Alert>
+      )}
+      <div className="row">
+        <label className={`button secondary${importing ? " disabled" : ""}`}>
+          {importing ? "Importing…" : "Import OPML file"}
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".opml,.xml,text/x-opml,text/xml,application/xml"
+            className="visually-hidden"
+            disabled={importing}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importFile(file);
+            }}
+          />
+        </label>
+        {hasSources && (
+          <a className="button secondary" href="/api/sources/opml" download>
+            Export OPML
+          </a>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -245,6 +321,8 @@ function EditSource({
   const [tags, setTags] = useState(source.tags.join(", "));
   const [pollInterval, setPollInterval] = useState<number | null>(source.pollIntervalMinutes);
   const [retention, setRetention] = useState<number | null>(source.retentionDays);
+  const [articleSelector, setArticleSelector] = useState(source.articleSelector ?? "");
+  const [removeSelector, setRemoveSelector] = useState(source.removeSelector ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -260,6 +338,8 @@ function EditSource({
       pollIntervalMinutes: pollInterval,
       retentionDays: retention,
     };
+    // Only feed sources are read from their pages (D-074).
+    if (source.kind === "feed") Object.assign(patch, { articleSelector, removeSelector });
     const originalAddress = source.siteUrl ?? source.feedUrl;
     if (address.trim() !== originalAddress) patch.url = address.trim();
     const shrinking = retention !== null && retention > 0 && (source.retentionDays === null || source.retentionDays === 0 || retention < source.retentionDays);
@@ -320,6 +400,16 @@ function EditSource({
         </select>
         <small className="hint">Saved items are never deleted.</small>
       </div>
+      {source.kind === "feed" && (
+        <ReaderSelectors
+          sourceId={source.id}
+          articleSelector={articleSelector}
+          removeSelector={removeSelector}
+          onArticle={setArticleSelector}
+          onRemove={setRemoveSelector}
+          fields={fields}
+        />
+      )}
       <div className="row">
         <button type="submit" disabled={saving}>
           {saving ? "Saving…" : "Save"}
@@ -329,5 +419,94 @@ function EditSource({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Advanced: CSS selectors for sites where automatic article extraction gets it wrong (D-074),
+ * with a preview on the source's newest item before saving.
+ */
+function ReaderSelectors({
+  sourceId,
+  articleSelector,
+  removeSelector,
+  onArticle,
+  onRemove,
+  fields,
+}: {
+  sourceId: string;
+  articleSelector: string;
+  removeSelector: string;
+  onArticle: (v: string) => void;
+  onRemove: (v: string) => void;
+  fields: Record<string, string>;
+}) {
+  const [preview, setPreview] = useState<ReaderPreview>();
+  const [previewError, setPreviewError] = useState<string>();
+  const [previewFields, setPreviewFields] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  // Open at first if selectors are set; after that the user decides (typing must not collapse it).
+  const [startOpen] = useState(() => !!(articleSelector || removeSelector));
+
+  const run = async () => {
+    setLoading(true);
+    setPreview(undefined);
+    setPreviewError(undefined);
+    setPreviewFields({});
+    try {
+      setPreview(await api<ReaderPreview>("POST", `/api/sources/${sourceId}/reader-preview`, { articleSelector, removeSelector }));
+    } catch (err) {
+      setPreviewError(errorMessage(err));
+      setPreviewFields(fieldErrors(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const counts = preview && [
+    preview.matched !== null && `article selector matched ${preview.matched}`,
+    preview.removed !== null && `removed ${preview.removed}`,
+  ].filter(Boolean).join(", ");
+
+  return (
+    <details className="selectors" open={startOpen || undefined}>
+      <summary>Reader: article selectors (advanced)</summary>
+      <p className="muted small">
+        For sites where the reader shows the wrong part of the page. When either box is filled in, the reader always reads
+        the original page for this source and uses these CSS selectors. Leave both empty for automatic.
+      </p>
+      <Field
+        label="Article selector"
+        name="articleSelector"
+        value={articleSelector}
+        onChange={onArticle}
+        error={fields.articleSelector ?? previewFields.articleSelector}
+        hint="e.g. article .entry-content, or .message-body for every post on a forum page"
+        autoComplete="off"
+      />
+      <Field
+        label="Remove these elements"
+        name="removeSelector"
+        value={removeSelector}
+        onChange={onRemove}
+        error={fields.removeSelector ?? previewFields.removeSelector}
+        hint="e.g. .share-bar, .related, figure.ad"
+        autoComplete="off"
+      />
+      <button type="button" className="secondary" onClick={() => void run()} disabled={loading}>
+        {loading ? "Loading preview…" : "Preview"}
+      </button>
+      {previewError && <Alert>{previewError}</Alert>}
+      {preview && (
+        <div className="preview" aria-live="polite">
+          <p className="muted small">
+            Preview of “{preview.itemTitle}”{counts ? ` (${counts})` : ""}. Not saved yet.
+          </p>
+          {preview.notice && <Alert kind="info">{preview.notice}</Alert>}
+          {/* Sanitised on the server, like the reader. */}
+          {preview.html && <div className="reader-content preview-body" dangerouslySetInnerHTML={{ __html: preview.html }} />}
+        </div>
+      )}
+    </details>
   );
 }

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeedItem, ItemsFilter, ItemsPage, Source, TagCount } from "@fa/shared";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FeedItem, ItemsFilter, ItemsOrder, ItemsPage, Source, TagCount } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert } from "../components";
-import { fullDate, relativeTime } from "../time";
+import { usePrefs, useSplitView } from "../prefs";
+import { dayLabel, fullDate, relativeTime, startOfDay } from "../time";
 import { Reader } from "./Reader";
 
 const FILTERS: Array<{ value: ItemsFilter; label: string }> = [
@@ -17,9 +18,19 @@ export function FeedPage() {
   const [sourceId, setSourceId] = useState("");
   const [tag, setTag] = useState("");
   const [tags, setTags] = useState<TagCount[]>([]);
-  const [readerIndex, setReaderIndex] = useState<number | null>(null);
+  const [prefs, setPrefs] = usePrefs();
+  const order = prefs.order;
+  const split = useSplitView(prefs.layout);
+  // The open item is tracked by id, so a refresh or "load older" keeps it open in the split view.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sources, setSources] = useState<Source[]>();
-  const [items, setItems] = useState<FeedItem[]>([]);
+  const [items, setItemsState] = useState<FeedItem[]>([]);
+  // Mirrors `items` synchronously, so the reader can step onto items that "load older" just added.
+  const itemsRef = useRef<FeedItem[]>([]);
+  const setItems = useCallback((next: FeedItem[] | ((prev: FeedItem[]) => FeedItem[])) => {
+    itemsRef.current = typeof next === "function" ? next(itemsRef.current) : next;
+    setItemsState(itemsRef.current);
+  }, []);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -28,13 +39,13 @@ export function FeedPage() {
 
   const query = useCallback(
     (after?: string | null) => {
-      const p = new URLSearchParams({ filter, limit: "40" });
+      const p = new URLSearchParams({ filter, order, limit: "40" });
       if (sourceId) p.set("sourceId", sourceId);
       if (tag) p.set("tag", tag);
       if (after) p.set("cursor", after);
       return `/api/items?${p}`;
     },
-    [filter, sourceId, tag],
+    [filter, order, sourceId, tag],
   );
 
   const load = useCallback(async () => {
@@ -57,11 +68,14 @@ export function FeedPage() {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [query]);
+  }, [query, setItems]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const index = selectedId === null ? -1 : items.findIndex((i) => i.id === selectedId);
+  const readerIndex = index >= 0 ? index : null;
 
   // Pick up new items when the app comes back to the foreground (e.g. on the phone).
   useEffect(() => {
@@ -70,16 +84,16 @@ export function FeedPage() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load, readerIndex]);
 
-  const loadMore = async () => {
+  const loadMore = useCallback(async () => {
     if (!cursor) return;
     try {
       const page = await api<ItemsPage>("GET", query(cursor));
-      setItems((prev) => [...prev, ...page.items]);
+      setItems((prev) => [...prev, ...page.items.filter((n) => !prev.some((p) => p.id === n.id))]);
       setCursor(page.nextCursor);
     } catch (err) {
       setError(errorMessage(err));
     }
-  };
+  }, [cursor, query, setItems]);
 
   const update = useCallback(async (item: FeedItem, patch: { read?: boolean; saved?: boolean }) => {
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...patch } : i)));
@@ -89,16 +103,54 @@ export function FeedPage() {
       setItems((prev) => prev.map((i) => (i.id === item.id ? item : i)));
       setError(errorMessage(err));
     }
-  }, []);
-  const closeReader = useCallback(() => setReaderIndex(null), []);
+  }, [setItems]);
+  const closeReader = useCallback(() => setSelectedId(null), []);
+  const openIndex = useCallback((i: number) => setSelectedId(itemsRef.current[i]?.id ?? null), []);
+
+  // Split view with nothing open: j / → opens the first item.
+  useEffect(() => {
+    if (!split || readerIndex !== null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if ((e.key === "j" || e.key === "ArrowRight") && items.length) openIndex(0);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [split, readerIndex, items.length, openIndex]);
+
+  // Keep the open item visible in the list while stepping through with j / k.
+  useEffect(() => {
+    if (split && selectedId) document.getElementById(`item-${selectedId}`)?.scrollIntoView({ block: "nearest" });
+  }, [split, selectedId]);
+
+  // The split view needs the page's full width.
+  useEffect(() => {
+    document.body.classList.toggle("feed-wide", split);
+    return () => document.body.classList.remove("feed-wide");
+  }, [split]);
 
   const markAllRead = async () => {
-    const newest = items[0];
-    if (!newest) return;
-    // Only up to the newest item on screen, so anything that arrived meanwhile stays unread.
-    await api("POST", "/api/items/mark-read", { ...(sourceId ? { sourceId } : {}), upTo: newest.publishedAt });
+    if (!items.length) return;
+    // Only up to the newest item on screen (whichever end of the list it is at),
+    // so anything that arrived meanwhile stays unread.
+    const upTo = Math.max(...items.map((i) => i.publishedAt));
+    await api("POST", "/api/items/mark-read", { ...(sourceId ? { sourceId } : {}), ...(tag ? { tag } : {}), upTo });
     await load();
   };
+
+  // Timeline: consecutive items grouped under a heading per day, in the list's order.
+  const groups = useMemo(() => {
+    const out: Array<{ day: number; label: string; entries: Array<{ item: FeedItem; index: number }> }> = [];
+    const now = Date.now();
+    items.forEach((item, i) => {
+      const day = startOfDay(item.publishedAt);
+      const last = out[out.length - 1];
+      if (last && last.day === day) last.entries.push({ item, index: i });
+      else out.push({ day, label: dayLabel(item.publishedAt, now), entries: [{ item, index: i }] });
+    });
+    return out;
+  }, [items]);
 
   const unreadTotal = sources?.reduce((n, s) => n + s.unreadCount, 0) ?? 0;
 
@@ -112,10 +164,12 @@ export function FeedPage() {
     );
   }
 
+  const overlayOpen = !split && readerIndex !== null;
+
   return (
-    <>
-      {/* While the reader is open, the list behind it is inert (no focus, hidden from screen readers). */}
-      <div inert={readerIndex !== null} aria-hidden={readerIndex !== null || undefined}>
+    <div className={split ? "feed-split" : undefined}>
+      {/* While the full-screen reader is open, the list behind it is inert (no focus, hidden from screen readers). */}
+      <div className="feed-list" inert={overlayOpen} aria-hidden={overlayOpen || undefined}>
       <div className="toolbar">
         <div className="segmented" role="tablist" aria-label="Show">
           {FILTERS.map((f) => (
@@ -151,6 +205,10 @@ export function FeedPage() {
             ))}
           </select>
         )}
+        <select aria-label="Order" value={order} onChange={(e) => setPrefs({ order: e.target.value as ItemsOrder })}>
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
         <div className="toolbar-actions">
           <button className="secondary" onClick={() => void load()} disabled={loading}>
             {loading ? "Loading…" : "Refresh"}
@@ -171,17 +229,23 @@ export function FeedPage() {
         </p>
       )}
 
-      <ul className="items">
-        {items.map((item, index) => (
-          <ItemCard
-            key={item.id}
-            item={item}
-            onUpdate={(p) => void update(item, p)}
-            onOpen={() => setReaderIndex(index)}
-            onTag={(t) => setTag(t)}
-          />
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <section key={`${g.day}-${g.entries[0]?.item.id}`} className="day" aria-label={g.label}>
+          <h2 className="day-heading">{g.label}</h2>
+          <ul className="items">
+            {g.entries.map(({ item, index: i }) => (
+              <ItemCard
+                key={item.id}
+                item={item}
+                selected={split && item.id === selectedId}
+                onUpdate={(p) => void update(item, p)}
+                onOpen={() => openIndex(i)}
+                onTag={(t) => setTag(t)}
+              />
+            ))}
+          </ul>
+        </section>
+      ))}
 
       {cursor && (
         <button className="secondary load-more" onClick={() => void loadMore()}>
@@ -190,34 +254,46 @@ export function FeedPage() {
       )}
       </div>
 
-      {readerIndex !== null && (
+      {readerIndex !== null ? (
         <Reader
+          mode={split ? "pane" : "overlay"}
           items={items}
           index={readerIndex}
           hasMore={cursor !== null}
-          onIndexChange={setReaderIndex}
+          onIndexChange={openIndex}
           onLoadMore={loadMore}
           onUpdate={(item, patch) => void update(item, patch)}
           onClose={closeReader}
         />
+      ) : (
+        split && (
+          <aside className="reader-pane reader-empty muted" aria-label="Reader">
+            <p>Select an item to read it here.</p>
+            <p className="small">
+              Keys: <kbd>j</kbd>/<kbd>k</kbd> or <kbd>→</kbd>/<kbd>←</kbd> next and previous, <kbd>s</kbd> save, <kbd>Esc</kbd> close.
+            </p>
+          </aside>
+        )
       )}
-    </>
+    </div>
   );
 }
 
 function ItemCard({
   item,
+  selected,
   onUpdate,
   onOpen,
   onTag,
 }: {
   item: FeedItem;
+  selected: boolean;
   onUpdate: (p: { read?: boolean; saved?: boolean }) => void;
   onOpen: () => void;
   onTag: (tag: string) => void;
 }) {
   return (
-    <li className={`item card${item.read ? " read" : ""}`}>
+    <li id={`item-${item.id}`} className={`item card${item.read ? " read" : ""}${selected ? " selected" : ""}`} aria-current={selected || undefined}>
       <div className="item-body">
         <div className="item-meta">
           <span className={`kind kind-${item.sourceKind}`}>{KIND_LABEL[item.sourceKind]}</span>
@@ -227,11 +303,11 @@ function ItemCard({
             · {relativeTime(item.publishedAt)}
           </time>
         </div>
-        <h2 className="item-title">
+        <h3 className="item-title">
           <button className="title-button" onClick={onOpen}>
             {item.title}
           </button>
-        </h2>
+        </h3>
         {item.summary && <p className="item-summary">{item.summary}</p>}
         {item.tags.length > 0 && (
           <div className="tags">

@@ -139,6 +139,16 @@ export const httpFetch: Fetcher = async (url, options) => {
  * Spaces out requests to the same host (DESIGN §7): at least `minDelayMs` plus random jitter
  * between two requests, across the scheduler and manual refreshes alike.
  */
+/**
+ * Sites that need more space than the default between requests, whatever triggered them.
+ * Reddit allows unregistered clients only a few requests a minute.
+ */
+export const HOST_MIN_DELAY_MS: Record<string, number> = {
+  "www.reddit.com": 10_000,
+  "reddit.com": 10_000,
+  "old.reddit.com": 10_000,
+};
+
 export class HostLimiter {
   private nextAllowed = new Map<string, number>();
 
@@ -147,12 +157,16 @@ export class HostLimiter {
     private readonly jitterMs: number,
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
     private readonly now: () => number = Date.now,
+    private readonly hostMinDelayMs: Record<string, number> = HOST_MIN_DELAY_MS,
   ) {}
 
-  /** Waits for this host's turn. `minDelayMs` can be lowered for interactive actions. */
+  /**
+   * Waits for this host's turn. `minDelayMs` can be lowered for interactive actions, but never
+   * below a host's own minimum (HOST_MIN_DELAY_MS).
+   */
   async wait(url: string, override?: { minDelayMs: number; jitterMs: number }): Promise<void> {
     const host = new URL(url).host;
-    const delay = override?.minDelayMs ?? this.minDelayMs;
+    const delay = Math.max(override?.minDelayMs ?? this.minDelayMs, this.hostMinDelayMs[host] ?? 0);
     const jitter = override?.jitterMs ?? this.jitterMs;
     const now = this.now();
     const allowedAt = Math.max(now, this.nextAllowed.get(host) ?? 0);
@@ -161,3 +175,29 @@ export class HostLimiter {
     if (allowedAt > now) await this.sleep(allowedAt - now);
   }
 }
+
+/**
+ * For JSON APIs (the YouTube Data API): returns the status and parsed body even for errors,
+ * because the body says why (bad key, quota, comments off). Never put the URL in errors or
+ * logs: it can carry an API key.
+ */
+export type JsonFetcher = (url: string) => Promise<{ status: number; body: unknown }>;
+
+export const httpJson: JsonFetcher = async (url) => {
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { "user-agent": USER_AGENT, accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+  } catch (err) {
+    const e = err as Error & { cause?: { code?: string } };
+    if (e.name === "TimeoutError" || e.name === "AbortError") throw new FetchError("timeout", "The API took too long to answer");
+    throw new FetchError("network", `Couldn't connect (${e.cause?.code ?? e.name})`);
+  }
+  const text = new TextDecoder().decode(await readCapped(res, 2 * 1024 * 1024));
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON (e.g. a proxy's error page); the status still says something.
+  }
+  return { status: res.status, body };
+};

@@ -276,6 +276,16 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     }
     expect(seen).toEqual(["A1", "B1", "A2", "A3", "A4", "A5"]);
 
+    // Timeline order: oldest first, same guarantees.
+    const oldest: string[] = [];
+    cursor = "";
+    while (cursor !== null) {
+      const page: { items: Array<{ title: string }>; nextCursor: string | null } = await items(`?filter=all&order=oldest&limit=2${cursor ? `&cursor=${cursor}` : ""}`);
+      oldest.push(...page.items.map((i) => i.title));
+      cursor = page.nextCursor;
+    }
+    expect(oldest).toEqual(["A5", "A4", "A3", "A2", "B1", "A1"]);
+
     const first = (await items()).items[0];
     expect((await call("PATCH", `/api/items/${first.id}`, { read: true, saved: true })).statusCode).toBe(200);
     expect((await items()).items).toHaveLength(5);

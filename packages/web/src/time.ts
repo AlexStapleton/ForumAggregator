@@ -20,3 +20,24 @@ export function relativeTime(ts: number, now = Date.now()): string {
 export function fullDate(ts: number): string {
   return new Date(ts).toLocaleString();
 }
+
+/** Heading for a day in the timeline: "Today", "Yesterday", "Monday 14 October" (with the year if not this year). */
+export function dayLabel(ts: number, now = Date.now()): string {
+  const day = startOfDay(ts);
+  const today = startOfDay(now);
+  if (day === today) return "Today";
+  if (day === startOfDay(today - 12 * 3600 * 1000)) return "Yesterday";
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    ...(d.getFullYear() !== new Date(now).getFullYear() ? { year: "numeric" } : {}),
+  });
+}
+
+/** Local midnight of the day containing ts (DST-safe: built from the calendar date, not by subtracting hours). */
+export function startOfDay(ts: number): number {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}

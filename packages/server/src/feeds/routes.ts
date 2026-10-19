@@ -1,13 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ItemsFilter } from "@fa/shared";
-import { AddSourceRequest, MarkReadRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
+import { AddSourceRequest, MarkReadRequest, OpmlImportRequest, ReaderPreviewRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
 import { parseBody, sendError } from "../http.js";
 import type { ReaderService } from "../reader/service.js";
 import type { ItemService } from "./items.js";
-import { SourceError, type FeedService } from "./service.js";
+import { OpmlError } from "./opml.js";
+import { checkSelectors, SourceError, type FeedService } from "./service.js";
 
 function handleSourceError(reply: FastifyReply, err: unknown) {
-  if (err instanceof SourceError) return sendError(reply, err.status, err.code, err.message);
+  if (err instanceof SourceError) return sendError(reply, err.status, err.code, err.message, err.fields);
   throw err;
 }
 
@@ -23,6 +24,41 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
     } catch (err) {
       return handleSourceError(reply, err);
     }
+  });
+
+  // ---- OPML (D-073) ----
+  app.get("/api/sources/opml", async (_request, reply) => {
+    const date = new Date().toISOString().slice(0, 10);
+    return reply
+      .header("content-type", "text/x-opml; charset=utf-8")
+      .header("content-disposition", `attachment; filename="forumaggregator-${date}.opml"`)
+      .send(await feeds.exportOpml());
+  });
+
+  app.post("/api/sources/opml", { bodyLimit: 3 * 1024 * 1024 }, async (request, reply) => {
+    const body = parseBody(OpmlImportRequest, request, reply);
+    if (!body) return;
+    try {
+      return await feeds.importOpml(body.opml);
+    } catch (err) {
+      if (err instanceof OpmlError) return sendError(reply, 400, "invalid_opml", err.message);
+      throw err;
+    }
+  });
+
+  // Try reader selectors on one of the source's items before saving them (D-074).
+  app.post<{ Params: { id: string } }>("/api/sources/:id/reader-preview", async (request, reply) => {
+    const body = parseBody(ReaderPreviewRequest, request, reply);
+    if (!body) return;
+    try {
+      checkSelectors(body);
+    } catch (err) {
+      return handleSourceError(reply, err);
+    }
+    const preview = await reader.preview(request.params.id, body);
+    if (!preview) return sendError(reply, 404, "not_found", "Source not found");
+    if ("error" in preview) return sendError(reply, 400, "preview_unavailable", preview.error);
+    return preview;
   });
 
   app.patch<{ Params: { id: string } }>("/api/sources/:id", async (request, reply) => {
@@ -49,16 +85,23 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
   // ---- items ----
   app.get("/api/tags", async () => feeds.listTags());
 
-  app.get<{ Querystring: { filter?: string; sourceId?: string; tag?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
+  app.get<{ Querystring: { filter?: string; order?: string; sourceId?: string; tag?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
     const q = request.query;
     const filter: ItemsFilter = q.filter === "all" || q.filter === "saved" ? q.filter : "unread";
     return items.list({
       filter,
+      order: q.order === "oldest" ? "oldest" : "newest",
       sourceId: q.sourceId || undefined,
       tag: q.tag || undefined,
       cursor: q.cursor || undefined,
       limit: q.limit ? Number(q.limit) : undefined,
     });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/items/:id/comments", async (request, reply) => {
+    const comments = await reader.comments(request.params.id);
+    if (!comments) return sendError(reply, 404, "not_found", "Item not found");
+    return comments;
   });
 
   app.get<{ Params: { id: string } }>("/api/items/:id/reader", async (request, reply) => {

@@ -64,6 +64,11 @@ describe.each(backends)("M1.1 (%s)", (backend) => {
       await call("PATCH", `/api/sources/${gpu.id}`, { tags: ["pc", "news"] });
       expect(await titles("?tag=news")).toEqual(["News 1", "GPU 1"]);
       expect((await call("GET", "/api/items")).json().items[1].tags).toEqual(["news", "pc"]);
+
+      // "Mark all read" with a tag selected only touches that tag's sources.
+      await call("PATCH", `/api/sources/${gpu.id}`, { tags: ["pc"] });
+      expect((await call("POST", "/api/items/mark-read", { tag: "pc" })).json().updated).toBe(1);
+      expect(await titles("")).toEqual(["News 1"]);
     });
   });
 

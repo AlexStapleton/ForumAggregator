@@ -72,10 +72,16 @@ function cleanSummary(...values: unknown[]): string | null {
   return null;
 }
 
-/** Feed HTML worth showing in the reader: more than a teaser (>= 500 characters of text). */
+/** A description counts as full text only above this much text; dedicated content fields always count. */
 const FULL_TEXT_MIN = 500;
-function fullContent(...values: unknown[]): string | null {
-  for (const v of values) {
+/**
+ * The item's HTML body for the reader: a dedicated content field (content:encoded, Atom
+ * <content>) at any length, or a long description. The reader decides whether it's enough.
+ */
+function fullContent(dedicated: unknown, ...descriptions: unknown[]): string | null {
+  const own = text(dedicated);
+  if (own && htmlToText(own)) return own.slice(0, 500_000);
+  for (const v of descriptions) {
     const t = text(v);
     if (t && htmlToText(t).length >= FULL_TEXT_MIN) return t.slice(0, 500_000);
   }

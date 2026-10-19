@@ -48,6 +48,23 @@ export const TotpDisableRequest = z.object({
 });
 export type TotpDisableRequest = z.infer<typeof TotpDisableRequest>;
 
+const selector = z
+  .string()
+  .trim()
+  .max(500, "Keep the selector under 500 characters")
+  .nullable()
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v || null));
+
+/** Preview the reader with selectors that aren't saved yet (D-074). */
+export const ReaderPreviewRequest = z.object({
+  articleSelector: selector,
+  removeSelector: selector,
+  /** Which item to preview; default: the source's newest item with a link. */
+  itemId: z.string().optional(),
+});
+export type ReaderPreviewRequest = z.infer<typeof ReaderPreviewRequest>;
+
 export const AddSourceRequest = z.object({
   /** A feed URL, a website (its feed is discovered), or a YouTube channel URL / @handle. */
   url: z.string().trim().min(1, "Enter a URL").max(2000),
@@ -55,6 +72,22 @@ export const AddSourceRequest = z.object({
   tags: tags.optional(),
 });
 export type AddSourceRequest = z.infer<typeof AddSourceRequest>;
+
+/** A YouTube Data API key (Google keys are 39 characters, starting "AIza"); null removes it. */
+export const YouTubeKeyRequest = z.object({
+  apiKey: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{20,100}$/, "That doesn't look like an API key (Google keys are about 39 characters and start with AIza)")
+    .nullable(),
+});
+export type YouTubeKeyRequest = z.infer<typeof YouTubeKeyRequest>;
+
+/** The text of an OPML file (sent as JSON so the CSRF header rules stay the same). */
+export const OpmlImportRequest = z.object({
+  opml: z.string().min(1, "The file is empty").max(2_000_000, "The file is too large (2 MB at most)"),
+});
+export type OpmlImportRequest = z.infer<typeof OpmlImportRequest>;
 
 export const UpdateSourceRequest = z.object({
   title: z.string().trim().min(1).max(200).optional(),
@@ -65,6 +98,10 @@ export const UpdateSourceRequest = z.object({
   tags: tags.optional(),
   /** null = global default, 0 = keep forever. */
   retentionDays: z.number().int().min(0).max(3650).nullable().optional(),
+  /** Reader: CSS selector for the article on the original page; "" or null = automatic. */
+  articleSelector: selector,
+  /** Reader: CSS selector for elements to remove from the original page; "" or null = none. */
+  removeSelector: selector,
 });
 export type UpdateSourceRequest = z.infer<typeof UpdateSourceRequest>;
 
@@ -76,6 +113,8 @@ export type UpdateItemRequest = z.infer<typeof UpdateItemRequest>;
 
 export const MarkReadRequest = z.object({
   sourceId: z.string().optional(),
+  /** Only sources with this tag (matches the feed's tag filter). */
+  tag: z.string().optional(),
   /** Only items published at or before this time (what the user was looking at). */
   upTo: z.number().int().optional(),
 });

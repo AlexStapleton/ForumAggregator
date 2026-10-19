@@ -133,6 +133,17 @@ const migrations: Record<string, Migration> = {
       await db.schema.alterTable("sources").dropColumn("retention_days").execute();
     },
   },
+  "0004_reader_selectors": {
+    async up(db: Kysely<any>) {
+      // Per-source CSS selectors for the reader (D-074); null = automatic extraction.
+      await db.schema.alterTable("sources").addColumn("article_selector", "text").execute();
+      await db.schema.alterTable("sources").addColumn("remove_selector", "text").execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("sources").dropColumn("remove_selector").execute();
+      await db.schema.alterTable("sources").dropColumn("article_selector").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

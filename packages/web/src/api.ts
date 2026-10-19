@@ -10,7 +10,7 @@ export class ApiRequestError extends Error {
 }
 
 /** Calls the server API. Throws ApiRequestError with the server's message on failure. */
-export async function api<T = unknown>(method: "GET" | "POST" | "PATCH" | "DELETE", url: string, body?: unknown): Promise<T> {
+export async function api<T = unknown>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", url: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== "GET") headers[CSRF_HEADER] = "1";
   if (body !== undefined) headers["content-type"] = "application/json";
