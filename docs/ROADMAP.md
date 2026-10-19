@@ -10,9 +10,9 @@ _Last updated: 2026-10-19 (after first real use)_
 
 | | |
 |---|---|
-| **Usable as a feed reader?** | **Partly.** Running on your Pi; regular RSS works (tested with NPR). **YouTube and Reddit links failed** in your first test. |
-| **Current milestone** | M1.1 built ✅: tags, editing sources, reader view, per-source retention, Reddit/YouTube fixes. Waiting on merge + your retest |
-| **Blocked on** | Merging the branch; your retry of YouTube/Reddit on the Pi |
+| **Usable as a feed reader?** | **Yes, for RSS** (first real install: NPR works). YouTube and Reddit failed in the first test; fixes are in v1.0.0 and await your retest. |
+| **Current milestone** | **v1.0.0 released** (M0 + M1 + M1.1). Next: retest YouTube/Reddit, then M2 forums |
+| **Blocked on** | Your retry of YouTube/Reddit on the Pi; inputs for M2 |
 | **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main` (includes M1) |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
@@ -43,7 +43,7 @@ Goal: open the app on your phone and read new items from real sources.
 - ✅ Sources screen: add, check now, pause/resume, delete, with clear errors
 - ✅ Health view: status, last error, last and next check on each source (part of Sources, D-050)
 - ✅ Tests: 91 automated (SQLite + Postgres) plus a browser run-through on phone and desktop widths
-- ✅ First real-world test (2026-10-19): NPR RSS works on the Pi. ⛔ YouTube and Reddit failed (tracked in M1.1)
+- ✅ First real-world install (2026-10-19): NPR RSS works. ⛔ YouTube and Reddit failed (fixes in M1.1, awaiting retest)
 - 💤 Not in M1: renaming a source in the UI (the API supports it), hiding YouTube Shorts, per-source interval in the UI
 
 **Done when:** you install it, add a few YouTube creators and an Overclock.net board, and
@@ -104,7 +104,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | Merge the branch (or ask me to open the PR) | M1.1 on your Pi |
+| 1 | Update the Pi: `docker compose pull && docker compose up -d` (or pin `alexstapo/forumaggregator:1.0.0`) | Using v1.0 |
 | 2 | Retry `@ImKibitz` and `old.reddit.com/r/overclocking/` on the Pi; send the red message (or `docker logs forumaggregator 2>&1 \| grep "could not add"`) if either still fails | M1.1 sign-off |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |
@@ -114,8 +114,9 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M1.1: tags, edit source, reader view, per-source retention, Reddit/YouTube fixes | branch, unmerged |
-| 2026-10-19 | First real install on the Pi (NPR RSS works; YouTube/Reddit failed) | your Pi |
+| 2026-10-19 | **v1.0.0 released** | tag `v1.0.0` |
+| 2026-10-19 | M1.1: tags, edit source, reader view, per-source retention, Reddit/YouTube fixes | [#4](https://github.com/AlexStapleton/ForumAggregator/pull/4) |
+| 2026-10-19 | First real install (NPR RSS works; YouTube/Reddit failed) | your server |
 | 2026-10-19 | M1: RSS/Atom + YouTube sources, scheduler, feed and sources screens | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
 | 2026-10-11 | ROADMAP.md progress tracker | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
 | 2026-10-11 | Docs default to Docker Hub image `alexstapo/forumaggregator` | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |

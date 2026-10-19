@@ -2,6 +2,12 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 9: v1.0.0 release)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-063 | Release **v1.0.0**: versions bumped to 1.0.0; `CHANGELOG.md` added; CI publishes `1.0.0` / `1.0` / `1` images when a `v*` tag is pushed (`latest` still tracks `main`). Release notes list YouTube/Reddit as awaiting retest and forum pages (M2) as not included | User asked to merge and release v1.0 | Lets the Pi pin a known version; known limitations stated rather than hidden |
+
 ## 2026-10-19 (round 8: tags, editing, reader, retention)
 
 | ID | Decision | Source | Rationale |
