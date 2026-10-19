@@ -11,6 +11,7 @@ export function Field(props: {
   autoComplete?: string;
   inputMode?: "numeric" | "text";
   autoFocus?: boolean;
+  readOnly?: boolean;
 }) {
   // useId: unique even when two forms on a page have a field with the same name.
   const id = `f-${props.name}-${useId().replace(/:/g, "")}`;
@@ -26,6 +27,7 @@ export function Field(props: {
         autoComplete={props.autoComplete}
         inputMode={props.inputMode}
         autoFocus={props.autoFocus}
+        readOnly={props.readOnly}
         aria-invalid={!!props.error}
         aria-describedby={props.error || props.hint ? `${id}-msg` : undefined}
       />

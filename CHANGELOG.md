@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- Follow a forum thread: paste a thread link (e.g. an owners' club) and get one card that says how many new replies there are; opening it shows just those replies. Works through FlareSolverr for sites that need it.
+
 ### Fixed
 - Forum threads through FlareSolverr showed only the feed's first post ("the site still refused the app's follow-up request"): pages that passed Cloudflare's check were mistaken for the check itself. Sites that refuse the app's own requests now go straight to FlareSolverr.
 

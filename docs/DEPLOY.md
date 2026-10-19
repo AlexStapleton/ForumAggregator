@@ -243,6 +243,7 @@ How it behaves:
   FlareSolverr (it still works, just slower and heavier).
 - Opening a forum thread shows its posts (first page). Threads are read again after 30 minutes
   for new replies.
+- To follow one thread for new replies, paste the thread's link in Sources (D-084).
 - Nothing logs in; you see what a guest sees.
 
 ## 8. Backups

@@ -126,14 +126,9 @@ describe.each(backends)("Reddit and forum links in the app (%s)", (backend) => {
     expect(r.html).toContain("A short but real body.");
   });
 
-  it("explains forum thread links without contacting the forum, and reads board RSS directly", async () => {
+  // Thread links are followed since D-084 (thread-follow.test.ts).
+  it("reads board RSS directly", async () => {
     await start();
-    const thread = await call("POST", "/api/sources", { url: "https://www.overclock.net/threads/official-nvidia-rtx-5070-ti-owners-club.1816698/" });
-    expect(thread.statusCode).toBe(400);
-    expect(thread.json()).toMatchObject({ error: "forum_thread" });
-    expect(thread.json().message).toMatch(/https:\/\/www\.overclock\.net\/forums\/-\/index\.rss/);
-    expect(web.requests).toHaveLength(0);
-
     // The board page itself would show a bot check; its RSS is fetched directly instead.
     web.set("https://forum.example/forums/nvidia.12/", { error: new FetchError("pow_challenge", "challenge", 200) });
     web.set("https://forum.example/forums/nvidia.12/index.rss", { body: rss("NVIDIA", [{ guid: "t1", title: "New thread", date: new Date(NOW - 60_000).toISOString() }]) });

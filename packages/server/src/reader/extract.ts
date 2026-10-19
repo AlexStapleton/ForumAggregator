@@ -91,37 +91,79 @@ export function isForumThreadUrl(url: string | null): boolean {
   }
 }
 
-/**
- * XenForo 2 thread page → its posts: author and time above each post's text (quotes, images and
- * links kept), plus a note when the thread has more pages. Null if this isn't a thread page.
- */
-function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
-  const posts = Array.from(doc.querySelectorAll("article.message")).filter((p) => p.querySelector(".bbWrapper"));
-  if (!posts.length) return null;
-  const parts: string[] = [];
-  let firstAuthor: string | null = null;
-  for (const post of posts.slice(0, MAX_THREAD_POSTS)) {
+export interface ForumPost {
+  /** The forum's post ID, e.g. "123456". */
+  id: string | null;
+  author: string | null;
+  /** ISO time from the page, and how the page shows it ("Today at 8:00 AM"). */
+  datetime: string | null;
+  timeLabel: string | null;
+  /** When it was posted (ms), from XenForo's data-time or the ISO time. */
+  postedAt: number | null;
+  /** Sanitised post body. */
+  html: string;
+}
+
+export interface ForumThreadPage {
+  title: string | null;
+  posts: ForumPost[];
+  page: number;
+  pages: number;
+}
+
+const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** XenForo 2 thread page → its posts (author, time, body), or null if it isn't one. */
+export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPage | null {
+  const articles = Array.from(doc.querySelectorAll("article.message")).filter((p) => p.querySelector(".bbWrapper"));
+  if (!articles.length) return null;
+  const posts: ForumPost[] = articles.map((post) => {
     const author = post.getAttribute("data-author") ?? post.querySelector(".message-name, .username")?.textContent?.trim() ?? null;
-    firstAuthor ??= author;
     const time = post.querySelector("time.u-dt, time[datetime]");
     const body = post.querySelector(".message-body .bbWrapper, .bbWrapper")!;
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
-    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    const head = [
-      author ? `<strong>${esc(author)}</strong>` : "",
-      time ? `<time datetime="${esc(time.getAttribute("datetime") ?? "")}">${esc(time.textContent?.trim() ?? "")}</time>` : "",
-    ].filter(Boolean).join(" · ");
-    parts.push(`<section><p>${head}</p>${body.innerHTML}</section><hr>`);
-  }
+    const idSource = post.getAttribute("data-content") ?? post.id ?? "";
+    const unix = Number(time?.getAttribute("data-time"));
+    const iso = Date.parse((time?.getAttribute("datetime") ?? "").replace(/([+-]\d\d)(\d\d)$/, "$1:$2"));
+    return {
+      postedAt: unix > 0 ? unix * 1000 : Number.isFinite(iso) ? iso : null,
+      id: /(\d+)$/.exec(idSource)?.[1] ?? null,
+      author,
+      datetime: time?.getAttribute("datetime") ?? null,
+      timeLabel: time?.textContent?.trim() || null,
+      html: sanitizeHtml(body.innerHTML, pageUrl),
+    };
+  });
   // Page count from the page navigation ("1 2 3 … 40").
   const pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
-  const current = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
-  if (pages > 1) parts.push(`<p><em>Page ${current} of ${pages}. Open the original for the rest of the thread.</em></p>`);
-  const html = sanitizeHtml(parts.join("\n"), pageUrl);
+  const page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
+  const title = doc.querySelector("h1.p-title-value")?.textContent?.trim() || doc.title || null;
+  return { title, posts, page, pages };
+}
+
+/** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */
+export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html">>): string {
+  return posts
+    .map((p) => {
+      const head = [
+        p.author ? `<strong>${escHtml(p.author)}</strong>` : "",
+        p.timeLabel ? `<time datetime="${escHtml(p.datetime ?? "")}">${escHtml(p.timeLabel)}</time>` : "",
+      ].filter(Boolean).join(" · ");
+      return `<section><p>${head}</p>${p.html}</section><hr>`;
+    })
+    .join("\n");
+}
+
+/** A thread page for the reader: up to 50 posts, plus a note when there are more pages (D-081). */
+function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
+  const thread = parseForumThread(doc, pageUrl);
+  if (!thread) return null;
+  let html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
+  if (thread.pages > 1) html += `\n<p><em>Page ${thread.page} of ${thread.pages}. Open the original for the rest of the thread.</em></p>`;
   const textLength = htmlToText(html).length;
-  if (!textLength) return null;
-  return { html, title: doc.querySelector("h1.p-title-value")?.textContent?.trim() || doc.title || null, byline: firstAuthor, textLength };
+  if (!thread.posts.some((p) => htmlToText(p.html).length)) return null;
+  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength };
 }
 
 const validator = new JSDOM("<!doctype html><p></p>").window.document;

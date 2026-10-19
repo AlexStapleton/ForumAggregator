@@ -4,4 +4,5 @@ export const KIND_LABEL: Record<SourceKind, string> = {
   feed: "Feed",
   youtube: "YouTube",
   reddit: "Reddit",
+  thread: "Thread",
 };

@@ -55,7 +55,8 @@ export interface VersionInfo {
 
 // ---- Sources and feed items (M1) -------------------------------------------------------
 
-export type SourceKind = "feed" | "youtube" | "reddit";
+/** "thread": one forum thread followed for new replies (D-084). */
+export type SourceKind = "feed" | "youtube" | "reddit" | "thread";
 
 /**
  * ok          last check succeeded

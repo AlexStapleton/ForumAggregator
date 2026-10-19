@@ -33,7 +33,7 @@ export interface SettingsTable {
 
 export interface SourcesTable {
   id: string;
-  kind: "feed" | "youtube" | "reddit";
+  kind: "feed" | "youtube" | "reddit" | "thread";
   title: string;
   site_url: string | null;
   feed_url: string;
@@ -52,11 +52,28 @@ export interface SourcesTable {
   remove_selector: Generated<string | null>;
   /** 1 = fetched through the user's FlareSolverr (D-080). */
   via_flaresolverr: Generated<number>;
+  /** Thread sources: posts fetched at or after this time are "new" on the thread's card (D-084). */
+  thread_batch_from: Generated<number | null>;
   /** HTTP validators for conditional requests (304 Not Modified). */
   etag: string | null;
   last_modified: string | null;
   created_at: number;
   updated_at: number;
+}
+
+/** Posts of followed threads (D-084), newest kept per thread. */
+export interface ThreadPostsTable {
+  source_id: string;
+  /** The forum's post ID (numeric in XenForo). */
+  post_id: string;
+  author: string | null;
+  /** When the post was written (ms), if the page said. */
+  posted_at: number | null;
+  /** As the page shows it, e.g. "Today at 8:00 AM". */
+  posted_label: string | null;
+  /** Sanitised. */
+  html: string;
+  fetched_at: number;
 }
 
 export interface ItemsTable {
@@ -105,6 +122,7 @@ export interface Database {
   sessions: SessionsTable;
   settings: SettingsTable;
   sources: SourcesTable;
+  thread_posts: ThreadPostsTable;
   items: ItemsTable;
   source_tags: SourceTagsTable;
   item_content: ItemContentTable;
