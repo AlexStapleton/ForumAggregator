@@ -239,3 +239,12 @@ body.reader-open { overflow: hidden; }
   .reader-nav { gap: 0.35rem; padding-left: 0.5rem; padding-right: 0.5rem; }
   .reader-nav > * { font-size: 0.9rem; }
 }
+
+/* ---- Comments (Reddit) ---- */
+.comments { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.comments-title { font-size: 1.1rem; }
+.comment-list { list-style: none; padding: 0; margin: 0.5rem 0 1rem; }
+.comment { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.comment-body { font-size: 0.98rem; }
+.comment-body p { margin: 0.3rem 0; }
+.reddit-link { font-size: 0.9rem; color: var(--muted); }

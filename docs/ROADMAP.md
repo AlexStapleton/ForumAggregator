@@ -10,10 +10,10 @@ _Last updated: 2026-10-19 (after first real use)_
 
 | | |
 |---|---|
-| **Usable as a feed reader?** | **Yes, for RSS** (first real install: NPR works). YouTube and Reddit failed in the first test; fixes are in v1.0.0 and await your retest. |
-| **Current milestone** | **v1.0.0 released** (M0 + M1 + M1.1). Next: retest YouTube/Reddit, then M2 forums |
-| **Blocked on** | Your retry of YouTube/Reddit on the Pi; inputs for M2 |
-| **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main` (includes M1) |
+| **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
+| **Current release** | **v1.0.0** (2026-10-19), images `alexstapo/forumaggregator:1.0.0` |
+| **Current milestone** | M1.2: Reddit reader fixes + comments (built), then wide-screen layout, timeline view, FreshRSS comparison (requested 2026-10-19) |
+| **Blocked on** | Decisions on the layout/timeline/YouTube-comments questions; M2 inputs |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
 
@@ -59,6 +59,15 @@ Goal: YouTube and Reddit work, sources can be organised and edited, and articles
 - ✅ **Retention per source** ("keep items for"; saved items never deleted; removed items not re-added) (D-055)
 - ✅ Tests: 122 automated (SQLite + Postgres) and a browser run-through (phone + desktop) covering every flow above
 - 💤 Not yet: per-item tags, hiding YouTube Shorts, a global retention/interval setting in the UI (it's in `config.yaml`)
+
+### M1.2: Feedback after v1.0.0 🔄 *(2026-10-19)*
+- ✅ Reddit in the reader: post body from the feed, no page fetches, footer clutter removed, link posts show the article (D-064)
+- ✅ Reddit comments in the reader, on demand (D-065); Reddit requests ≥ 10 s apart (D-066)
+- ✅ Forum thread links explained; board links read the board RSS directly (D-068)
+- ⏳ **Wide-screen layout:** list on the left, reader on the right, configurable, with the current full-screen reader kept as an option
+- ⏳ **Timeline view:** sort/group by publish date
+- ⏳ **Compare with FreshRSS** (how it pulls content from sites) and adopt what fits
+- ⛔ **YouTube top comments**: YouTube has no comments feed; needs a YouTube Data API key (your decision)
 
 ### M2: Forums 💤 *(needs your input first)*
 Goal: follow forum boards and threads, including members-only content.
@@ -114,6 +123,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
+| 2026-10-19 | Reddit reader fixes, Reddit comments, forum link handling | branch, unmerged |
+| 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |
 | 2026-10-19 | **v1.0.0 released** | tag `v1.0.0` |
 | 2026-10-19 | M1.1: tags, edit source, reader view, per-source retention, Reddit/YouTube fixes | [#4](https://github.com/AlexStapleton/ForumAggregator/pull/4) |
 | 2026-10-19 | First real install (NPR RSS works; YouTube/Reddit failed) | your server |

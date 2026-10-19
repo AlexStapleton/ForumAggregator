@@ -9,7 +9,7 @@ import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { nextCheck } from "./schedule.js";
-import { planReddit } from "./reddit.js";
+import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 
 type SourceRow = Selectable<SourcesTable>;
@@ -199,6 +199,28 @@ export class FeedService {
       return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl, parsed: this.parse(res.body, reddit.feedUrl) };
     }
 
+    // XenForo threads (…/threads/name.123/) never have a feed; say so without contacting the site.
+    if (/^\/threads\/[^/]+\.\d+(\/|$)/.test(url.pathname)) {
+      throw new SourceError(
+        "forum_thread",
+        `This is a forum thread. Forum threads don't have RSS feeds, so they can't be followed yet. Following threads directly is planned (roadmap M2). For now, follow the board the thread is in: open that board on ${url.hostname} and paste its address here, or add the whole forum's feed: ${url.origin}/forums/-/index.rss`,
+      );
+    }
+
+    // XenForo boards (…/forums/name.12/) have their feed at …/index.rss. Try it first: it's one
+    // request, and some forums answer feeds even when their pages show a bot check.
+    const board = /^(\/forums\/[^/]+\.\d+)\/?$/.exec(url.pathname);
+    if (board) {
+      const feedUrl = `${url.origin}${board[1]}/index.rss`;
+      try {
+        const feedRes = await this.fetchInteractive(feedUrl, "feed");
+        if (looksLikeFeed(feedRes.body)) return { kind: "feed", feedUrl, siteUrl: url.href, parsed: this.parse(feedRes.body, feedUrl) };
+      } catch (err) {
+        if (!(err instanceof SourceError)) throw err;
+        // fall through to reading the page itself
+      }
+    }
+
     const res = await this.fetchInteractive(url.href, "feed");
     if (looksLikeFeed(res.body)) {
       const parsed = this.parse(res.body, url.href);
@@ -334,7 +356,7 @@ export class FeedService {
    */
   private async ingest(sourceId: string, parsed: ParsedFeed, firstFetch: boolean): Promise<number> {
     const now = this.now();
-    const source = await this.db.kysely.selectFrom("sources").select("retention_days").where("id", "=", sourceId).executeTakeFirst();
+    const source = await this.db.kysely.selectFrom("sources").select(["retention_days", "kind"]).where("id", "=", sourceId).executeTakeFirst();
     const keepDays = source ? this.retentionDays(source) : 0;
     const cutoff = keepDays > 0 ? now - keepDays * 24 * 3_600_000 : -Infinity;
 
@@ -351,7 +373,7 @@ export class FeedService {
           url: it.url,
           title: it.title,
           author: it.author,
-          summary: it.summary,
+          summary: source?.kind === "reddit" ? cleanRedditSummary(it.summary) : it.summary,
           image_url: it.imageUrl,
           published_at: published,
           fetched_at: now,

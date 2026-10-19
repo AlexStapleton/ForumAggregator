@@ -2,6 +2,16 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 10: after v1.0.0, first feedback)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-064 | **Reddit in the reader uses the feed's post body (any length) and never fetches Reddit pages.** The "submitted by … [link] [comments]" footer is removed from summaries and bodies; for link posts, the linked article is kept as "Linked: host". Old items without a stored body show the summary and "open the original" | User saw "needs JavaScript" in the reader and Reddit rate limits | Reddit pages need JavaScript and each fetch spends Reddit's small request allowance |
+| D-065 | **Reddit comments in the reader**, from the post's public comments feed (`…/comments/<id>/.rss`): up to 30, loaded only when "Show comments" is tapped, cached 15 min (failures 1 min), sanitised like articles | User request | On demand, so reading posts costs no extra Reddit requests |
+| D-066 | **Per-host minimum spacing:** Reddit hosts get ≥ 10 s between requests (scheduled and interactive alike); others keep 5 s + jitter | User hit Reddit's request limit | About 6 requests a minute stays under Reddit's allowance for unregistered clients |
+| D-067 | Feeds' dedicated content fields (`content:encoded`, Atom `<content>`) are kept at any length; the reader treats a short body as a teaser for non-Reddit sources (tries the page, and falls back to the short body before the one-line summary) | Claude | Needed for D-064 without making other feeds worse |
+| D-068 | **Forum links:** a XenForo thread link (`/threads/name.123/`) is explained without contacting the site (threads have no RSS; following threads is M2; suggests the board or the forum-wide feed). A board link (`/forums/name.12/`) tries the board's `index.rss` first | User's Overclock.net thread link failed | Clear next step; board RSS works even where the board page shows a bot check |
+
 ## 2026-10-19 (round 9: v1.0.0 release)
 
 | ID | Decision | Source | Rationale |

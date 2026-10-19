@@ -159,3 +159,21 @@ export const MAX_TAGS = 12;
 
 /** Choices offered for "keep items for" (days; 0 = forever). */
 export const RETENTION_CHOICES = [0, 7, 30, 90, 365] as const;
+
+export interface ReaderComment {
+  author: string | null;
+  /** Sanitised HTML. */
+  html: string;
+  publishedAt: number | null;
+  url: string | null;
+}
+
+export interface ReaderComments {
+  /** False when this kind of item has no comments the app can show. */
+  available: boolean;
+  comments: ReaderComment[];
+  /** Why comments couldn't be loaded, if they couldn't. */
+  notice: string | null;
+  /** Where to read the full discussion. */
+  discussionUrl: string | null;
+}

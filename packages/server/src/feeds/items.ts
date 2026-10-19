@@ -1,6 +1,7 @@
 // The feed: listing items newest first, and read/saved state.
 import type { FeedItem, ItemsFilter, ItemsPage, MarkReadRequest, UpdateItemRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
+import { cleanRedditSummary } from "./reddit.js";
 
 const MAX_LIMIT = 100;
 
@@ -73,7 +74,8 @@ export class ItemService {
       url: r.url,
       title: r.title,
       author: r.author,
-      summary: r.summary,
+      // Items stored before the clean-up existed still carry Reddit's footer.
+      summary: r.source_kind === "reddit" ? cleanRedditSummary(r.summary) : r.summary,
       imageUrl: r.image_url,
       publishedAt: r.published_at,
       read: r.read === 1,

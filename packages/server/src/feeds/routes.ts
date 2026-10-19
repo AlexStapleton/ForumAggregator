@@ -61,6 +61,12 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
     });
   });
 
+  app.get<{ Params: { id: string } }>("/api/items/:id/comments", async (request, reply) => {
+    const comments = await reader.comments(request.params.id);
+    if (!comments) return sendError(reply, 404, "not_found", "Item not found");
+    return comments;
+  });
+
   app.get<{ Params: { id: string } }>("/api/items/:id/reader", async (request, reply) => {
     const content = await reader.get(request.params.id);
     if (!content) return sendError(reply, 404, "not_found", "Item not found");

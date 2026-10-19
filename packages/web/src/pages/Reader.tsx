@@ -1,7 +1,7 @@
 // Full-screen reader: one item at a time, in the feed's current order.
 // Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc or Back closes.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeedItem, ReaderContent } from "@fa/shared";
+import type { FeedItem, ReaderComments, ReaderContent } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { fullDate, relativeTime } from "../time";
@@ -176,9 +176,11 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
           {content?.notice && (
             <div className="alert alert-info">
-              {content.notice} {item.url && "Use “Open original” to read it on the site."}
+              {content.notice} {item.url && !/original/i.test(content.notice) && "Use “Open original” to read it on the site."}
             </div>
           )}
+
+          {item.sourceKind === "reddit" && <Comments key={item.id} itemId={item.id} />}
         </article>
       </div>
 
@@ -199,5 +201,57 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
         </button>
       </footer>
     </div>
+  );
+}
+
+/** Reddit comments, loaded only when asked (each load is a request against Reddit's limit). */
+function Comments({ itemId }: { itemId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "done">("idle");
+  const [data, setData] = useState<ReaderComments>();
+  const [error, setError] = useState<string>();
+
+  const load = async () => {
+    setState("loading");
+    setError(undefined);
+    try {
+      setData(await api<ReaderComments>("GET", `/api/items/${itemId}/comments`));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setState("done");
+    }
+  };
+
+  return (
+    <section className="comments" aria-label="Comments">
+      <h2 className="comments-title">Comments</h2>
+      {state === "idle" && (
+        <button className="secondary" onClick={() => void load()}>
+          Show comments
+        </button>
+      )}
+      {state === "loading" && <p className="muted">Loading comments…</p>}
+      {error && <div className="alert alert-error">{error}</div>}
+      {data?.notice && <p className="muted">{data.notice}</p>}
+      {data && data.comments.length > 0 && (
+        <ol className="comment-list">
+          {data.comments.map((c, i) => (
+            <li key={c.url ?? i} className="comment">
+              <div className="item-meta">
+                <strong>{c.author ?? "someone"}</strong>
+                {c.publishedAt && <time title={fullDate(c.publishedAt)}>· {relativeTime(c.publishedAt)}</time>}
+              </div>
+              {/* Sanitised on the server, like the article. */}
+              <div className="reader-content comment-body" dangerouslySetInnerHTML={{ __html: c.html }} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {data?.discussionUrl && state === "done" && (
+        <a href={data.discussionUrl} target="_blank" rel="noopener noreferrer" className="small">
+          Full discussion on Reddit ↗
+        </a>
+      )}
+    </section>
   );
 }

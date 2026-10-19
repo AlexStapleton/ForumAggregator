@@ -4,6 +4,17 @@ All notable changes to ForumAggregator. Versions follow [Semantic Versioning](ht
 Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/forumaggregator:<version>`
 (amd64 + arm64).
 
+## [Unreleased]
+
+### Added
+- Reddit comments in the reader ("Show comments"; loaded on request, cached).
+- Forum board links (`…/forums/name.12/`) use the board's RSS directly, even when the board page shows a bot check.
+
+### Changed
+- Reddit posts in the reader come from the feed and never fetch Reddit's pages (no more "needs JavaScript"); the "submitted by … [link] [comments]" clutter is removed; link posts show the linked article.
+- Reddit requests are spaced at least 10 s apart to stay under Reddit's limit.
+- Forum thread links explain why they can't be followed yet and what to add instead.
+
 ## [1.0.0] - 2026-10-19
 
 First release: a self-hosted, single-user feed reader for RSS/Atom feeds, YouTube channels and

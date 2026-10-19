@@ -139,6 +139,16 @@ export const httpFetch: Fetcher = async (url, options) => {
  * Spaces out requests to the same host (DESIGN §7): at least `minDelayMs` plus random jitter
  * between two requests, across the scheduler and manual refreshes alike.
  */
+/**
+ * Sites that need more space than the default between requests, whatever triggered them.
+ * Reddit allows unregistered clients only a few requests a minute.
+ */
+export const HOST_MIN_DELAY_MS: Record<string, number> = {
+  "www.reddit.com": 10_000,
+  "reddit.com": 10_000,
+  "old.reddit.com": 10_000,
+};
+
 export class HostLimiter {
   private nextAllowed = new Map<string, number>();
 
@@ -147,12 +157,16 @@ export class HostLimiter {
     private readonly jitterMs: number,
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
     private readonly now: () => number = Date.now,
+    private readonly hostMinDelayMs: Record<string, number> = HOST_MIN_DELAY_MS,
   ) {}
 
-  /** Waits for this host's turn. `minDelayMs` can be lowered for interactive actions. */
+  /**
+   * Waits for this host's turn. `minDelayMs` can be lowered for interactive actions, but never
+   * below a host's own minimum (HOST_MIN_DELAY_MS).
+   */
   async wait(url: string, override?: { minDelayMs: number; jitterMs: number }): Promise<void> {
     const host = new URL(url).host;
-    const delay = override?.minDelayMs ?? this.minDelayMs;
+    const delay = Math.max(override?.minDelayMs ?? this.minDelayMs, this.hostMinDelayMs[host] ?? 0);
     const jitter = override?.jitterMs ?? this.jitterMs;
     const now = this.now();
     const allowedAt = Math.max(now, this.nextAllowed.get(host) ?? 0);
