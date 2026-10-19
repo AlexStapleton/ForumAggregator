@@ -4,16 +4,16 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-10-19_
+_Last updated: 2026-10-19 (after first real use)_
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Usable as a feed reader?** | **Yes, for RSS/Atom feeds and YouTube channels** (M1, on branch `claude/gifted-gauss-3lnq4v` until merged). Forums aren't readable directly yet. |
-| **Current milestone** | M1 built ✅, waiting on your real-world test. Next: M2 forums |
-| **Blocked on** | Merging the branch; your test on the server/Pi; inputs for M2 (see "Waiting on you") |
-| **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main`. M1 lands in it once merged |
+| **Usable as a feed reader?** | **Partly.** Running on your Pi; regular RSS works (tested with NPR). **YouTube and Reddit links failed** in your first test. |
+| **Current milestone** | M1.1: fix YouTube/Reddit, plus tags, editing sources and a reader view (requested 2026-10-19) |
+| **Blocked on** | The error messages from the YouTube/Reddit attempts; your answers on the M1.1 questions |
+| **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main` (includes M1) |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
 
@@ -33,7 +33,7 @@ Goal: a secure app you can install in one command.
 - ✅ `check-sites` diagnostic for forum access
 - ⛔ Tested on a real Raspberry Pi: *waiting on you* (can't be emulated in the build environment)
 
-### M1: First usable reader ✅ *(built 2026-10-19, awaiting your test)*
+### M1: First usable reader ✅ *(built and merged 2026-10-19)*
 Goal: open the app on your phone and read new items from real sources.
 - ✅ Data model: sources and items with read/saved state (DESIGN §3)
 - ✅ Polite scheduler: per-site spacing, ETag/304, ±10 % jitter, backoff, pause after 5 failures, bot checks never worked around (DESIGN §7, §9)
@@ -43,11 +43,20 @@ Goal: open the app on your phone and read new items from real sources.
 - ✅ Sources screen: add, check now, pause/resume, delete, with clear errors
 - ✅ Health view: status, last error, last and next check on each source (part of Sources, D-050)
 - ✅ Tests: 91 automated (SQLite + Postgres) plus a browser run-through on phone and desktop widths
-- ⏳ **Your real-world test**: YouTube creators and an Overclock.net board RSS on your server (I can't fetch those from the build environment, D-045)
+- ✅ First real-world test (2026-10-19): NPR RSS works on the Pi. ⛔ YouTube and Reddit failed (tracked in M1.1)
 - 💤 Not in M1: renaming a source in the UI (the API supports it), hiding YouTube Shorts, per-source interval in the UI
 
 **Done when:** you install it, add a few YouTube creators and an Overclock.net board, and
 new items appear on your phone.
+
+### M1.1: Fixes and reading features ⏳ *(requested 2026-10-19)*
+Goal: YouTube and Reddit work, sources can be organised and edited, and articles can be read inside the app.
+- ⛔ **Fix: YouTube links don't add**, waiting on the error message shown
+- ⛔ **Fix: Reddit links don't add**, waiting on the error message shown. Likely fix: turn subreddit links into their `.rss` feed automatically
+- ⏳ **Tags on sources**, shown on every item, with a filter by tag. Editing tags applies to existing items too
+- ⏳ **Edit a source**: name, tags, address (re-checked when changed), check interval
+- ⏳ **Reader view**: open an item inside the app (article text, or the video for YouTube), then go to the next/previous item with buttons, a swipe on the phone or the keyboard
+- ⛔ Design questions for these (see "Waiting on you")
 
 ### M2: Forums 💤 *(needs your input first)*
 Goal: follow forum boards and threads, including members-only content.
@@ -93,9 +102,9 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | Merge (or ask me to open a PR for) branch `claude/gifted-gauss-3lnq4v` | M1 in the Docker image |
-| 2 | Try M1: add a few YouTube creators and an Overclock.net board RSS; tell me what breaks | M1 sign-off |
-| 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output (server and Pi) | M2, Pi test |
+| 1 | The exact error text shown when adding the YouTube and Reddit links, and the links you pasted | M1.1 fixes |
+| 2 | Answers to the M1.1 design questions (tags, editing, reader) | M1.1 features |
+| 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |
 | 5 | Email notifications as a forum fallback: yes or no | M2 |
 
@@ -103,10 +112,11 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | M1: RSS/Atom + YouTube sources, scheduler, feed and sources screens | branch, unmerged |
-| 2026-10-11 | ROADMAP.md progress tracker | branch, unmerged |
-| 2026-10-11 | Docs default to Docker Hub image `alexstapo/forumaggregator` | branch, unmerged |
-| 2026-10-11 | Zero-config install (docker run / compose), generated key, auto permissions | branch, unmerged |
+| 2026-10-19 | First real install on the Pi (NPR RSS works; YouTube/Reddit failed) | your Pi |
+| 2026-10-19 | M1: RSS/Atom + YouTube sources, scheduler, feed and sources screens | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
+| 2026-10-11 | ROADMAP.md progress tracker | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
+| 2026-10-11 | Docs default to Docker Hub image `alexstapo/forumaggregator` | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
+| 2026-10-11 | Zero-config install (docker run / compose), generated key, auto permissions | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
 | 2026-10-11 | Site-access findings, `check-sites` tool, manual CI trigger | [#2](https://github.com/AlexStapleton/ForumAggregator/pull/2) |
 | 2026-10-11 | CI publishes to Docker Hub (after secrets were added) | `main` |
 | 2026-10-10 | M0 foundation: app, login, Docker, CI | [#1](https://github.com/AlexStapleton/ForumAggregator/pull/1) |
