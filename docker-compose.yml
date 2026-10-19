@@ -1,16 +1,26 @@
-# Usage:
-#   cp .env.example .env   # then set FA_SECRET_KEY
-#   mkdir -p data && sudo chown 1000:1000 data
-#   docker compose up -d && docker compose logs forumaggregator   # shows the first-run setup code
+# ForumAggregator: zero-configuration install.
+#
+#   curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/main/docker-compose.yml
+#   docker compose up -d
+#   docker compose logs forumaggregator      # shows the first-run setup code
+#
+# Then open http://<server-ip>:8080. No .env file, folders or keys needed: the encryption key
+# is generated on first start and stored with the data.
 services:
   forumaggregator:
-    image: ghcr.io/alexstapleton/forumaggregator:latest
-    build: .
+    image: alexstapo/forumaggregator:latest   # or ghcr.io/alexstapleton/forumaggregator:latest
     container_name: forumaggregator
     restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./data:/data
     ports:
-      # Remove this if Nginx Proxy Manager reaches the container over a shared Docker network.
-      - "8080:8080"
+      - "8080:8080"           # change the left side to use another port on the host
+    volumes:
+      - forumaggregator-data:/data   # or a host folder, e.g. ./data:/data (ownership is fixed automatically)
+    # Everything below is optional. See docs/DEPLOY.md for the full list.
+    # environment:
+    #   PUID: 1000            # user/group the app runs as
+    #   PGID: 1000
+    #   DATABASE_URL: postgres://...   # use Postgres instead of SQLite (see docker-compose.postgres.yml)
+
+volumes:
+  forumaggregator-data:
+    name: forumaggregator-data   # fixed name, so backups and `docker run` find it

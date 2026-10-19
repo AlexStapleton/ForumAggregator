@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"/>
+ <id>yt:channel:abcdefghijklmnopqrstuv</id>
+ <yt:channelId>abcdefghijklmnopqrstuv</yt:channelId>
+ <title>Example Creator</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv"/>
+ <author><name>Example Creator</name><uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri></author>
+ <published>2015-01-01T00:00:00+00:00</published>
+ <entry>
+  <id>yt:video:vid00000001</id>
+  <yt:videoId>vid00000001</yt:videoId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>Building a pepper grow tent</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=vid00000001"/>
+  <author><name>Example Creator</name><uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri></author>
+  <published>2026-10-10T15:00:00+00:00</published>
+  <updated>2026-10-10T16:00:00+00:00</updated>
+  <media:group>
+   <media:title>Building a pepper grow tent</media:title>
+   <media:content url="https://www.youtube.com/v/vid00000001?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/vid00000001/hqdefault.jpg" width="480" height="360"/>
+   <media:description>In this video we build a tent.
+Links below.</media:description>
+  </media:group>
+ </entry>
+</feed>

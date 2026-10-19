@@ -15,8 +15,8 @@ describe("loadEnv", () => {
     expect(env.configFile).toBe(path.join("/data", "config.yaml"));
   });
 
-  it("requires a long secret key", () => {
-    expect(() => loadEnv({})).toThrow(/FA_SECRET_KEY/);
+  it("makes the secret key optional but rejects a short one", () => {
+    expect(loadEnv({}).FA_SECRET_KEY).toBeUndefined();
     expect(() => loadEnv({ FA_SECRET_KEY: "short" })).toThrow(/at least 32/);
   });
 

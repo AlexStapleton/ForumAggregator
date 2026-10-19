@@ -74,8 +74,8 @@ still need A, B or C.
 
 1. **Site check output** from your server:
    ```bash
-   docker compose pull && docker compose up -d
-   docker compose exec forumaggregator node packages/server/dist/tools/check-sites.js
+   docker compose pull && docker compose up -d   # or re-run the docker run command
+   docker exec forumaggregator node packages/server/dist/tools/check-sites.js
    ```
    (Or pass specific board URLs as arguments.) It makes at most 3 requests per site, 5 s
    apart, skips anything robots.txt disallows, and never touches login pages.

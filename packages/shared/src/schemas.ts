@@ -42,3 +42,30 @@ export const TotpDisableRequest = z.object({
   code: totpCode,
 });
 export type TotpDisableRequest = z.infer<typeof TotpDisableRequest>;
+
+export const AddSourceRequest = z.object({
+  /** A feed URL, a website (its feed is discovered), or a YouTube channel URL / @handle. */
+  url: z.string().trim().min(1, "Enter a URL").max(2000),
+  title: z.string().trim().max(200).optional(),
+});
+export type AddSourceRequest = z.infer<typeof AddSourceRequest>;
+
+export const UpdateSourceRequest = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  enabled: z.boolean().optional(),
+  pollIntervalMinutes: z.number().int().min(5).max(7 * 24 * 60).nullable().optional(),
+});
+export type UpdateSourceRequest = z.infer<typeof UpdateSourceRequest>;
+
+export const UpdateItemRequest = z.object({
+  read: z.boolean().optional(),
+  saved: z.boolean().optional(),
+});
+export type UpdateItemRequest = z.infer<typeof UpdateItemRequest>;
+
+export const MarkReadRequest = z.object({
+  sourceId: z.string().optional(),
+  /** Only items published at or before this time (what the user was looking at). */
+  upTo: z.number().int().optional(),
+});
+export type MarkReadRequest = z.infer<typeof MarkReadRequest>;

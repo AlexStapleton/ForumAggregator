@@ -15,17 +15,32 @@ import type { Db } from "./db/index.js";
 import { splitList, type Env } from "./env.js";
 import { sendError } from "./http.js";
 import { VERSION } from "./version.js";
+import { HostLimiter, httpFetch, type Fetcher } from "./feeds/fetch.js";
+import { ItemService } from "./feeds/items.js";
+import { Poller } from "./feeds/poller.js";
+import { registerFeedRoutes } from "./feeds/routes.js";
+import { FeedService } from "./feeds/service.js";
 
 export interface AppDeps {
   env: Env;
+  /** Resolved by resolveSecretKey(): FA_SECRET_KEY or the key file in DATA_DIR. */
+  secretKey: string;
   config: AppConfig;
   db: Db;
   now?: () => number;
+  /** HTTP client for sources; tests pass a fake. */
+  fetcher?: Fetcher;
+  /** Host spacing; tests pass a no-wait limiter. */
+  limiter?: HostLimiter;
 }
 
 export interface App {
   fastify: FastifyInstance;
   auth: AuthService;
+  feeds: FeedService;
+  items: ItemService;
+  /** Not started by buildApp; index.ts starts it after the server is listening. */
+  poller: Poller;
 }
 
 function trustProxySetting(value: string): boolean | string[] {
@@ -34,7 +49,7 @@ function trustProxySetting(value: string): boolean | string[] {
   return splitList(value);
 }
 
-export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> {
+export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter }: AppDeps): Promise<App> {
   const fastify = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -44,7 +59,7 @@ export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> 
     bodyLimit: 256 * 1024,
   });
 
-  const box = createSecretBox(env.FA_SECRET_KEY);
+  const box = createSecretBox(secretKey);
   const auth = new AuthService(db, box, env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000, now);
 
   await fastify.register(helmet, {
@@ -56,7 +71,8 @@ export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> 
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'"],
-        imgSrc: ["'self'", "data:"],
+        // Feed images (e.g. YouTube thumbnails). Only http(s) URLs are ever stored (feeds/text.ts).
+        imgSrc: ["'self'", "data:", "https:"],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
@@ -80,6 +96,18 @@ export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> 
   });
 
   registerAuth(fastify, env, auth);
+
+  const feeds = new FeedService(
+    db,
+    config,
+    fetcher ?? httpFetch,
+    limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000),
+    now,
+    fastify.log,
+  );
+  const items = new ItemService(db, now);
+  const poller = new Poller(feeds, fastify.log);
+  registerFeedRoutes(fastify, feeds, items);
 
   fastify.get("/healthz", async (_request, reply) => {
     try {
@@ -109,7 +137,7 @@ export async function buildApp({ env, config, db, now }: AppDeps): Promise<App> 
     return sendError(reply, status, status >= 500 ? "internal" : "bad_request", status >= 500 ? "Something went wrong" : err.message);
   });
 
-  return { fastify, auth };
+  return { fastify, auth, feeds, items, poller };
 }
 
 async function registerWebUi(fastify: FastifyInstance, env: Env): Promise<void> {

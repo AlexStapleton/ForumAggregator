@@ -4,25 +4,38 @@ A self-hosted personal news feed. It follows the forum boards and threads, subre
 YouTube creators you choose, logs in to forums as you, filters by keywords, and lets you
 read everything in one place on desktop or phone.
 
-**Status: milestone M0 done.** The app runs in Docker with its own secure login (password +
-optional authenticator-app 2FA) behind a reverse proxy. Reading forums (M1) is waiting on a
-decision about how to read each site: see [Site access](docs/SITE-ACCESS.md).
+**Status: usable for RSS/Atom feeds and YouTube channels (M1).** Add YouTube creators, blogs,
+news sites or forum board RSS feeds on the Sources page and read them in one feed:
+unread / all / saved, newest first, on desktop or phone. Reading forum pages and threads
+directly is next (M2). Subreddit RSS may work but is untested. See the [roadmap](docs/ROADMAP.md).
 
-- [Design](docs/DESIGN.md): requirements, architecture, milestones
+- [Roadmap and progress](docs/ROADMAP.md): what's done, what's next, what's blocked
+- [Design](docs/DESIGN.md): requirements, architecture, how each part works
 - [Decision log](docs/DECISIONS.md): what was decided and why, plus open questions
 - [Deployment](docs/DEPLOY.md): Docker, Nginx Proxy Manager, first-run setup, SSO
 - [Site access](docs/SITE-ACCESS.md): what each forum allows, and the options for reading it
 
-## Quick start (Docker)
+## Install
+
+No configuration needed. Either:
 
 ```bash
-cp .env.example .env && echo "FA_SECRET_KEY=$(openssl rand -base64 48)" >> .env
-mkdir -p data && sudo chown 1000:1000 data
-docker compose up -d --build
-docker compose logs forumaggregator | grep "FIRST RUN"   # setup code for creating your account
+docker run -d --name forumaggregator --restart unless-stopped \
+  -p 8080:8080 -v forumaggregator-data:/data \
+  alexstapo/forumaggregator:latest
 ```
 
-Then open http://<server>:8080. See [DEPLOY.md](docs/DEPLOY.md) for the HTTPS / reverse-proxy setup.
+or with Docker Compose:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/main/docker-compose.yml
+docker compose up -d
+```
+
+Then run `docker logs forumaggregator` to get the first-run setup code, open
+`http://<server-ip>:8080`, create your account, and go to **Sources** to add what you follow:
+a YouTube channel link or `@handle`, a website, or a feed address. Runs on x86-64 and Raspberry Pi (arm64). HTTPS via Nginx Proxy
+Manager, Postgres, single sign-on and backups are covered in [DEPLOY.md](docs/DEPLOY.md).
 
 ## Development
 

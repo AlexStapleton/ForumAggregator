@@ -1,6 +1,6 @@
 # ForumAggregator — Design
 
-Status: **v0.4** (2026-10-11). M0 is built and released. M1 is waiting on the site-access decision ([SITE-ACCESS.md](SITE-ACCESS.md)). This document records
+Status: **v0.5** (2026-10-19). M0 is released. M1 (RSS/Atom and YouTube reader) is built. Progress: [ROADMAP.md](ROADMAP.md). This document records
 what we want, the decisions made so far, and the questions still open.
 Decisions are logged in [DECISIONS.md](DECISIONS.md).
 
@@ -93,6 +93,18 @@ My earlier draft suggested Python. I now recommend TypeScript, for three reasons
 
 Retention is configurable and defaults to keeping everything. Saved items are never deleted automatically.
 
+**Built so far (M1, 2026-10-19):** two tables cover RSS/Atom/YouTube sources.
+- `sources`: kind (`feed` / `youtube`), title, site URL, feed URL (unique), enabled, status
+  (`pending` / `ok` / `error` / `challenged` / `paused`), last error, consecutive failures,
+  last checked / last success / next check times, optional per-source interval, and ETag /
+  Last-Modified for conditional requests.
+- `items`: source, guid (unique per source), URL, title, author, plain-text summary, image
+  URL, published / fetched times, and `read` / `saved` flags on the row itself (one user, so a
+  separate ItemState table isn't needed yet; D-048).
+
+The forum-specific parts above (Site, Node, Subscription levels, Thread) arrive with M2. They'll
+sit alongside these tables rather than replace them.
+
 ---
 
 ## 4. "Levels": what I follow vs. what I get
@@ -169,8 +181,9 @@ Kept for odd cases. Never required.
 - My passwords and sessions are **encrypted at rest** with a key from an environment variable (`FA_SECRET_KEY`).
 - Before each poll, the app checks that it's still logged in. If it isn't, it tries A, and if that fails it marks the site **"needs login"** and shows a banner. It never keeps fetching while logged out without telling me.
 - Request rates stay low and human-like (§7) to protect my accounts.
-- The app identifies itself honestly as `ForumAggregator/<version> (personal feed reader)` and
-  follows each site's robots.txt rules for general clients (`*`). It never disguises itself
+- The app identifies itself honestly as `ForumAggregator/<version> (personal feed reader)` and,
+  when reading forum pages, follows each site's robots.txt rules for general clients (`*`).
+  Feeds I explicitly subscribe to are fetched like in any feed reader (§9, D-045). It never disguises itself
   or tries to get past bot checks. See [SITE-ACCESS.md](SITE-ACCESS.md) for what that means
   for each forum.
 
@@ -230,9 +243,31 @@ All settings are configurable globally, per site and per subscription:
 
 ---
 
-## 9. YouTube and Reddit
+## 9. Feeds, YouTube and Reddit
 
-- **YouTube, specific creators:** I paste a channel URL or `@handle`. The app finds the channel ID and follows the channel's public feed (`/feeds/videos.xml?channel_id=…`). No login or API key needed. The feed only lists a channel's ~15 newest videos, which is fine when checking every 30–60 minutes. There's an option to hide Shorts.
+**RSS/Atom (built in M1).** On the Sources page I paste one of:
+- a **feed address**, which is used as-is (RSS 2.0, RSS 1.0/RDF and Atom are all supported);
+- a **website**, whose feed is found from the page's `<link rel="alternate">`;
+- a **YouTube** channel link or `@handle` (below).
+
+The app fetches and validates it immediately, then stores its items. Items older than 7 days
+start out read, so a new source doesn't flood the feed (D-047). After that, the scheduler
+checks it every `intervalMinutes` (default 30, ±10 % jitter), using ETag / Last-Modified, so an
+unchanged feed costs one tiny 304 response.
+
+When a check fails, it backs off 30 min → 1 h → 2 h → 4 h (capped at 6 h, and longer if the
+site sends Retry-After). After 5 failures in a row the source is paused, with the reason
+shown, until I press Resume. A source that starts serving a bot check is marked
+**challenged** and is never worked around. Nothing from a feed is rendered as HTML: titles and
+summaries are stored as plain text, and links and images must be http(s).
+
+**robots.txt and feeds (D-045):** robots.txt is about *crawling*, a program discovering and
+walking pages on its own. Fetching a specific feed I subscribed to isn't crawling; it's what
+every feed reader does (Google's own feed fetcher works the same way). So subscribed feeds are
+fetched even where robots.txt lists them; YouTube's robots.txt lists `/feeds/videos.xml`, for
+example. Forum page reading (M2) is crawling, and does follow robots.txt.
+
+- **YouTube, specific creators (built in M1):** I paste a channel URL, `@handle`, `/user/…` or playlist link. The app finds the channel ID (from the channel page for handles) and follows the channel's public feed (`/feeds/videos.xml?channel_id=…`). No login or API key needed. Cards show the video thumbnail. The feed only lists a channel's ~15 newest videos, which is fine when checking every 30–60 minutes. *Hiding Shorts is not built yet.*
 - **Reddit:** Phase 2, after YouTube. Reddit's API now appears to need approval even for personal use (not confirmed). Fallbacks: subreddit RSS feeds, or a logged-in session using login method B.
 
 ---
@@ -273,16 +308,10 @@ AI would be a plug-in stage that is **off by default**: `fetch → store → fil
 
 ## 12. Milestones
 
-| # | Scope | Done when |
-|---|---|---|
-| **M0** ✅ | Skeleton: Fastify + React app, SQLite/Postgres through Kysely, config file, multi-arch Docker image and compose file, app login (password + optional TOTP), reverse-proxy support | `docker compose up` behind the proxy serves the login page on both the i3 and a Pi. *Verified on amd64; arm64 is built by CI but untested on a real Pi yet* |
-| **M1** | XenForo adapter: login methods A and B, discovery and corrections, `new_threads` / `activity` / `all_posts`, rate limiter, health page | BikeForums Tandem and the 5070 Ti thread appear in a combined feed |
-| **M2** | Feed UI: read/unread, save, follow/mute from a card, mobile layout, PWA | Usable daily on my phone |
-| **M3** | Filters (simple and advanced, with preview) and full-text search | |
-| **M4** | Settings screen. The config file becomes an import/export | No file editing needed |
-| **M5** | YouTube creators, then Reddit | |
-| **M6** | AI stage (§11) | |
-| later | Notifications, Android wrapper | |
+Milestones, progress and blockers are tracked in **[ROADMAP.md](ROADMAP.md)**, the only
+copy, so it can't drift from this document. Short version (reordered 2026-10-11): M0
+foundation ✅ → M1 first usable reader (RSS/Atom, YouTube, feed screen) → M2 forums →
+M3 filters and search → M4 settings screen and PWA → M5 Reddit → M6 AI.
 
 ---
 
