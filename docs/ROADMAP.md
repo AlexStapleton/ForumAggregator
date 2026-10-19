@@ -64,6 +64,7 @@ Goal: YouTube and Reddit work, sources can be organised and edited, and articles
 - ✅ Reddit in the reader: post body from the feed, no page fetches, footer clutter removed, link posts show the article (D-064)
 - ✅ Reddit comments in the reader, on demand (D-065); Reddit requests ≥ 10 s apart (D-066)
 - ✅ Forum thread links explained; board links read the board RSS directly (D-068)
+- ✅ Reader clean-up: NPR's embed snippet, toolbars, repeated headline (D-069). ⏳ Needs your check on the NPR item
 - ⏳ **Wide-screen layout:** list on the left, reader on the right, configurable, with the current full-screen reader kept as an option
 - ⏳ **Timeline view:** sort/group by publish date
 - ✅ **Compared with FreshRSS** ([FRESHRSS-COMPARISON.md](FRESHRSS-COMPARISON.md)); recommendations awaiting your pick

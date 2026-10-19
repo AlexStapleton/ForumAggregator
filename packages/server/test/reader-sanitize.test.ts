@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropRepeatedTitle, extractArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { extractArticle, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
 const BASE = "https://news.example/2026/10/story";
@@ -74,10 +74,31 @@ describe("youtubeVideoId", () => {
   });
 });
 
-describe("dropRepeatedTitle", () => {
-  it("removes a leading heading that repeats the title, and nothing else", () => {
-    expect(dropRepeatedTitle('<div id="x"><h2>Bridge reopens!</h2><p>Text</p></div>', "Bridge Reopens")).toBe('<div id="x"><p>Text</p></div>');
-    expect(dropRepeatedTitle("<h2>Tools</h2><p>Text</p>", "Coupler maintenance")).toBe("<h2>Tools</h2><p>Text</p>");
-    expect(dropRepeatedTitle("<p>Intro</p><h1>Bridge</h1>", "Bridge")).toBe("<p>Intro</p><h1>Bridge</h1>");
+describe("polishArticle", () => {
+  const title = "NASA's Mars rover Perseverance has broken a landmark distance record";
+
+  it("cleans an NPR-style audio story: repeated headline, toolbar, embed snippet", () => {
+    // Shape of what the reader showed for an NPR story (2026-10-19 screenshot), after sanitising.
+    const html = `<div><div><h3>NASA’s Mars rover Perseverance has broken a landmark distance record</h3>
+      <p><a href="https://www.npr.org/transcripts/1">Transcript</a></p>
+      <ul><li><a href="https://ondemand.npr.org/a.mp3">Download</a></li>
+      <li><b>Embed</b> <b><code>&lt;iframe src="https://www.npr.org/player/embed/nx-s1-1/nx-s1-2" width="100%" height="290" frameborder="0" scrolling="no" title="NPR embedded audio player"&gt;</code></b></li>
+      <li><a href="https://www.npr.org/transcripts/1">Transcript</a></li></ul>
+      <p>The rover has now driven farther than any other on Mars.</p></div></div>`;
+    const out = polishArticle(html, title);
+    expect(out).not.toMatch(/iframe|Embed|Download|<h3>/);
+    expect(out).toContain("The rover has now driven farther");
+    expect(out).toContain(">Transcript</a>"); // the standalone transcript link is useful, kept
+  });
+
+  it("leaves real content alone", () => {
+    const article = "<h2>Tools</h2><ul><li>Torque wrench</li><li>Grease</li></ul><pre><code>&lt;iframe src=x&gt;&lt;/iframe&gt;\nconst a = 1;</code></pre><p>Text</p>";
+    expect(polishArticle(article, "Coupler maintenance")).toBe(article);
+    expect(polishArticle("<p>Intro</p><h1>Bridge</h1>", "Bridge")).toBe("<p>Intro</p><h1>Bridge</h1>");
+  });
+
+  it("removes share bars", () => {
+    const out = polishArticle('<p>Body</p><ul><li><a href="https://x.example">Share on Facebook</a></li><li><a href="https://y.example">Email</a></li></ul>', "T");
+    expect(out).toBe("<p>Body</p>");
   });
 });

@@ -56,11 +56,64 @@ export function youtubeVideoId(url: string | null): string | null {
   return null;
 }
 
-/** Removes a leading <h1>/<h2> that just repeats the item's title (the reader shows the title already). */
-export function dropRepeatedTitle(html: string, title: string): string {
-  const m = /^((?:\s*<(?:div|section|article)[^>]*>)*)\s*<(h[12])[^>]*>([\s\S]*?)<\/\2>/i.exec(html);
-  if (!m) return html;
-  const norm = (t: string) => htmlToText(t).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  if (norm(m[3]!) !== norm(title)) return html;
-  return m[1]! + html.slice(m[0].length);
+// ---- polishing extracted/feed HTML before it's shown ----------------------------------------
+
+/** Typical media/share toolbar entries: "Download", "Transcript", "Embed", "Share on X", … */
+const TOOLBAR_ITEM = /^(download|transcript|embed|share|listen|play|pause|email|e-mail|facebook|twitter|x|threads|bluesky|linkedin|reddit|whatsapp|print|copy link|save|subscribe)\b/i;
+const EMBED_SNIPPET = /^\s*<(iframe|script|embed|object|video|audio)\b[\s\S]*>\s*$/i;
+
+function normTitle(t: string): string {
+  return htmlToText(t).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * Removes page furniture that extraction sometimes keeps: embed-code snippets ("Embed <iframe…>"),
+ * media/share toolbars, and a heading that just repeats the item's title. Input must already be
+ * sanitised; this only removes nodes. Runs when an article is shown, so improvements here also
+ * apply to articles cached earlier.
+ */
+export function polishArticle(html: string, title: string): string {
+  if (!html) return html;
+  const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
+  try {
+    const doc = dom.window.document;
+    let changed = false;
+
+    // 1. Embed snippets shown as text: a code block that is exactly one embed tag.
+    for (const el of Array.from(doc.querySelectorAll("code, pre, textarea, kbd"))) {
+      const text = el.textContent ?? "";
+      if (text.length < 2000 && EMBED_SNIPPET.test(text)) {
+        el.remove();
+        changed = true;
+      }
+    }
+
+    // 2. Toolbars: lists whose every item is short and starts like a toolbar entry.
+    for (const list of Array.from(doc.querySelectorAll("ul, ol"))) {
+      const items = Array.from(list.children).filter((c) => c.tagName === "LI");
+      if (items.length >= 2 && items.every((li) => {
+        const t = (li.textContent ?? "").replace(/\s+/g, " ").trim();
+        return t.length <= 40 && TOOLBAR_ITEM.test(t);
+      })) {
+        list.remove();
+        changed = true;
+      }
+    }
+
+    // 3. A heading before the first paragraph that repeats the title.
+    const first = doc.body.querySelector("h1, h2, h3, h4, p");
+    if (first && first.tagName !== "P" && normTitle(first.textContent ?? "") === normTitle(title)) {
+      first.remove();
+      changed = true;
+    }
+
+    if (!changed) return html;
+    // Drop wrappers the removals left empty.
+    for (const el of Array.from(doc.body.querySelectorAll("li, ul, ol, div, span, p, b, strong"))) {
+      if (!el.textContent?.trim() && !el.querySelector("img")) el.remove();
+    }
+    return doc.body.innerHTML.trim();
+  } finally {
+    dom.window.close();
+  }
 }

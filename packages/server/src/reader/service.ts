@@ -10,7 +10,7 @@ import { FetchError, type Fetcher, type HostLimiter } from "../feeds/fetch.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { dropRepeatedTitle, extractArticle, youtubeVideoId } from "./extract.js";
+import { extractArticle, polishArticle, youtubeVideoId } from "./extract.js";
 import { sanitizeHtml } from "./sanitize.js";
 
 /** Don't retry a page that failed for this long (avoids hammering a site that blocks us). */
@@ -81,16 +81,16 @@ export class ReaderService {
 
     // Cached result (from the feed or a previous extraction).
     if (item.status === "ok" && item.html) {
-      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: item.html, videoId: null, notice: null };
+      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(item.html, item.title), videoId: null, notice: null };
     }
     let shortFeedHtml: string | null = null;
     if (item.status === "raw" && item.html) {
       const raw = isReddit ? cleanRedditHtml(item.html) : item.html;
-      const html = dropRepeatedTitle(sanitizeHtml(raw, item.url ?? "https://invalid.invalid/"), item.title);
+      const html = sanitizeHtml(raw, item.url ?? "https://invalid.invalid/");
       // Reddit posts are often short but complete; elsewhere a short body is just a teaser.
       if (isReddit || htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
-        return { ...base, kind: "feed", html, videoId: null, notice: null };
+        return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
       shortFeedHtml = html || null;
     }
@@ -112,9 +112,8 @@ export class ReaderService {
       if (!article) {
         throw new Error("Couldn't find the article text on that page. It may be behind a paywall or need JavaScript.");
       }
-      const html = dropRepeatedTitle(article.html, item.title);
-      await this.store(item.id, "page", "ok", html, null);
-      return { ...base, author: base.author ?? article.byline, kind: "page", html, videoId: null, notice: null };
+      await this.store(item.id, "page", "ok", article.html, null);
+      return { ...base, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
     } catch (err) {
       const message =
         err instanceof FetchError && err.isChallenge ? "The site answered with a bot check, so the article can't be shown here."
@@ -123,7 +122,7 @@ export class ReaderService {
       // A short feed body still beats the one-line summary.
       if (shortFeedHtml) {
         await this.store(item.id, "feed", "ok", shortFeedHtml, null);
-        return { ...base, kind: "feed", html: shortFeedHtml, videoId: null, notice: null };
+        return { ...base, kind: "feed", html: polishArticle(shortFeedHtml, item.title), videoId: null, notice: null };
       }
       await this.store(item.id, "page", "failed", null, message);
       return this.summaryOnly(base, message);

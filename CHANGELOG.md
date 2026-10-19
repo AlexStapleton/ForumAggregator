@@ -10,6 +10,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 - Reddit comments in the reader ("Show comments"; loaded on request, cached).
 - Forum board links (`…/forums/name.12/`) use the board's RSS directly, even when the board page shows a bot check.
 
+### Fixed
+- Reader: embed-code snippets (e.g. NPR's "Embed <iframe…>"), media/share toolbars and a repeated headline are removed from articles, including ones opened before this fix.
+
 ### Changed
 - Reddit posts in the reader come from the feed and never fetch Reddit's pages (no more "needs JavaScript"); the "submitted by … [link] [comments]" clutter is removed; link posts show the linked article.
 - Reddit requests are spaced at least 10 s apart to stay under Reddit's limit.
