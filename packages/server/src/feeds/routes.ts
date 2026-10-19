@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ItemsFilter } from "@fa/shared";
-import { AddSourceRequest, MarkReadRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
+import { AddSourceRequest, MarkReadRequest, OpmlImportRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
 import { parseBody, sendError } from "../http.js";
 import type { ReaderService } from "../reader/service.js";
 import type { ItemService } from "./items.js";
+import { OpmlError } from "./opml.js";
 import { SourceError, type FeedService } from "./service.js";
 
 function handleSourceError(reply: FastifyReply, err: unknown) {
@@ -22,6 +23,26 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
       return reply.code(201).send(await feeds.addSource(body));
     } catch (err) {
       return handleSourceError(reply, err);
+    }
+  });
+
+  // ---- OPML (D-073) ----
+  app.get("/api/sources/opml", async (_request, reply) => {
+    const date = new Date().toISOString().slice(0, 10);
+    return reply
+      .header("content-type", "text/x-opml; charset=utf-8")
+      .header("content-disposition", `attachment; filename="forumaggregator-${date}.opml"`)
+      .send(await feeds.exportOpml());
+  });
+
+  app.post("/api/sources/opml", { bodyLimit: 3 * 1024 * 1024 }, async (request, reply) => {
+    const body = parseBody(OpmlImportRequest, request, reply);
+    if (!body) return;
+    try {
+      return await feeds.importOpml(body.opml);
+    } catch (err) {
+      if (err instanceof OpmlError) return sendError(reply, 400, "invalid_opml", err.message);
+      throw err;
     }
   });
 

@@ -56,6 +56,12 @@ export const AddSourceRequest = z.object({
 });
 export type AddSourceRequest = z.infer<typeof AddSourceRequest>;
 
+/** The text of an OPML file (sent as JSON so the CSRF header rules stay the same). */
+export const OpmlImportRequest = z.object({
+  opml: z.string().min(1, "The file is empty").max(2_000_000, "The file is too large (2 MB at most)"),
+});
+export type OpmlImportRequest = z.infer<typeof OpmlImportRequest>;
+
 export const UpdateSourceRequest = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   enabled: z.boolean().optional(),

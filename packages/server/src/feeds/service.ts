@@ -1,13 +1,14 @@
 // Sources: adding (with feed discovery and YouTube lookup), checking, and storing new items.
 import crypto from "node:crypto";
 import type { Selectable } from "kysely";
-import type { AddSourceRequest, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
+import type { AddSourceRequest, OpmlImportResult, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
 import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
+import { buildOpml, parseOpml } from "./opml.js";
 import { nextCheck } from "./schedule.js";
 import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
@@ -122,6 +123,65 @@ export class FeedService {
     await this.recordSuccess(id, now, null, null);
     this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
     return (await this.getSource(id))!;
+  }
+
+  // ---- OPML import/export (D-073) ---------------------------------------------------
+
+  /**
+   * Adds every feed in an OPML file that isn't followed yet. Nothing is fetched here: sources
+   * start as "pending" and the scheduler checks them (politely spaced per site) right away.
+   */
+  async importOpml(xml: string): Promise<OpmlImportResult> {
+    const entries = parseOpml(xml);
+    const existing = new Set((await this.db.kysely.selectFrom("sources").select("feed_url").execute()).map((r) => r.feed_url));
+    const result: OpmlImportResult = { added: 0, skipped: [] };
+    const now = this.now();
+    for (const e of entries) {
+      const planned = planImport(e.feedUrl);
+      if (!planned) {
+        result.skipped.push({ url: e.feedUrl, title: e.title, reason: "Not an http(s) feed address" });
+        continue;
+      }
+      if (existing.has(planned.feedUrl)) {
+        result.skipped.push({ url: planned.feedUrl, title: e.title, reason: "Already followed" });
+        continue;
+      }
+      existing.add(planned.feedUrl);
+      const id = crypto.randomUUID();
+      await this.db.kysely
+        .insertInto("sources")
+        .values({
+          id,
+          kind: planned.kind,
+          title: e.title || new URL(planned.feedUrl).hostname,
+          site_url: e.siteUrl ?? planned.siteUrl,
+          feed_url: planned.feedUrl,
+          status: "pending",
+          last_error: null,
+          last_checked_at: null,
+          last_success_at: null,
+          next_check_at: now,
+          poll_interval_minutes: null,
+          retention_days: null,
+          etag: null,
+          last_modified: null,
+          created_at: now,
+          updated_at: now,
+        })
+        .execute();
+      await this.setTags(id, e.tags);
+      result.added++;
+    }
+    this.log?.info({ added: result.added, skipped: result.skipped.length }, "OPML imported");
+    return result;
+  }
+
+  async exportOpml(): Promise<string> {
+    const sources = await this.listSources();
+    return buildOpml(
+      sources.map((s) => ({ title: s.title, feedUrl: s.feedUrl, siteUrl: s.siteUrl, tags: s.tags })),
+      this.now(),
+    );
   }
 
   /** Works out the feed URL for whatever the user pasted, fetching as little as possible. */
@@ -615,4 +675,20 @@ export class FeedService {
       createdAt: r.created_at,
     };
   }
+}
+
+/** Kind and canonical feed address for an imported feed URL, without fetching anything. */
+function planImport(raw: string): { kind: SourceKind; feedUrl: string; siteUrl: string | null } | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const yt = planYouTube(url);
+  if (yt?.kind === "feed") return { kind: "youtube", feedUrl: yt.feedUrl, siteUrl: yt.siteUrl };
+  const reddit = planReddit(url);
+  if (reddit) return { kind: "reddit", feedUrl: reddit.feedUrl, siteUrl: reddit.siteUrl };
+  return { kind: "feed", feedUrl: url.href, siteUrl: null };
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { Source } from "@fa/shared";
+import type { OpmlImportResult, Source } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert, Field } from "../components";
@@ -189,7 +189,83 @@ export function SourcesPage() {
           </li>
         ))}
       </ul>
+
+      <ImportExport hasSources={!!sources?.length} onImported={load} />
     </>
+  );
+}
+
+/** OPML: move subscriptions in from another reader, or back them up (D-073). */
+function ImportExport({ hasSources, onImported }: { hasSources: boolean; onImported: () => Promise<void> }) {
+  const [result, setResult] = useState<OpmlImportResult>();
+  const [error, setError] = useState<string>();
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const importFile = async (file: File) => {
+    setError(undefined);
+    setResult(undefined);
+    setImporting(true);
+    try {
+      const res = await api<OpmlImportResult>("POST", "/api/sources/opml", { opml: await file.text() });
+      setResult(res);
+      await onImported();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setImporting(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
+  return (
+    <section className="card opml">
+      <h2>Import and export</h2>
+      <p className="muted small">
+        OPML is the file other feed readers (FreshRSS, Feedly, Inoreader, NetNewsWire…) use for subscriptions. Folders and categories become tags.
+        Imported feeds are checked over the next few minutes.
+      </p>
+      {error && <Alert>{error}</Alert>}
+      {result && (
+        <Alert kind={result.added ? "ok" : "info"}>
+          Added {result.added} {result.added === 1 ? "source" : "sources"}
+          {result.skipped.length ? `, skipped ${result.skipped.length}.` : "."}
+          {result.skipped.length > 0 && (
+            <details>
+              <summary>Show skipped</summary>
+              <ul className="small">
+                {result.skipped.map((s, i) => (
+                  <li key={i} className="break">
+                    {s.title ?? s.url}: {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </Alert>
+      )}
+      <div className="row">
+        <label className={`button secondary${importing ? " disabled" : ""}`}>
+          {importing ? "Importing…" : "Import OPML file"}
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".opml,.xml,text/x-opml,text/xml,application/xml"
+            className="visually-hidden"
+            disabled={importing}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importFile(file);
+            }}
+          />
+        </label>
+        {hasSources && (
+          <a className="button secondary" href="/api/sources/opml" download>
+            Export OPML
+          </a>
+        )}
+      </div>
+    </section>
   );
 }
 

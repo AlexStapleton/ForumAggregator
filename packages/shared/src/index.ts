@@ -15,6 +15,7 @@ export type {
   UpdateSourceRequest,
   UpdateItemRequest,
   MarkReadRequest,
+  OpmlImportRequest,
 } from "./schemas.js";
 
 export type AuthMode = "local" | "proxy" | "both";
@@ -83,6 +84,12 @@ export interface Source {
   unreadCount: number;
   itemCount: number;
   createdAt: number;
+}
+
+export interface OpmlImportResult {
+  /** Sources created; they're checked by the scheduler over the next minutes. */
+  added: number;
+  skipped: Array<{ url: string; title: string | null; reason: string }>;
 }
 
 export interface FeedItem {
