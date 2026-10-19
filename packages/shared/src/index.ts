@@ -16,6 +16,7 @@ export type {
   UpdateItemRequest,
   MarkReadRequest,
   OpmlImportRequest,
+  ReaderPreviewRequest,
 } from "./schemas.js";
 
 export type AuthMode = "local" | "proxy" | "both";
@@ -80,10 +81,26 @@ export interface Source {
   pollIntervalMinutes: number | null;
   /** Days to keep unsaved items. null = the global default, 0 = forever. */
   retentionDays: number | null;
+  /** Reader overrides (D-074): CSS selectors applied to the original page; null = automatic. */
+  articleSelector: string | null;
+  removeSelector: string | null;
   tags: string[];
   unreadCount: number;
   itemCount: number;
   createdAt: number;
+}
+
+/** What the reader would show for one item with the given selectors (nothing is saved). */
+export interface ReaderPreview {
+  itemId: string;
+  itemTitle: string;
+  url: string;
+  html: string | null;
+  /** Elements the article selector matched (null when not set). */
+  matched: number | null;
+  /** Elements the remove selector took out (null when not set). */
+  removed: number | null;
+  notice: string | null;
 }
 
 export interface OpmlImportResult {

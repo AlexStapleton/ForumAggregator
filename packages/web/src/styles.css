@@ -295,3 +295,11 @@ label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 2p
 .opml .alert { margin-bottom: 0.75rem; }
 .opml details { margin-top: 0.4rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---- Reader selectors (Edit source) ---- */
+.selectors { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin: 0.5rem 0 1rem; }
+.selectors summary { cursor: pointer; font-weight: 600; min-height: 32px; display: list-item; }
+.selectors[open] summary { margin-bottom: 0.5rem; }
+.preview { margin-top: 0.75rem; }
+.preview .alert { margin-bottom: 0.5rem; }
+.preview-body { max-height: 24rem; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; background: var(--bg); font-size: 0.95rem; }

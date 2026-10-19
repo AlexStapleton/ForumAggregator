@@ -10,6 +10,7 @@ import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
 import { nextCheck } from "./schedule.js";
+import { isValidSelector } from "../reader/extract.js";
 import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 
@@ -21,6 +22,7 @@ export class SourceError extends Error {
     readonly code: string,
     message: string,
     readonly status = 400,
+    readonly fields?: Record<string, string>,
   ) {
     super(message);
   }
@@ -553,6 +555,14 @@ export class FeedService {
     if (patch.title !== undefined) set.title = patch.title;
     if (patch.pollIntervalMinutes !== undefined) set.poll_interval_minutes = patch.pollIntervalMinutes;
     if (patch.retentionDays !== undefined) set.retention_days = patch.retentionDays;
+    const selectorsChanged =
+      (patch.articleSelector !== undefined && patch.articleSelector !== row.article_selector) ||
+      (patch.removeSelector !== undefined && patch.removeSelector !== row.remove_selector);
+    if (selectorsChanged) {
+      checkSelectors(patch);
+      if (patch.articleSelector !== undefined) set.article_selector = patch.articleSelector;
+      if (patch.removeSelector !== undefined) set.remove_selector = patch.removeSelector;
+    }
 
     // A new address is checked before anything is saved; existing items are kept.
     let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
@@ -593,6 +603,14 @@ export class FeedService {
       await this.recordSuccess(id, this.now(), null, null, { ...row, ...set } as SourceRow);
     }
     if (patch.retentionDays !== undefined) await this.applyRetention(id);
+    // Articles already read from the page used the old selectors: read them again next time.
+    if (selectorsChanged) {
+      await this.db.kysely
+        .deleteFrom("item_content")
+        .where("origin", "=", "page")
+        .where("item_id", "in", (eb) => eb.selectFrom("items").select("items.id").where("items.source_id", "=", id))
+        .execute();
+    }
     return (await this.getSource(id))!;
   }
 
@@ -669,12 +687,22 @@ export class FeedService {
       nextCheckAt: r.next_check_at,
       pollIntervalMinutes: r.poll_interval_minutes,
       retentionDays: r.retention_days,
+      articleSelector: r.article_selector,
+      removeSelector: r.remove_selector,
       tags,
       unreadCount: c?.unread ?? 0,
       itemCount: c?.total ?? 0,
       createdAt: r.created_at,
     };
   }
+}
+
+/** Rejects CSS selectors the browser engine can't parse, naming the field. */
+export function checkSelectors(s: { articleSelector?: string | null; removeSelector?: string | null }): void {
+  const fields: Record<string, string> = {};
+  if (s.articleSelector && !isValidSelector(s.articleSelector)) fields.articleSelector = "That isn't a valid CSS selector";
+  if (s.removeSelector && !isValidSelector(s.removeSelector)) fields.removeSelector = "That isn't a valid CSS selector";
+  if (Object.keys(fields).length) throw new SourceError("validation", "Some fields are invalid", 400, fields);
 }
 
 /** Kind and canonical feed address for an imported feed URL, without fetching anything. */

@@ -3,14 +3,15 @@
 //   2. full text in the feed → that, sanitised (once, then cached)
 //   3. otherwise             → fetch the article page once, extract it ("reader mode"), cache it
 //   4. if that fails         → the feed summary, with a notice saying why
+// A source with CSS selectors set (D-074) always reads the original page (step 3) with them.
 // Fetching the page happens only when the user opens the item, like a browser would.
-import type { ReaderComments, ReaderContent } from "@fa/shared";
+import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter } from "../feeds/fetch.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractArticle, polishArticle, youtubeVideoId } from "./extract.js";
+import { extractWithSelectors, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { sanitizeHtml } from "./sanitize.js";
 
 /** Don't retry a page that failed for this long (avoids hammering a site that blocks us). */
@@ -20,6 +21,21 @@ const INTERACTIVE = { minDelayMs: 1000, jitterMs: 300 };
 const FEED_FULL_TEXT_MIN = 500;
 const COMMENTS_TTL_MS = 15 * 60_000;
 const MAX_COMMENTS = 30;
+
+class SelectorMiss extends Error {
+  constructor(
+    message: string,
+    readonly result: SelectorExtraction,
+  ) {
+    super(message);
+  }
+}
+
+function pageErrorMessage(err: unknown): string {
+  return err instanceof FetchError && err.isChallenge ? "The site answered with a bot check, so the article can't be shown here."
+    : err instanceof FetchError ? `The article couldn't be loaded (${err.message}).`
+    : (err as Error).message;
+}
 
 export class ReaderService {
   private inFlight = new Map<string, Promise<ReaderContent | null>>();
@@ -55,6 +71,8 @@ export class ReaderService {
         "items.published_at",
         "sources.title as source_title",
         "sources.kind as source_kind",
+        "sources.article_selector",
+        "sources.remove_selector",
         "item_content.origin",
         "item_content.status",
         "item_content.html",
@@ -79,20 +97,27 @@ export class ReaderService {
     const videoId = youtubeVideoId(item.url);
     if (videoId) return { ...base, kind: "video", html: null, videoId, notice: null };
 
+    // Per-source selectors mean "read the original page with these" (never for Reddit).
+    const selectors: ReaderSelectors | null =
+      !isReddit && (item.article_selector || item.remove_selector) ? { article: item.article_selector, remove: item.remove_selector } : null;
+
     // Cached result (from the feed or a previous extraction).
-    if (item.status === "ok" && item.html) {
+    if (item.status === "ok" && item.html && !(selectors && item.origin === "feed")) {
       return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(item.html, item.title), videoId: null, notice: null };
     }
-    let shortFeedHtml: string | null = null;
+    // The feed's own text, kept as a fallback if the page can't be read.
+    let feedHtml: string | null = null;
     if (item.status === "raw" && item.html) {
       const raw = isReddit ? cleanRedditHtml(item.html) : item.html;
       const html = sanitizeHtml(raw, item.url ?? "https://invalid.invalid/");
       // Reddit posts are often short but complete; elsewhere a short body is just a teaser.
-      if (isReddit || htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
+      if (!selectors && (isReddit || htmlToText(html).length >= FEED_FULL_TEXT_MIN)) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
-      shortFeedHtml = html || null;
+      feedHtml = html || null;
+    } else if (selectors && item.status === "ok" && item.origin === "feed") {
+      feedHtml = item.html;
     }
     // Reddit pages need JavaScript and count against Reddit's request limit: never fetch them.
     if (isReddit) {
@@ -104,28 +129,68 @@ export class ReaderService {
     if (!item.url) return this.summaryOnly(base, "This item has no link to an article.");
 
     try {
-      await this.limiter.wait(item.url, INTERACTIVE);
-      const res = await this.fetcher(item.url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
-      if (res.kind !== "ok") throw new Error("The site answered without content.");
-      if (!/html/i.test(res.contentType)) throw new Error("The link isn't a web page (it may be a file or video).");
-      const article = extractArticle(res.body, res.url);
-      if (!article) {
-        throw new Error("Couldn't find the article text on that page. It may be behind a paywall or need JavaScript.");
-      }
+      const { article } = await this.readPage(item.url, selectors ?? {});
       await this.store(item.id, "page", "ok", article.html, null);
       return { ...base, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
     } catch (err) {
-      const message =
-        err instanceof FetchError && err.isChallenge ? "The site answered with a bot check, so the article can't be shown here."
-        : err instanceof FetchError ? `The article couldn't be loaded (${err.message}).`
-        : (err as Error).message;
-      // A short feed body still beats the one-line summary.
-      if (shortFeedHtml) {
-        await this.store(item.id, "feed", "ok", shortFeedHtml, null);
-        return { ...base, kind: "feed", html: polishArticle(shortFeedHtml, item.title), videoId: null, notice: null };
+      const message = pageErrorMessage(err);
+      // The feed's own body still beats the one-line summary.
+      if (feedHtml) {
+        // With selectors, keep retrying the page on later opens (the user may be fixing them).
+        if (selectors) {
+          return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: `${message} Showing the feed's text instead.` };
+        }
+        await this.store(item.id, "feed", "ok", feedHtml, null);
+        return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: null };
       }
       await this.store(item.id, "page", "failed", null, message);
       return this.summaryOnly(base, message);
+    }
+  }
+
+  /** Fetches an article page and extracts it; throws with a user-facing reason. */
+  private async readPage(url: string, selectors: ReaderSelectors): Promise<SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> }> {
+    await this.limiter.wait(url, INTERACTIVE);
+    const res = await this.fetcher(url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
+    if (res.kind !== "ok") throw new Error("The site answered without content.");
+    if (!/html/i.test(res.contentType)) throw new Error("The link isn't a web page (it may be a file or video).");
+    const result = extractWithSelectors(res.body, res.url, selectors);
+    if (!result.article) {
+      if (selectors.article) {
+        throw new SelectorMiss(
+          result.matched ? `The article selector matched ${result.matched} element(s), but they had no text.` : "The article selector matched nothing on this page.",
+          result,
+        );
+      }
+      throw new Error("Couldn't find the article text on that page. It may be behind a paywall or need JavaScript.");
+    }
+    return result as SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> };
+  }
+
+  /**
+   * What the reader would show for one of the source's items with these selectors.
+   * Nothing is stored. null if the source doesn't exist.
+   */
+  async preview(sourceId: string, req: ReaderPreviewRequest): Promise<ReaderPreview | { error: string } | null> {
+    const source = await this.db.kysely.selectFrom("sources").select(["id", "kind"]).where("id", "=", sourceId).executeTakeFirst();
+    if (!source) return null;
+    if (source.kind !== "feed") return { error: "Reader selectors are for feed sources; YouTube and Reddit items aren't read from their pages." };
+    let q = this.db.kysely
+      .selectFrom("items")
+      .select(["id", "title", "url"])
+      .where("source_id", "=", sourceId)
+      .where("url", "is not", null);
+    if (req.itemId) q = q.where("id", "=", req.itemId);
+    const item = await q.orderBy("published_at", "desc").limit(1).executeTakeFirst();
+    if (!item?.url) return { error: "This source has no items with a link to preview yet." };
+
+    const out: ReaderPreview = { itemId: item.id, itemTitle: item.title, url: item.url, html: null, matched: null, removed: null, notice: null };
+    try {
+      const result = await this.readPage(item.url, { article: req.articleSelector, remove: req.removeSelector });
+      return { ...out, html: polishArticle(result.article.html, item.title), matched: result.matched, removed: result.removed };
+    } catch (err) {
+      const partial = err instanceof SelectorMiss ? err.result : null;
+      return { ...out, matched: partial?.matched ?? null, removed: partial?.removed ?? null, notice: pageErrorMessage(err) };
     }
   }
 

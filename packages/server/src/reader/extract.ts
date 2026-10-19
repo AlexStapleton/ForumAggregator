@@ -15,6 +15,26 @@ export interface Extracted {
 }
 
 export function extractArticle(pageHtml: string, pageUrl: string): Extracted | null {
+  return extractWithSelectors(pageHtml, pageUrl, {}).article;
+}
+
+/** Per-source overrides (D-074): CSS selectors applied to the original page. */
+export interface ReaderSelectors {
+  /** The article: every match, in page order. Replaces Readability when set. */
+  article?: string | null;
+  /** Elements removed from the page first (share bars, related links, ads…). */
+  remove?: string | null;
+}
+
+export interface SelectorExtraction {
+  article: Extracted | null;
+  /** How many elements the article selector matched (null when not set). */
+  matched: number | null;
+  /** How many elements the remove selector took out (null when not set). */
+  removed: number | null;
+}
+
+export function extractWithSelectors(pageHtml: string, pageUrl: string, selectors: ReaderSelectors): SelectorExtraction {
   // Scripts never run (jsdom's default) and no subresources are loaded.
   const dom = new JSDOM(pageHtml.slice(0, 3_000_000), { url: pageUrl });
   try {
@@ -24,14 +44,46 @@ export function extractArticle(pageHtml: string, pageUrl: string): Extracted | n
       const real = img.getAttribute("data-src") ?? img.getAttribute("data-lazy-src") ?? img.getAttribute("data-original");
       if (real) img.setAttribute("src", real);
     }
+    let removed: number | null = null;
+    if (selectors.remove) {
+      const victims = Array.from(doc.querySelectorAll(selectors.remove));
+      for (const el of victims) el.remove();
+      removed = victims.length;
+    }
+    if (selectors.article) {
+      // Outermost matches only, so a selector matching nested elements doesn't repeat text.
+      const matches = Array.from(doc.querySelectorAll(selectors.article)).filter(
+        (el, _i, all) => !all.some((other) => other !== el && other.contains(el)),
+      );
+      const html = sanitizeHtml(matches.map((el) => el.outerHTML).join("\n"), pageUrl);
+      const textLength = htmlToText(html).length;
+      const hasImage = /<img\b/i.test(html);
+      return {
+        article: textLength > 0 || hasImage ? { html, title: doc.title || null, byline: null, textLength } : null,
+        matched: matches.length,
+        removed,
+      };
+    }
     const article = new Readability(doc, { charThreshold: MIN_ARTICLE_TEXT }).parse();
-    if (!article?.content) return null;
+    if (!article?.content) return { article: null, matched: null, removed };
     const html = sanitizeHtml(article.content, pageUrl);
     const textLength = htmlToText(html).length;
-    if (textLength < MIN_ARTICLE_TEXT) return null;
-    return { html, title: article.title ?? null, byline: article.byline ?? null, textLength };
+    if (textLength < MIN_ARTICLE_TEXT) return { article: null, matched: null, removed };
+    return { article: { html, title: article.title ?? null, byline: article.byline ?? null, textLength }, matched: null, removed };
   } finally {
     dom.window.close();
+  }
+}
+
+const validator = new JSDOM("<!doctype html><p></p>").window.document;
+
+/** Whether a CSS selector is valid (it's tried against an empty document). */
+export function isValidSelector(selector: string): boolean {
+  try {
+    validator.querySelector(selector);
+    return true;
+  } catch {
+    return false;
   }
 }
 

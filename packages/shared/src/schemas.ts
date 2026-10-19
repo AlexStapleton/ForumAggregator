@@ -48,6 +48,23 @@ export const TotpDisableRequest = z.object({
 });
 export type TotpDisableRequest = z.infer<typeof TotpDisableRequest>;
 
+const selector = z
+  .string()
+  .trim()
+  .max(500, "Keep the selector under 500 characters")
+  .nullable()
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v || null));
+
+/** Preview the reader with selectors that aren't saved yet (D-074). */
+export const ReaderPreviewRequest = z.object({
+  articleSelector: selector,
+  removeSelector: selector,
+  /** Which item to preview; default: the source's newest item with a link. */
+  itemId: z.string().optional(),
+});
+export type ReaderPreviewRequest = z.infer<typeof ReaderPreviewRequest>;
+
 export const AddSourceRequest = z.object({
   /** A feed URL, a website (its feed is discovered), or a YouTube channel URL / @handle. */
   url: z.string().trim().min(1, "Enter a URL").max(2000),
@@ -71,6 +88,10 @@ export const UpdateSourceRequest = z.object({
   tags: tags.optional(),
   /** null = global default, 0 = keep forever. */
   retentionDays: z.number().int().min(0).max(3650).nullable().optional(),
+  /** Reader: CSS selector for the article on the original page; "" or null = automatic. */
+  articleSelector: selector,
+  /** Reader: CSS selector for elements to remove from the original page; "" or null = none. */
+  removeSelector: selector,
 });
 export type UpdateSourceRequest = z.infer<typeof UpdateSourceRequest>;
 

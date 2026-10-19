@@ -47,6 +47,9 @@ export interface SourcesTable {
   poll_interval_minutes: number | null;
   /** Days to keep unsaved items; null = global default, 0 = forever. */
   retention_days: number | null;
+  /** Reader: CSS selectors applied to the original page; null = automatic (Readability). */
+  article_selector: Generated<string | null>;
+  remove_selector: Generated<string | null>;
   /** HTTP validators for conditional requests (304 Not Modified). */
   etag: string | null;
   last_modified: string | null;

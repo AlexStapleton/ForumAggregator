@@ -1,14 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ItemsFilter } from "@fa/shared";
-import { AddSourceRequest, MarkReadRequest, OpmlImportRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
+import { AddSourceRequest, MarkReadRequest, OpmlImportRequest, ReaderPreviewRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
 import { parseBody, sendError } from "../http.js";
 import type { ReaderService } from "../reader/service.js";
 import type { ItemService } from "./items.js";
 import { OpmlError } from "./opml.js";
-import { SourceError, type FeedService } from "./service.js";
+import { checkSelectors, SourceError, type FeedService } from "./service.js";
 
 function handleSourceError(reply: FastifyReply, err: unknown) {
-  if (err instanceof SourceError) return sendError(reply, err.status, err.code, err.message);
+  if (err instanceof SourceError) return sendError(reply, err.status, err.code, err.message, err.fields);
   throw err;
 }
 
@@ -44,6 +44,21 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
       if (err instanceof OpmlError) return sendError(reply, 400, "invalid_opml", err.message);
       throw err;
     }
+  });
+
+  // Try reader selectors on one of the source's items before saving them (D-074).
+  app.post<{ Params: { id: string } }>("/api/sources/:id/reader-preview", async (request, reply) => {
+    const body = parseBody(ReaderPreviewRequest, request, reply);
+    if (!body) return;
+    try {
+      checkSelectors(body);
+    } catch (err) {
+      return handleSourceError(reply, err);
+    }
+    const preview = await reader.preview(request.params.id, body);
+    if (!preview) return sendError(reply, 404, "not_found", "Source not found");
+    if ("error" in preview) return sendError(reply, 400, "preview_unavailable", preview.error);
+    return preview;
   });
 
   app.patch<{ Params: { id: string } }>("/api/sources/:id", async (request, reply) => {
