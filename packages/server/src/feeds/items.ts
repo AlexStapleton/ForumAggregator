@@ -1,5 +1,5 @@
-// The feed: listing items newest first, and read/saved state.
-import type { FeedItem, ItemsFilter, ItemsPage, MarkReadRequest, UpdateItemRequest } from "@fa/shared";
+// The feed: listing items (newest or oldest first), and read/saved state.
+import type { FeedItem, ItemsFilter, ItemsOrder, ItemsPage, MarkReadRequest, UpdateItemRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { cleanRedditSummary } from "./reddit.js";
 
@@ -21,7 +21,8 @@ export class ItemService {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async list(opts: { filter: ItemsFilter; sourceId?: string; tag?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
+  async list(opts: { filter: ItemsFilter; order?: ItemsOrder; sourceId?: string; tag?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
+    const asc = opts.order === "oldest";
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), MAX_LIMIT);
     let q = this.db.kysely
       .selectFrom("items")
@@ -49,15 +50,17 @@ export class ItemService {
     }
     const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
     if (cursor) {
-      // Keyset pagination: strictly older than the last item of the previous page.
+      // Keyset pagination: strictly after the last item of the previous page, in the chosen order.
+      const op = asc ? ">" : "<";
       q = q.where((eb) =>
         eb.or([
-          eb("items.published_at", "<", cursor.publishedAt),
-          eb.and([eb("items.published_at", "=", cursor.publishedAt), eb("items.id", "<", cursor.id)]),
+          eb("items.published_at", op, cursor.publishedAt),
+          eb.and([eb("items.published_at", "=", cursor.publishedAt), eb("items.id", op, cursor.id)]),
         ]),
       );
     }
-    const rows = await q.orderBy("items.published_at", "desc").orderBy("items.id", "desc").limit(limit + 1).execute();
+    const dir = asc ? "asc" : "desc";
+    const rows = await q.orderBy("items.published_at", dir).orderBy("items.id", dir).limit(limit + 1).execute();
     const page = rows.slice(0, limit);
     // Tags come from the source at read time, so editing a source's tags applies to old items too.
     const sourceIds = [...new Set(page.map((r) => r.source_id))];
@@ -98,10 +101,12 @@ export class ItemService {
     return Number(res.numUpdatedRows) > 0;
   }
 
-  /** Marks unread items read; optionally only one source and only up to what the user saw. */
+  /** Marks unread items read; optionally only one source or tag, and only up to what the user saw. */
   async markRead(req: MarkReadRequest): Promise<number> {
     let q = this.db.kysely.updateTable("items").set({ read: 1, read_at: this.now() }).where("read", "=", 0);
     if (req.sourceId) q = q.where("source_id", "=", req.sourceId);
+    const tag = req.tag;
+    if (tag) q = q.where("source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
     if (req.upTo !== undefined) q = q.where("published_at", "<=", req.upTo);
     const res = await q.executeTakeFirst();
     return Number(res.numUpdatedRows);

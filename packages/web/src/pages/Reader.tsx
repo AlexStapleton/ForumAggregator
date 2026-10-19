@@ -1,5 +1,6 @@
-// Full-screen reader: one item at a time, in the feed's current order.
-// Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc or Back closes.
+// Reader: one item at a time, in the feed's current order. Either full screen ("overlay", where
+// Back closes it) or as the right-hand pane of the split layout ("pane", D-070).
+// Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc closes.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FeedItem, ReaderComments, ReaderContent } from "@fa/shared";
 import { api, errorMessage } from "../api";
@@ -7,6 +8,7 @@ import { KIND_LABEL } from "../kinds";
 import { fullDate, relativeTime } from "../time";
 
 interface Props {
+  mode: "overlay" | "pane";
   items: FeedItem[];
   index: number;
   hasMore: boolean;
@@ -26,7 +28,7 @@ async function loadContent(itemId: string): Promise<ReaderContent> {
   return content;
 }
 
-export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpdate, onClose }: Props) {
+export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore, onUpdate, onClose }: Props) {
   const item = items[index];
   const [content, setContent] = useState<ReaderContent>();
   const [error, setError] = useState<string>();
@@ -34,8 +36,10 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
   const touch = useRef<{ x: number; y: number } | null>(null);
   const closing = useRef(false);
 
-  // Browser/phone Back closes the reader instead of leaving the page.
+  // Full screen: browser/phone Back closes the reader instead of leaving the page.
   useEffect(() => {
+    if (mode !== "overlay") return;
+    closing.current = false;
     history.pushState({ faReader: true }, "");
     const onPop = () => {
       closing.current = true;
@@ -47,13 +51,14 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
       window.removeEventListener("popstate", onPop);
       document.body.classList.remove("reader-open");
     };
-  }, [onClose]);
+  }, [onClose, mode]);
 
   const close = useCallback(() => {
+    if (mode === "pane") return onClose();
     if (closing.current) return;
     closing.current = true;
     history.back(); // triggers popstate → onClose
-  }, []);
+  }, [mode, onClose]);
 
   // Load the current item; mark it read; warm up the next one.
   useEffect(() => {
@@ -88,7 +93,8 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === "ArrowRight" || e.key === "j") void go(1);
       else if (e.key === "ArrowLeft" || e.key === "k") void go(-1);
       else if (e.key === "Escape") close();
@@ -103,10 +109,10 @@ export function Reader({ items, index, hasMore, onIndexChange, onLoadMore, onUpd
 
   return (
     <div
-      className="reader"
-      role="dialog"
-      aria-modal="true"
-      aria-label={item.title}
+      className={mode === "pane" ? "reader reader-pane" : "reader"}
+      role={mode === "overlay" ? "dialog" : "region"}
+      aria-modal={mode === "overlay" || undefined}
+      aria-label={mode === "overlay" ? item.title : "Reader"}
       onTouchStart={(e) => {
         const t = e.touches[0];
         touch.current = t ? { x: t.clientX, y: t.clientY } : null;

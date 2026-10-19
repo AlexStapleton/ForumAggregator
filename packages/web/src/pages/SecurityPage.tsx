@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import type { AuthStatus, TotpBeginResponse } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
+import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout } from "../prefs";
 
 export function SecurityPage({ status, onChange }: { status: AuthStatus; onChange: () => void }) {
   return (
@@ -11,9 +12,39 @@ export function SecurityPage({ status, onChange }: { status: AuthStatus; onChang
         Signed in as <strong>{status.username}</strong>
         {status.via === "proxy" ? " through your SSO proxy" : ""}.
       </p>
+      <ThisDevice />
       {status.via === "session" && <ChangePassword />}
       <TwoFactor enabled={!!status.totpEnabled} onChange={onChange} />
     </>
+  );
+}
+
+const LAYOUTS: Array<{ value: ReaderLayout; label: string; hint: string }> = [
+  { value: "auto", label: "Automatic", hint: `List and reader side by side on wide screens (${AUTO_SPLIT_MIN_PX}px and up), full-screen reader otherwise.` },
+  { value: "split", label: "Side by side", hint: `List on the left, reader on the right whenever the window is at least ${SPLIT_MIN_PX}px wide.` },
+  { value: "full", label: "Full-screen reader", hint: "Items open over the list, as on a phone." },
+];
+
+/** Layout preferences stored in this browser only, so phone and desktop can differ. */
+function ThisDevice() {
+  const [prefs, setPrefs] = usePrefs();
+  return (
+    <section className="card">
+      <h2>This device</h2>
+      <p className="muted small">Saved in this browser only. Your other devices keep their own choice.</p>
+      <fieldset className="choices">
+        <legend>Reading layout</legend>
+        {LAYOUTS.map((l) => (
+          <label key={l.value} className="choice">
+            <input type="radio" name="layout" value={l.value} checked={prefs.layout === l.value} onChange={() => setPrefs({ layout: l.value })} />
+            <span>
+              <strong>{l.label}</strong>
+              <span className="muted small block">{l.hint}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+    </section>
   );
 }
 

@@ -76,6 +76,8 @@ export type UpdateItemRequest = z.infer<typeof UpdateItemRequest>;
 
 export const MarkReadRequest = z.object({
   sourceId: z.string().optional(),
+  /** Only sources with this tag (matches the feed's tag filter). */
+  tag: z.string().optional(),
   /** Only items published at or before this time (what the user was looking at). */
   upTo: z.number().int().optional(),
 });

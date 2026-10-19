@@ -2,6 +2,14 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 11: layout, timeline, FreshRSS follow-ups)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-070 | **Reading layout is a per-device setting** (Settings → This device; stored in the browser's localStorage, not on the server): *Automatic* (default: list and reader side by side at ≥ 1100 px, full-screen reader below), *Side by side* (whenever the window is ≥ 760 px), *Full-screen reader* (always). Side by side keeps the list usable, highlights the open item, keeps it in view while stepping with j/k, and doesn't add browser history entries; the full-screen reader is unchanged (Back closes it) | User ("yes, per device") | The phone and the desktop want different layouts; 760 px is the narrowest width where both columns stay readable |
+| D-071 | **Timeline:** the feed groups items under day headings (Today, Yesterday, then weekday and date, in the browser's time zone) and has a Newest first / Oldest first order, remembered per device. The API takes `order=newest\|oldest` with keyset paging in either direction | User (option a) | Date headings answer "when was this published" at a glance without a separate view |
+| D-072 | "Mark all read" honours the tag filter (it used to mark every source when a tag was selected), and marks up to the newest item on screen whichever end of the list that is | Claude (bug found while adding the oldest-first order) | Matches what the user is looking at |
+
 ## 2026-10-19 (round 10: after v1.0.0, first feedback)
 
 | ID | Decision | Source | Rationale |

@@ -7,10 +7,13 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ## [Unreleased]
 
 ### Added
+- Side-by-side layout on wide screens: the list on the left, the reader on the right. Choose Automatic, Side by side or Full-screen reader in Settings → This device (saved per device).
+- Timeline: the feed is grouped under day headings (Today, Yesterday, dates), with a Newest first / Oldest first order (saved per device).
 - Reddit comments in the reader ("Show comments"; loaded on request, cached).
 - Forum board links (`…/forums/name.12/`) use the board's RSS directly, even when the board page shows a bot check.
 
 ### Fixed
+- "Mark all read" with a tag selected now only marks that tag's sources.
 - Reader: embed-code snippets (e.g. NPR's "Embed <iframe…>"), media/share toolbars and a repeated headline are removed from articles, including ones opened before this fix.
 
 ### Changed

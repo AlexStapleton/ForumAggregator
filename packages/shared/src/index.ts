@@ -107,11 +107,14 @@ export interface FeedItem {
 
 export interface ItemsPage {
   items: FeedItem[];
-  /** Pass as `cursor` to load the next (older) page; null when there is nothing more. */
+  /** Pass as `cursor` (with the same `order`) to load the next page; null when there is nothing more. */
   nextCursor: string | null;
 }
 
 export type ItemsFilter = "unread" | "all" | "saved";
+
+/** Sort by publish date: "newest" first (default) or "oldest" first (timeline). */
+export type ItemsOrder = "newest" | "oldest";
 
 export interface TagCount {
   tag: string;

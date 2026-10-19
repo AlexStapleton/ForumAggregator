@@ -49,11 +49,12 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
   // ---- items ----
   app.get("/api/tags", async () => feeds.listTags());
 
-  app.get<{ Querystring: { filter?: string; sourceId?: string; tag?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
+  app.get<{ Querystring: { filter?: string; order?: string; sourceId?: string; tag?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
     const q = request.query;
     const filter: ItemsFilter = q.filter === "all" || q.filter === "saved" ? q.filter : "unread";
     return items.list({
       filter,
+      order: q.order === "oldest" ? "oldest" : "newest",
       sourceId: q.sourceId || undefined,
       tag: q.tag || undefined,
       cursor: q.cursor || undefined,
