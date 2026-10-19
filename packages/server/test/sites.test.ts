@@ -48,6 +48,11 @@ describe("response classification", () => {
   it("recognises bot challenges regardless of status code", () => {
     expect(classifyResponse(res(403, "<html><head><title>Just a moment...</title>"))).toBe("cloudflare_challenge");
     expect(classifyResponse(res(200, "", { "cf-mitigated": "challenge" }))).toBe("cloudflare_challenge");
+    expect(classifyResponse(res(403, "<script>window._cf_chl_opt={cvId:'3'};</script>"))).toBe("cloudflare_challenge");
+    expect(classifyResponse(res(403, "<script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=1\"></script>"))).toBe("cloudflare_challenge");
+    // A page that passed: Cloudflare's background detection script is not a challenge.
+    const passed = `<html><head><title>Thread | Forum</title></head><body>Posts…<script>(function(){var a=document.createElement('script');window.__CF$cv$params={r:'8f',t:'MTc'};a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.head.appendChild(a);})();</script></body></html>`;
+    expect(classifyResponse(res(200, passed))).toBe("ok");
     expect(classifyResponse(res(200, "<script>window.POW_CHALLENGE_DATA={}</script>"))).toBe("pow_challenge");
   });
 

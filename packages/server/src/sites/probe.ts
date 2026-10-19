@@ -19,7 +19,16 @@ export interface ProbeResponse {
 
 export function classifyResponse(res: ProbeResponse): ResponseKind {
   const h = (name: string) => res.headers[name.toLowerCase()] ?? "";
-  if (h("cf-mitigated") === "challenge" || /<title>Just a moment\.\.\.<\/title>/i.test(res.body) || res.body.includes("/cdn-cgi/challenge-platform/")) {
+  // A real challenge page: Cloudflare's header, its "Just a moment..." title, its challenge
+  // options object, or its challenge script (/cdn-cgi/challenge-platform/h/…). Pages that passed
+  // also load /cdn-cgi/challenge-platform/scripts/jsd/main.js in the background, so that path
+  // alone doesn't mean a challenge (D-083).
+  if (
+    h("cf-mitigated") === "challenge" ||
+    /<title>Just a moment\.\.\.<\/title>/i.test(res.body) ||
+    res.body.includes("window._cf_chl_opt") ||
+    res.body.includes("/cdn-cgi/challenge-platform/h/")
+  ) {
     return "cloudflare_challenge";
   }
   if (res.body.includes("POW_CHALLENGE_DATA")) return "pow_challenge";

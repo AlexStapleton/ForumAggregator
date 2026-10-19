@@ -2,6 +2,12 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 14: FlareSolverr fixes, thread following)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-083 | **Cloudflare challenge detection narrowed; plain-request refusals remembered.** A page counts as a Cloudflare challenge only with the `cf-mitigated: challenge` header, the "Just a moment..." title, `window._cf_chl_opt`, or a `/cdn-cgi/challenge-platform/h/…` script. Pages that *passed* also load `/cdn-cgi/challenge-platform/scripts/jsd/main.js`, which the old check mistook for a challenge, so FlareSolverr's good copy of a thread page was thrown away. When a site refuses the app's plain requests even with FlareSolverr's clearance (Cloudflare can tell a program from Chrome), that host is fetched only through FlareSolverr for 6 hours instead of wasting a request each time | User's thehotpepper thread: "FlareSolverr got past the check, but the site still refused the app's follow-up request" | The thread page was there; the detector was wrong |
+
 ## 2026-10-19 (round 13: forums via FlareSolverr)
 
 | ID | Decision | Source | Rationale |

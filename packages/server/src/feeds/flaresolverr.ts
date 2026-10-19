@@ -8,6 +8,9 @@
 //      is what we wanted (an HTML page, or a feed we can recognise in the browser's view), and its
 //      cookies are kept for later requests to that host.
 //   3. If its copy isn't usable, one plain request with the new clearance.
+// Some sites refuse the plain requests even with the clearance (Cloudflare can tell a program
+// from a real Chrome). After one such refusal the host is fetched only through FlareSolverr for
+// a while, instead of wasting a request on it each time (D-083).
 // Only opted-in sources use this; the per-site spacing still applies (callers wait first).
 import { FetchError, type FetchOptions, type FetchResult, type Fetcher, type JsonFetcher } from "./fetch.js";
 import { classifyResponse } from "../sites/probe.js";
@@ -58,6 +61,8 @@ const SOLVE_TIMEOUT_MS = 60_000;
 /** Reuse a clearance for at most this long, even if its cookie says longer. */
 const MAX_CLEARANCE_MS = 2 * 3_600_000;
 const DEFAULT_CLEARANCE_MS = 30 * 60_000;
+/** After plain requests with a clearance are refused, use only FlareSolverr's copies this long. */
+const PLAIN_REFUSED_MS = 6 * 3_600_000;
 
 type Json = Record<string, unknown>;
 
@@ -91,6 +96,8 @@ export function feedFromBrowserSource(source: string): string | null {
 
 export class FlareSolverr {
   private clearances = new Map<string, Clearance>();
+  /** host → until when plain requests with a clearance aren't worth trying. */
+  private plainRefused = new Map<string, number>();
   private solving = new Map<string, Promise<Solution>>();
 
   constructor(
@@ -167,6 +174,12 @@ export class FlareSolverr {
     return c;
   }
 
+  private whyUnusable(s: Solution, options: FetchOptions): string {
+    if (s.status < 200 || s.status >= 300) return `the site answered HTTP ${s.status}`;
+    if (classifyResponse({ status: s.status, headers: {}, body: s.body }) !== "ok") return "it still showed the site's check";
+    return options.expect === "feed" ? "no feed found in it" : "it was empty";
+  }
+
   /** The browser's copy of the page, if it is what the caller asked for. */
   private usable(s: Solution, options: FetchOptions): FetchResult | null {
     if (s.status < 200 || s.status >= 300) return null;
@@ -184,21 +197,36 @@ export class FlareSolverr {
     };
   }
 
+  private plainWorks(url: string): boolean {
+    const host = new URL(url).host;
+    const until = this.plainRefused.get(host);
+    if (until === undefined) return true;
+    if (until <= this.now()) {
+      this.plainRefused.delete(host);
+      return true;
+    }
+    return false;
+  }
+
   /** Wraps a fetcher so its requests go through FlareSolverr's clearance (see the top of this file). */
   wrap(base: Fetcher): Fetcher {
     return async (url, options) => {
-      const known = this.clearanceFor(url);
+      const plain = this.plainWorks(url);
+      const known = plain ? this.clearanceFor(url) : null;
       if (known) {
         try {
           return await base(url, { ...options, cookie: known.cookie, userAgent: known.userAgent });
         } catch (err) {
           if (!(err instanceof FetchError && err.isChallenge)) throw err;
+          // Expired, or the site refuses plain requests: either way FlareSolverr only, for a while.
           this.clearances.delete(new URL(url).host);
+          this.plainRefused.set(new URL(url).host, this.now() + PLAIN_REFUSED_MS);
         }
       }
       const solution = await this.solve(url);
       const direct = this.usable(solution, options);
       if (direct) return direct;
+      if (!this.plainWorks(url)) throw new FetchError("cloudflare_challenge", `FlareSolverr's copy of the page wasn't usable (${this.whyUnusable(solution, options)})`);
       const fresh = this.clearanceFor(url);
       if (!fresh) throw new FetchError("cloudflare_challenge", "FlareSolverr opened the page but got no usable clearance for it");
       try {
@@ -207,6 +235,7 @@ export class FlareSolverr {
       } catch (err) {
         if (err instanceof FetchError && err.isChallenge) {
           this.clearances.delete(new URL(url).host);
+          this.plainRefused.set(new URL(url).host, this.now() + PLAIN_REFUSED_MS);
           throw new FetchError(err.kind, "FlareSolverr got past the check, but the site still refused the app's follow-up request", err.status);
         }
         throw err;
