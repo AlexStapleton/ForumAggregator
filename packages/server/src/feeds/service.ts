@@ -1,7 +1,7 @@
 // Sources: adding (with feed discovery and YouTube lookup), checking, and storing new items.
 import crypto from "node:crypto";
 import type { Selectable } from "kysely";
-import type { AddSourceRequest, Source, SourceKind, UpdateSourceRequest } from "@fa/shared";
+import type { AddSourceRequest, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
@@ -109,12 +109,14 @@ export class FeedService {
         last_success_at: null,
         next_check_at: null,
         poll_interval_minutes: null,
+        retention_days: null,
         etag: null,
         last_modified: null,
         created_at: now,
         updated_at: now,
       })
       .execute();
+    await this.setTags(id, input.tags ?? []);
     // We already have the feed from resolving it, so store its items straight away.
     const added = await this.ingest(id, resolved.parsed, true);
     await this.recordSuccess(id, now, null, null);
@@ -321,39 +323,116 @@ export class FeedService {
       .execute();
   }
 
-  /** Stores items not seen before. Returns how many were new. */
+  /** Days to keep unsaved items for this source (0 = forever). */
+  private retentionDays(row: Pick<SourceRow, "retention_days">): number {
+    return row.retention_days ?? this.config.retention.keepDays;
+  }
+
+  /**
+   * Stores items not seen before. Returns how many were new. Skips items that retention
+   * already removed (tombstones) or that are older than the source keeps.
+   */
   private async ingest(sourceId: string, parsed: ParsedFeed, firstFetch: boolean): Promise<number> {
     const now = this.now();
-    const rows = parsed.items.map((it, index) => {
+    const source = await this.db.kysely.selectFrom("sources").select("retention_days").where("id", "=", sourceId).executeTakeFirst();
+    const keepDays = source ? this.retentionDays(source) : 0;
+    const cutoff = keepDays > 0 ? now - keepDays * 24 * 3_600_000 : -Infinity;
+
+    const candidates = parsed.items.map((it, index) => {
       // Undated items keep feed order; dates in the future are treated as "now".
       const published = Math.min(it.publishedAt ?? now - index, now);
       const old = firstFetch && published < now - FIRST_FETCH_UNREAD_WINDOW_MS;
       return {
-        id: crypto.randomUUID(),
-        source_id: sourceId,
-        guid: it.guid,
-        url: it.url,
-        title: it.title,
-        author: it.author,
-        summary: it.summary,
-        image_url: it.imageUrl,
-        published_at: published,
-        fetched_at: now,
-        read: old ? 1 : 0,
-        saved: 0,
-        read_at: old ? now : null,
+        content: it.contentHtml,
+        row: {
+          id: crypto.randomUUID(),
+          source_id: sourceId,
+          guid: it.guid,
+          url: it.url,
+          title: it.title,
+          author: it.author,
+          summary: it.summary,
+          image_url: it.imageUrl,
+          published_at: published,
+          fetched_at: now,
+          read: old ? 1 : 0,
+          saved: 0,
+          read_at: old ? now : null,
+        },
       };
     });
+
     let inserted = 0;
-    for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
-      const res = await this.db.kysely
+    for (let i = 0; i < candidates.length; i += INSERT_CHUNK) {
+      let chunk = candidates.slice(i, i + INSERT_CHUNK).filter((c) => c.row.published_at >= cutoff);
+      if (!chunk.length) continue;
+      const removed = await this.db.kysely
+        .selectFrom("item_tombstones")
+        .select("guid")
+        .where("source_id", "=", sourceId)
+        .where("guid", "in", chunk.map((c) => c.row.guid))
+        .execute();
+      if (removed.length) {
+        const gone = new Set(removed.map((r) => r.guid));
+        chunk = chunk.filter((c) => !gone.has(c.row.guid));
+        if (!chunk.length) continue;
+      }
+      await this.db.kysely
         .insertInto("items")
-        .values(rows.slice(i, i + INSERT_CHUNK))
+        .values(chunk.map((c) => c.row))
         .onConflict((oc) => oc.columns(["source_id", "guid"]).doNothing())
-        .executeTakeFirst();
-      inserted += Number(res.numInsertedOrUpdatedRows ?? 0);
+        .execute();
+      // Which of our new IDs made it in (the rest were already known)?
+      const fresh = new Set(
+        (await this.db.kysely.selectFrom("items").select("id").where("id", "in", chunk.map((c) => c.row.id)).execute()).map((r) => r.id),
+      );
+      inserted += fresh.size;
+      const contents = chunk
+        .filter((c) => c.content && fresh.has(c.row.id))
+        .map((c) => ({ item_id: c.row.id, origin: "feed" as const, status: "raw" as const, html: c.content, error: null, fetched_at: now }));
+      if (contents.length) await this.db.kysely.insertInto("item_content").values(contents).execute();
     }
     return inserted;
+  }
+
+  /**
+   * Deletes unsaved items older than each source keeps (all sources, or one), remembering
+   * their IDs so the next check doesn't add them back. Returns how many were removed.
+   */
+  async applyRetention(onlySourceId?: string): Promise<number> {
+    const now = this.now();
+    let q = this.db.kysely.selectFrom("sources").select(["id", "retention_days"]);
+    if (onlySourceId) q = q.where("id", "=", onlySourceId);
+    let removed = 0;
+    for (const src of await q.execute()) {
+      const days = this.retentionDays(src);
+      if (days <= 0) continue;
+      const cutoff = now - days * 24 * 3_600_000;
+      const doomed = await this.db.kysely
+        .selectFrom("items")
+        .select(["id", "guid"])
+        .where("source_id", "=", src.id)
+        .where("saved", "=", 0)
+        .where("published_at", "<", cutoff)
+        .execute();
+      for (let i = 0; i < doomed.length; i += 200) {
+        const batch = doomed.slice(i, i + 200);
+        await this.db.kysely.transaction().execute(async (trx) => {
+          await trx
+            .insertInto("item_tombstones")
+            .values(batch.map((d) => ({ source_id: src.id, guid: d.guid, deleted_at: now })))
+            .onConflict((oc) => oc.columns(["source_id", "guid"]).doNothing())
+            .execute();
+          await trx.deleteFrom("item_content").where("item_id", "in", batch.map((d) => d.id)).execute();
+          await trx.deleteFrom("items").where("id", "in", batch.map((d) => d.id)).execute();
+        });
+      }
+      removed += doomed.length;
+    }
+    // Feeds don't keep items for long; forget tombstones after ~13 months.
+    await this.db.kysely.deleteFrom("item_tombstones").where("deleted_at", "<", now - 400 * 24 * 3_600_000).execute();
+    if (removed) this.log?.info({ removed, sourceId: onlySourceId }, "retention removed old items");
+    return removed;
   }
 
   /** Sources whose next check is due, oldest first. */
@@ -374,14 +453,15 @@ export class FeedService {
 
   async listSources(): Promise<Source[]> {
     const rows = await this.db.kysely.selectFrom("sources").selectAll().orderBy("title").execute();
-    const counts = await this.counts();
-    return rows.map((r) => this.toSource(r, counts.get(r.id)));
+    const [counts, tags] = await Promise.all([this.counts(), this.tagsBySource()]);
+    return rows.map((r) => this.toSource(r, counts.get(r.id), tags.get(r.id)));
   }
 
   async getSource(id: string): Promise<Source | undefined> {
     const row = await this.db.kysely.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return undefined;
-    return this.toSource(row, (await this.counts(id)).get(id));
+    const [counts, tags] = await Promise.all([this.counts(id), this.tagsBySource(id)]);
+    return this.toSource(row, counts.get(id), tags.get(id));
   }
 
   async updateSource(id: string, patch: UpdateSourceRequest): Promise<Source> {
@@ -390,6 +470,27 @@ export class FeedService {
     const set: Partial<SourceRow> = { updated_at: this.now() };
     if (patch.title !== undefined) set.title = patch.title;
     if (patch.pollIntervalMinutes !== undefined) set.poll_interval_minutes = patch.pollIntervalMinutes;
+    if (patch.retentionDays !== undefined) set.retention_days = patch.retentionDays;
+
+    // A new address is checked before anything is saved; existing items are kept.
+    let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
+    if (patch.url !== undefined && patch.url !== row.feed_url && patch.url !== row.site_url) {
+      try {
+        moved = await this.resolve(patch.url);
+      } catch (err) {
+        if (err instanceof SourceError) this.log?.warn({ input: patch.url, code: err.code, reason: err.message }, "could not change source address");
+        throw err;
+      }
+      if (moved.feedUrl !== row.feed_url) {
+        const clash = await this.db.kysely.selectFrom("sources").select("title").where("feed_url", "=", moved.feedUrl).where("id", "!=", id).executeTakeFirst();
+        if (clash) throw new SourceError("duplicate", `That feed is already followed as “${clash.title}”.`, 409);
+      }
+      set.feed_url = moved.feedUrl;
+      set.site_url = moved.siteUrl;
+      set.kind = moved.kind;
+      set.etag = null;
+      set.last_modified = null;
+    }
     if (patch.enabled === false) {
       set.enabled = 0;
       set.status = "paused";
@@ -404,12 +505,55 @@ export class FeedService {
       set.last_error = null;
     }
     await this.db.kysely.updateTable("sources").set(set).where("id", "=", id).execute();
+    if (patch.tags !== undefined) await this.setTags(id, patch.tags);
+    if (moved) {
+      await this.ingest(id, moved.parsed, true);
+      await this.recordSuccess(id, this.now(), null, null, { ...row, ...set } as SourceRow);
+    }
+    if (patch.retentionDays !== undefined) await this.applyRetention(id);
     return (await this.getSource(id))!;
   }
 
+  private async setTags(sourceId: string, tags: string[]): Promise<void> {
+    await this.db.kysely.transaction().execute(async (trx) => {
+      await trx.deleteFrom("source_tags").where("source_id", "=", sourceId).execute();
+      if (tags.length) await trx.insertInto("source_tags").values(tags.map((tag) => ({ source_id: sourceId, tag }))).execute();
+    });
+  }
+
+  private async tagsBySource(onlyId?: string): Promise<Map<string, string[]>> {
+    let q = this.db.kysely.selectFrom("source_tags").select(["source_id", "tag"]).orderBy("tag");
+    if (onlyId) q = q.where("source_id", "=", onlyId);
+    const map = new Map<string, string[]>();
+    for (const r of await q.execute()) map.set(r.source_id, [...(map.get(r.source_id) ?? []), r.tag]);
+    return map;
+  }
+
+  /** All tags in use, with how many sources use each and how many unread items they cover. */
+  async listTags(): Promise<TagCount[]> {
+    const rows = await this.db.kysely
+      .selectFrom("source_tags")
+      .leftJoin("items", (j) => j.onRef("items.source_id", "=", "source_tags.source_id").on("items.read", "=", 0))
+      .select((eb) => [
+        "source_tags.tag",
+        eb.fn.count<number>("source_tags.source_id").distinct().as("sources"),
+        eb.fn.count<number>("items.id").as("unread"),
+      ])
+      .groupBy("source_tags.tag")
+      .orderBy("source_tags.tag")
+      .execute();
+    return rows.map((r) => ({ tag: r.tag, sources: Number(r.sources), unread: Number(r.unread) }));
+  }
+
   async removeSource(id: string): Promise<boolean> {
-    // Items go with it (ON DELETE CASCADE, plus explicitly for SQLite setups without FK enforcement).
+    // Everything goes with it (ON DELETE CASCADE, plus explicitly in case FKs aren't enforced).
+    await this.db.kysely
+      .deleteFrom("item_content")
+      .where("item_id", "in", (eb) => eb.selectFrom("items").select("id").where("source_id", "=", id))
+      .execute();
     await this.db.kysely.deleteFrom("items").where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("source_tags").where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("item_tombstones").where("source_id", "=", id).execute();
     const res = await this.db.kysely.deleteFrom("sources").where("id", "=", id).executeTakeFirst();
     return Number(res.numDeletedRows) > 0;
   }
@@ -428,7 +572,7 @@ export class FeedService {
     return new Map(rows.map((r) => [r.source_id, { total: Number(r.total), unread: Number(r.unread ?? 0) }]));
   }
 
-  private toSource(r: SourceRow, c?: { total: number; unread: number }): Source {
+  private toSource(r: SourceRow, c?: { total: number; unread: number }, tags: string[] = []): Source {
     return {
       id: r.id,
       kind: r.kind,
@@ -442,6 +586,8 @@ export class FeedService {
       lastSuccessAt: r.last_success_at,
       nextCheckAt: r.next_check_at,
       pollIntervalMinutes: r.poll_interval_minutes,
+      retentionDays: r.retention_days,
+      tags,
       unreadCount: c?.unread ?? 0,
       itemCount: c?.total ?? 0,
       createdAt: r.created_at,

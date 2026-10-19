@@ -11,8 +11,8 @@ _Last updated: 2026-10-19 (after first real use)_
 | | |
 |---|---|
 | **Usable as a feed reader?** | **Partly.** Running on your Pi; regular RSS works (tested with NPR). **YouTube and Reddit links failed** in your first test. |
-| **Current milestone** | M1.1: fix YouTube/Reddit, plus tags, editing sources and a reader view (requested 2026-10-19) |
-| **Blocked on** | The error messages from the YouTube/Reddit attempts; your answers on the M1.1 questions |
+| **Current milestone** | M1.1 built ✅: tags, editing sources, reader view, per-source retention, Reddit/YouTube fixes. Waiting on merge + your retest |
+| **Blocked on** | Merging the branch; your retry of YouTube/Reddit on the Pi |
 | **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main` (includes M1) |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
@@ -53,10 +53,12 @@ new items appear on your phone.
 Goal: YouTube and Reddit work, sources can be organised and edited, and articles can be read inside the app.
 - 🔄 **Fix: YouTube links don't add.** Diagnosed with one request to your channel page (`@ImKibitz`): YouTube redirects the app to its mobile site, and the app *does* find the channel there. So the failure is fetching the channel's feed from your Pi. Done: uses the feed the page advertises, accepts a bare `UC…` ID, detects consent pages, gives a specific error, and logs failures to `docker logs`. ⏳ Needs your retry on the Pi to see YouTube's actual answer
 - 🔄 **Fix: Reddit links don't add.** Cause 1 (fixed): `old.reddit.com/r/…` is a web page, not a feed, and old.reddit's robots.txt disallows all bots. Links on any Reddit host now map to `https://www.reddit.com/r/<name>/.rss`. Cause 2 (Reddit's choice): Reddit blocked this cloud server outright ("blocked due to a network policy… register or sign in with your developer credentials"). Your home IP may fare better; if not, the app now says so plainly, and Reddit via your own account stays in M5. ⏳ Needs your retry on the Pi
-- ⏳ **Tags on sources**, shown on every item, with a filter by tag. Editing tags applies to existing items too
-- ⏳ **Edit a source**: name, tags, address (re-checked when changed), check interval
-- ⏳ **Reader view**: open an item inside the app (article text, or the video for YouTube), then go to the next/previous item with buttons, a swipe on the phone or the keyboard
-- ⛔ Design questions for these (see "Waiting on you")
+- ✅ **Tags on sources**, shown on every item, with a filter by tag (dropdown or tap a tag). Editing tags applies to existing items too (D-056)
+- ✅ **Edit a source**: name, address (re-checked before saving, items kept), tags, check interval, keep-items (D-057)
+- ✅ **Reader view**: tap an item to read it in the app (feed full text, extracted article, or the YouTube video); Next/Prev buttons, swipe, ←/→ or j/k; Back closes (D-058, D-059)
+- ✅ **Retention per source** ("keep items for"; saved items never deleted; removed items not re-added) (D-055)
+- ✅ Tests: 122 automated (SQLite + Postgres) and a browser run-through (phone + desktop) covering every flow above
+- 💤 Not yet: per-item tags, hiding YouTube Shorts, a global retention/interval setting in the UI (it's in `config.yaml`)
 
 ### M2: Forums 💤 *(needs your input first)*
 Goal: follow forum boards and threads, including members-only content.
@@ -102,8 +104,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | After the fix is merged: retry `@ImKibitz` and `old.reddit.com/r/overclocking/` on the Pi; send the red message (or `docker logs forumaggregator \| grep "could not add"`) if either still fails | M1.1 fixes |
-| 2 | Answers to the M1.1 design questions (tags, editing, reader) | M1.1 features |
+| 1 | Merge the branch (or ask me to open the PR) | M1.1 on your Pi |
+| 2 | Retry `@ImKibitz` and `old.reddit.com/r/overclocking/` on the Pi; send the red message (or `docker logs forumaggregator 2>&1 \| grep "could not add"`) if either still fails | M1.1 sign-off |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |
 | 5 | Email notifications as a forum fallback: yes or no | M2 |
@@ -112,6 +114,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
+| 2026-10-19 | M1.1: tags, edit source, reader view, per-source retention, Reddit/YouTube fixes | branch, unmerged |
 | 2026-10-19 | First real install on the Pi (NPR RSS works; YouTube/Reddit failed) | your Pi |
 | 2026-10-19 | M1: RSS/Atom + YouTube sources, scheduler, feed and sources screens | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |
 | 2026-10-11 | ROADMAP.md progress tracker | [#3](https://github.com/AlexStapleton/ForumAggregator/pull/3) |

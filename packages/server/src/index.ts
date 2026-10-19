@@ -25,7 +25,7 @@ async function main() {
   const db = openDb({ databaseUrl: env.DATABASE_URL, dataDir: env.DATA_DIR });
   const applied = await migrate(db);
 
-  const { fastify, auth, poller } = await buildApp({ env, secretKey: secret.key, config, db });
+  const { fastify, auth, poller, feeds } = await buildApp({ env, secretKey: secret.key, config, db });
   const log = fastify.log;
   if (secret.source === "generated") {
     log.warn({ file: secret.file }, "generated a new encryption key; keep it with your backups of the data folder");
@@ -57,12 +57,21 @@ async function main() {
   }, 60 * 60 * 1000);
   purge.unref();
 
+  // Retention: delete unsaved items older than each source keeps (DESIGN §3, D-055).
+  const runRetention = () => void feeds.applyRetention().catch((err) => log.error({ err }, "retention failed"));
+  const retentionStart = setTimeout(runRetention, 5 * 60 * 1000);
+  retentionStart.unref();
+  const retention = setInterval(runRetention, 60 * 60 * 1000);
+  retention.unref();
+
   let closing = false;
   const shutdown = async (signal: string) => {
     if (closing) return;
     closing = true;
     log.info({ signal }, "shutting down");
     clearInterval(purge);
+    clearTimeout(retentionStart);
+    clearInterval(retention);
     poller.stop();
     await fastify.close();
     await db.close();

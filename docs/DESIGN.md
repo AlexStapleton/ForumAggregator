@@ -1,6 +1,6 @@
 # ForumAggregator — Design
 
-Status: **v0.5** (2026-10-19). M0 is released. M1 (RSS/Atom and YouTube reader) is built. Progress: [ROADMAP.md](ROADMAP.md). This document records
+Status: **v0.6** (2026-10-19). M0 and M1 are released; M1.1 (tags, editing, reader, retention) is built. Progress: [ROADMAP.md](ROADMAP.md). This document records
 what we want, the decisions made so far, and the questions still open.
 Decisions are logged in [DECISIONS.md](DECISIONS.md).
 
@@ -269,6 +269,23 @@ example. Forum page reading (M2) is crawling, and does follow robots.txt.
 
 - **YouTube, specific creators (built in M1):** I paste a channel URL, `@handle`, `/user/…` or playlist link. The app finds the channel ID (from the channel page for handles) and follows the channel's public feed (`/feeds/videos.xml?channel_id=…`). No login or API key needed. Cards show the video thumbnail. The feed only lists a channel's ~15 newest videos, which is fine when checking every 30–60 minutes. *Hiding Shorts is not built yet.*
 - **Reddit:** Phase 2, after YouTube. Reddit's API now appears to need approval even for personal use (not confirmed). Fallbacks: subreddit RSS feeds, or a logged-in session using login method B.
+
+---
+
+### Tags, editing, reader and retention (M1.1)
+
+- **Tags** belong to sources (several each). Items show their source's tags, looked up when
+  listed, so editing a source's tags re-labels its old items too. The feed filters by tag (D-056).
+- **Editing** a source changes its name, address, tags, check interval and "keep items for". A
+  new address is checked before it's saved; existing items stay (D-057).
+- **Reader:** tapping an item opens it full-screen inside the app, in the current list's order.
+  Next/Prev, swipe, keys; Back closes. It shows the YouTube video, the feed's own full text, or
+  the article extracted from the page ("reader mode", fetched once when opened and cached), or
+  the summary with a reason when the site blocks it or it's paywalled (D-058). All HTML is
+  sanitised on the server against an allow-list (D-059).
+- **Retention:** per source "keep items for N days" (default from `config.yaml`, which defaults
+  to forever). Saved items are never deleted; removed items are remembered so feeds can't
+  re-add them (D-055).
 
 ---
 

@@ -46,6 +46,7 @@ describe("parseFeed", () => {
       summary: "Got -100mV stable & cooler.",
       imageUrl: "https://forum.example/img/100.jpg",
       publishedAt: Date.UTC(2026, 9, 10, 18, 30),
+      contentHtml: null, // only a short description: not full text
     });
     // Number-like title stays a string; relative link resolved; bad date → null; image enclosure.
     expect(b).toMatchObject({ title: "1080", url: "https://forum.example/threads/relative.101/", publishedAt: null, imageUrl: "https://forum.example/img/101.png" });
@@ -83,6 +84,17 @@ describe("parseFeed", () => {
     const feed = parseFeed(fixture("rdf.xml"));
     expect(feed).toMatchObject({ format: "rdf", title: "Old School" });
     expect(feed.items[0]).toMatchObject({ guid: "https://old.example/a", author: "someone", publishedAt: Date.UTC(2026, 9, 1, 12) });
+  });
+
+  it("keeps full article HTML only when the feed carries more than a teaser", () => {
+    const long = "<p>" + "Full article text. ".repeat(40) + "</p>";
+    const xml = `<?xml version="1.0"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>T</title>
+      <item><guid>1</guid><title>Long</title><description>Short teaser</description><content:encoded><![CDATA[${long}]]></content:encoded></item>
+      <item><guid>2</guid><title>Short</title><description>Just a teaser</description></item></channel></rss>`;
+    const [a, b] = parseFeed(xml).items;
+    expect(a!.contentHtml).toBe(long);
+    expect(a!.summary).toBe("Short teaser");
+    expect(b!.contentHtml).toBeNull();
   });
 
   it("rejects non-feeds and entity bombs", () => {

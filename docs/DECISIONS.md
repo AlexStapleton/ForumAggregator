@@ -2,6 +2,19 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 8: tags, editing, reader, retention)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-055 | **Retention per source.** "Keep items for": Default / Forever / 7 / 30 / 90 / 365 days. Default follows `config.yaml` `retention.keepDays` (0 = forever). Saved items are never deleted; read and unread unsaved items older than the limit are. Removed items are remembered (tombstones, kept ~13 months) and items older than the limit are skipped at ingest, so they're not re-added. Runs 5 min after start, then hourly, and immediately when a source's setting changes; the UI confirms before shrinking | User asked for per-source retention + Claude | A news source may only be worth a week; a forum board forever. Without tombstones, feeds that still list old items would re-add them as unread |
+| D-056 | **Tags on sources** (several per source, normalised: lower case, dashes for spaces, max 30 chars, max 12). Items show their source's tags, looked up when listed, so editing tags applies to existing items. Filter by tag in the feed; tapping a tag chip filters. No per-item tags for now | User + defaults accepted | Says what a story is about and where it's from; retroactive by design |
+| D-057 | **Edit a source:** name, address, tags, check interval, keep-items. A new address is resolved and checked before saving; existing items are kept and new ones join them; a feed already followed elsewhere is refused | User + defaults accepted | Feeds move; losing history would be worse |
+| D-058 | **Reader:** tapping an item opens it in-app. Order = the current list, including read items. Next/Prev by buttons, horizontal swipe (> 70 px, mostly sideways), ←/→ or j/k; Esc or Back closes; `s` saves. Opening marks read. Content priority: YouTube embed → the feed's own full text (≥ 500 chars) → the article page extracted with Mozilla Readability (fetched once on open, cached) → summary + a notice saying why. Failed pages aren't retried for 24 h | User + defaults accepted | One place to read; respectful of sites (no prefetching of pages, failures not hammered) |
+| D-059 | **Reader security:** article/feed HTML is sanitised on the server with DOMPurify and an allow-list (formatting, tables, figures; no scripts, styles, iframes, forms, event handlers, data-attributes); links are http(s) only and open in a new tab with `noopener noreferrer nofollow`; images must be https and load with `no-referrer`. The page CSP still blocks inline scripts. CSP `frame-src` allows only `www.youtube-nocookie.com`; the embed iframe sends `strict-origin-when-cross-origin` because YouTube's player needs the embedding origin | Claude | Showing other sites' HTML is the main new risk; defence in depth |
+| D-060 | Fetching an article page when the user opens it is user-initiated (like a browser), not crawling (consistent with D-045). Bot checks are still never worked around; the reader falls back to the summary | Claude | Same line as feeds |
+| D-061 | New dependencies: `jsdom` 29 (pinned below 30, which needs Node ≥ 22.22.2), `@mozilla/readability`, `dompurify`. Idle memory in the container ~128 MB (was ~70–100 MB) | Claude | Proven libraries for the riskiest part; fine on a 4 GB Pi |
+| D-062 | Form fields get unique IDs (`useId`). The end-to-end test found the add and edit forms sharing `f-tags`, which sent the "Tags" label to the wrong box | Claude | Accessibility and correctness |
+
 ## 2026-10-19 (round 7: first real use)
 
 | ID | Decision | Source | Rationale |

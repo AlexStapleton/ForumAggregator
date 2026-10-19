@@ -96,6 +96,43 @@ const migrations: Record<string, Migration> = {
       await db.schema.dropTable("sources").execute();
     },
   },
+  "0003_tags_reader_retention": {
+    async up(db: Kysely<any>) {
+      await db.schema.alterTable("sources").addColumn("retention_days", "integer").execute();
+
+      await db.schema
+        .createTable("source_tags")
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("tag", "text", (c) => c.notNull())
+        .addPrimaryKeyConstraint("source_tags_pk", ["source_id", "tag"])
+        .execute();
+      await db.schema.createIndex("source_tags_tag").on("source_tags").column("tag").execute();
+
+      await db.schema
+        .createTable("item_content")
+        .addColumn("item_id", "text", (c) => c.primaryKey().references("items.id").onDelete("cascade"))
+        .addColumn("origin", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("html", "text")
+        .addColumn("error", "text")
+        .addColumn("fetched_at", "bigint", (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable("item_tombstones")
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("guid", "text", (c) => c.notNull())
+        .addColumn("deleted_at", "bigint", (c) => c.notNull())
+        .addPrimaryKeyConstraint("item_tombstones_pk", ["source_id", "guid"])
+        .execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.dropTable("item_tombstones").execute();
+      await db.schema.dropTable("item_content").execute();
+      await db.schema.dropTable("source_tags").execute();
+      await db.schema.alterTable("sources").dropColumn("retention_days").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {
