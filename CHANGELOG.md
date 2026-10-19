@@ -1,0 +1,54 @@
+# Changelog
+
+All notable changes to ForumAggregator. Versions follow [Semantic Versioning](https://semver.org/).
+Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/forumaggregator:<version>`
+(amd64 + arm64).
+
+## [1.0.0] - 2026-10-19
+
+First release: a self-hosted, single-user feed reader for RSS/Atom feeds, YouTube channels and
+forum board RSS, with an in-app reader.
+
+### Install
+```bash
+curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/v1.0.0/docker-compose.yml
+docker compose up -d
+docker logs forumaggregator   # first-run setup code
+```
+Or pin the image: `alexstapo/forumaggregator:1.0.0`. See [docs/DEPLOY.md](docs/DEPLOY.md).
+
+### Features
+- **Sources:** add a feed URL, a website (its feed is discovered), a YouTube channel link /
+  `@handle` / channel ID / playlist, or a Reddit link (mapped to its `.rss` feed). RSS 2.0,
+  RSS 1.0 and Atom.
+- **Feed:** Unread / All / Saved, filter by source or tag, newest first, mark read, save,
+  "mark all read" (only what's on screen), paging.
+- **Reader:** tap an item to read it in the app: YouTube video, the feed's full text, or the
+  article extracted from the page; Next/Prev via buttons, swipe or keys; summary + reason when a
+  site blocks it or it's paywalled.
+- **Tags** on sources, applied to their items (edits apply retroactively).
+- **Edit sources:** name, address (re-checked, items kept), tags, check interval, keep-items.
+- **Retention** per source ("keep items for" N days or forever); saved items never deleted.
+- **Polite fetching:** honest User-Agent, ETag/304, per-site spacing, backoff, pause after 5
+  failures; bot checks are never worked around.
+- **Security:** first-run setup code, Argon2id passwords, optional TOTP 2FA, rate-limited login,
+  CSRF protection, CSP, server-side HTML sanitising for the reader, optional SSO header
+  (Authelia/Authentik).
+- **Deployment:** one container, one port, zero configuration (generated key, automatic data
+  folder permissions); SQLite by default, Postgres optional; x86-64 and Raspberry Pi (arm64).
+- **Diagnostics:** `check-sites` tool for what each forum allows from your server; failed
+  source additions are logged.
+
+### Known limitations
+- **YouTube and Reddit** are untested on a real install. The first attempts failed; fixes are
+  included but await a retest. Reddit may refuse unregistered apps (Reddit-account support is
+  planned).
+- **Forums** are readable only through their board RSS feeds; reading threads and pages
+  directly (M2) is not in 1.0.
+- **Not yet in the UI:** per-item tags, hiding YouTube Shorts, global interval and retention
+  defaults (set them in `config.yaml`), installing as a phone app (PWA).
+- Tested end to end on amd64. First real install confirmed RSS works (NPR); the arm64 (Raspberry Pi) image is built by CI but not yet confirmed on a Pi.
+
+### Upgrading from pre-release builds
+Installs that used a `.env` with `FA_SECRET_KEY` must keep it, or move the key into the data
+folder first (see the upgrade note in [docs/DEPLOY.md](docs/DEPLOY.md)).

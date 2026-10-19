@@ -20,7 +20,7 @@ export class ItemService {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async list(opts: { filter: ItemsFilter; sourceId?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
+  async list(opts: { filter: ItemsFilter; sourceId?: string; tag?: string; cursor?: string; limit?: number }): Promise<ItemsPage> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), MAX_LIMIT);
     let q = this.db.kysely
       .selectFrom("items")
@@ -42,6 +42,10 @@ export class ItemService {
     if (opts.filter === "unread") q = q.where("items.read", "=", 0);
     if (opts.filter === "saved") q = q.where("items.saved", "=", 1);
     if (opts.sourceId) q = q.where("items.source_id", "=", opts.sourceId);
+    const tag = opts.tag;
+    if (tag) {
+      q = q.where("items.source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
+    }
     const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
     if (cursor) {
       // Keyset pagination: strictly older than the last item of the previous page.
@@ -54,6 +58,13 @@ export class ItemService {
     }
     const rows = await q.orderBy("items.published_at", "desc").orderBy("items.id", "desc").limit(limit + 1).execute();
     const page = rows.slice(0, limit);
+    // Tags come from the source at read time, so editing a source's tags applies to old items too.
+    const sourceIds = [...new Set(page.map((r) => r.source_id))];
+    const tagRows = sourceIds.length
+      ? await this.db.kysely.selectFrom("source_tags").select(["source_id", "tag"]).where("source_id", "in", sourceIds).orderBy("tag").execute()
+      : [];
+    const tagsBySource = new Map<string, string[]>();
+    for (const t of tagRows) tagsBySource.set(t.source_id, [...(tagsBySource.get(t.source_id) ?? []), t.tag]);
     const items: FeedItem[] = page.map((r) => ({
       id: r.id,
       sourceId: r.source_id,
@@ -67,6 +78,7 @@ export class ItemService {
       publishedAt: r.published_at,
       read: r.read === 1,
       saved: r.saved === 1,
+      tags: tagsBySource.get(r.source_id) ?? [],
     }));
     const last = page[page.length - 1];
     return { items, nextCursor: rows.length > limit && last ? encodeCursor(last.published_at, last.id) : null };

@@ -51,7 +51,7 @@ export interface VersionInfo {
 
 // ---- Sources and feed items (M1) -------------------------------------------------------
 
-export type SourceKind = "feed" | "youtube";
+export type SourceKind = "feed" | "youtube" | "reddit";
 
 /**
  * ok          last check succeeded
@@ -77,6 +77,9 @@ export interface Source {
   nextCheckAt: number | null;
   /** Per-source override; null = the default from config.yaml. */
   pollIntervalMinutes: number | null;
+  /** Days to keep unsaved items. null = the global default, 0 = forever. */
+  retentionDays: number | null;
+  tags: string[];
   unreadCount: number;
   itemCount: number;
   createdAt: number;
@@ -98,6 +101,8 @@ export interface FeedItem {
   publishedAt: number;
   read: boolean;
   saved: boolean;
+  /** The source's tags (so editing them applies to existing items too). */
+  tags: string[];
 }
 
 export interface ItemsPage {
@@ -107,3 +112,50 @@ export interface ItemsPage {
 }
 
 export type ItemsFilter = "unread" | "all" | "saved";
+
+export interface TagCount {
+  tag: string;
+  sources: number;
+  unread: number;
+}
+
+/** What the in-app reader shows for an item. */
+export interface ReaderContent {
+  itemId: string;
+  title: string;
+  url: string | null;
+  sourceTitle: string;
+  author: string | null;
+  publishedAt: number;
+  /**
+   * feed     full text that came with the feed
+   * page     extracted from the article page ("reader mode")
+   * video    a YouTube video to embed
+   * summary  only the feed summary is available (see `notice`)
+   */
+  kind: "feed" | "page" | "video" | "summary";
+  /** Sanitised HTML: only basic formatting, http(s) links and https images. */
+  html: string | null;
+  /** Plain-text summary from the feed. */
+  summary: string | null;
+  videoId: string | null;
+  /** Why only the summary is shown (blocked, paywall, …). */
+  notice: string | null;
+}
+
+/** Lower-case, dashes for spaces, only letters/digits/-/+/./#; max 30 characters. */
+export function normaliseTag(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^\p{L}\p{N}\-+.#]/gu, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 30);
+}
+
+export const MAX_TAGS = 12;
+
+/** Choices offered for "keep items for" (days; 0 = forever). */
+export const RETENTION_CHOICES = [0, 7, 30, 90, 365] as const;

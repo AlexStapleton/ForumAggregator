@@ -11,11 +11,17 @@ export function isYouTubeUrl(url: URL): boolean {
   return /(^|\.)youtube\.com$/i.test(url.hostname) || /(^|\.)youtu\.be$/i.test(url.hostname);
 }
 
-/** Turns "@handle" into a URL; leaves anything else alone. */
+/** Turns "@handle" or a bare channel ID ("UC…") into a URL; leaves anything else alone. */
 export function normaliseYouTubeInput(input: string): string {
   const trimmed = input.trim();
   if (/^@[A-Za-z0-9._-]{3,30}$/.test(trimmed)) return `https://www.youtube.com/${trimmed}`;
+  if (CHANNEL_ID.test(trimmed)) return `https://www.youtube.com/channel/${trimmed}`;
   return trimmed;
+}
+
+/** YouTube sends some visitors (e.g. in the EU) to a cookie-consent page first. */
+export function isConsentPage(finalUrl: string): boolean {
+  return /^https?:\/\/consent\.(youtube|google)\./i.test(finalUrl);
 }
 
 export type YouTubePlan =

@@ -20,6 +20,7 @@ import { ItemService } from "./feeds/items.js";
 import { Poller } from "./feeds/poller.js";
 import { registerFeedRoutes } from "./feeds/routes.js";
 import { FeedService } from "./feeds/service.js";
+import { ReaderService } from "./reader/service.js";
 
 export interface AppDeps {
   env: Env;
@@ -74,6 +75,8 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
         // Feed images (e.g. YouTube thumbnails). Only http(s) URLs are ever stored (feeds/text.ts).
         imgSrc: ["'self'", "data:", "https:"],
         connectSrc: ["'self'"],
+        // The reader embeds YouTube videos from the privacy-enhanced domain only.
+        frameSrc: ["https://www.youtube-nocookie.com"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
@@ -97,17 +100,13 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
 
   registerAuth(fastify, env, auth);
 
-  const feeds = new FeedService(
-    db,
-    config,
-    fetcher ?? httpFetch,
-    limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000),
-    now,
-    fastify.log,
-  );
+  const sharedFetcher = fetcher ?? httpFetch;
+  const sharedLimiter = limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000);
+  const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log);
   const items = new ItemService(db, now);
+  const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now);
   const poller = new Poller(feeds, fastify.log);
-  registerFeedRoutes(fastify, feeds, items);
+  registerFeedRoutes(fastify, feeds, items, reader);
 
   fastify.get("/healthz", async (_request, reply) => {
     try {

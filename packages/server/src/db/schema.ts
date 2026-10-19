@@ -33,7 +33,7 @@ export interface SettingsTable {
 
 export interface SourcesTable {
   id: string;
-  kind: "feed" | "youtube";
+  kind: "feed" | "youtube" | "reddit";
   title: string;
   site_url: string | null;
   feed_url: string;
@@ -45,6 +45,8 @@ export interface SourcesTable {
   last_success_at: number | null;
   next_check_at: number | null;
   poll_interval_minutes: number | null;
+  /** Days to keep unsaved items; null = global default, 0 = forever. */
+  retention_days: number | null;
   /** HTTP validators for conditional requests (304 Not Modified). */
   etag: string | null;
   last_modified: string | null;
@@ -69,10 +71,37 @@ export interface ItemsTable {
   read_at: number | null;
 }
 
+export interface SourceTagsTable {
+  source_id: string;
+  tag: string;
+}
+
+/** Full text for the reader: from the feed (raw until first shown) or extracted from the page. */
+export interface ItemContentTable {
+  item_id: string;
+  /** feed = came with the feed; page = extracted from the article page. */
+  origin: "feed" | "page";
+  /** raw = unsanitised feed HTML; ok = sanitised and ready; failed = couldn't get it. */
+  status: "raw" | "ok" | "failed";
+  html: string | null;
+  error: string | null;
+  fetched_at: number;
+}
+
+/** Items removed by retention, so a later check doesn't add them back as new. */
+export interface ItemTombstonesTable {
+  source_id: string;
+  guid: string;
+  deleted_at: number;
+}
+
 export interface Database {
   users: UsersTable;
   sessions: SessionsTable;
   settings: SettingsTable;
   sources: SourcesTable;
   items: ItemsTable;
+  source_tags: SourceTagsTable;
+  item_content: ItemContentTable;
+  item_tombstones: ItemTombstonesTable;
 }

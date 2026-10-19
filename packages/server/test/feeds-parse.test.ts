@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { discoverFeeds } from "../src/feeds/discover.js";
 import { FeedParseError, looksLikeFeed, parseFeed } from "../src/feeds/parse.js";
 import { htmlToText, safeHttpUrl, truncate } from "../src/feeds/text.js";
-import { channelIdFromPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
+import { planReddit } from "../src/feeds/reddit.js";
+import { channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
 
 const fixture = (name: string) => fs.readFileSync(path.join(import.meta.dirname, "fixtures/feeds", name), "utf8");
 
@@ -45,6 +46,7 @@ describe("parseFeed", () => {
       summary: "Got -100mV stable & cooler.",
       imageUrl: "https://forum.example/img/100.jpg",
       publishedAt: Date.UTC(2026, 9, 10, 18, 30),
+      contentHtml: null, // only a short description: not full text
     });
     // Number-like title stays a string; relative link resolved; bad date → null; image enclosure.
     expect(b).toMatchObject({ title: "1080", url: "https://forum.example/threads/relative.101/", publishedAt: null, imageUrl: "https://forum.example/img/101.png" });
@@ -82,6 +84,17 @@ describe("parseFeed", () => {
     const feed = parseFeed(fixture("rdf.xml"));
     expect(feed).toMatchObject({ format: "rdf", title: "Old School" });
     expect(feed.items[0]).toMatchObject({ guid: "https://old.example/a", author: "someone", publishedAt: Date.UTC(2026, 9, 1, 12) });
+  });
+
+  it("keeps full article HTML only when the feed carries more than a teaser", () => {
+    const long = "<p>" + "Full article text. ".repeat(40) + "</p>";
+    const xml = `<?xml version="1.0"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>T</title>
+      <item><guid>1</guid><title>Long</title><description>Short teaser</description><content:encoded><![CDATA[${long}]]></content:encoded></item>
+      <item><guid>2</guid><title>Short</title><description>Just a teaser</description></item></channel></rss>`;
+    const [a, b] = parseFeed(xml).items;
+    expect(a!.contentHtml).toBe(long);
+    expect(a!.summary).toBe("Short teaser");
+    expect(b!.contentHtml).toBeNull();
   });
 
   it("rejects non-feeds and entity bombs", () => {
@@ -131,5 +144,31 @@ describe("YouTube", () => {
     expect(channelIdFromPage('<link rel="canonical" href="https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv">')).toBe("UCabcdefghijklmnopqrstuv");
     expect(channelIdFromPage('..."externalId":"UCabcdefghijklmnopqrstuv",...')).toBe("UCabcdefghijklmnopqrstuv");
     expect(channelIdFromPage("<html>nothing</html>")).toBeNull();
+  });
+});
+
+describe("Reddit", () => {
+  const plan = (u: string) => planReddit(new URL(u));
+  it("maps subreddit and user links on any Reddit host to the www .rss feed", () => {
+    expect(plan("https://old.reddit.com/r/overclocking/")).toEqual({
+      feedUrl: "https://www.reddit.com/r/overclocking/.rss",
+      siteUrl: "https://www.reddit.com/r/overclocking/",
+    });
+    expect(plan("https://www.reddit.com/r/overclocking/comments/abc/x/")?.feedUrl).toBe("https://www.reddit.com/r/overclocking/.rss");
+    expect(plan("https://new.reddit.com/u/someone")?.feedUrl).toBe("https://www.reddit.com/user/someone/.rss");
+    expect(plan("https://old.reddit.com/r/overclocking/.rss")).toEqual({
+      feedUrl: "https://www.reddit.com/r/overclocking/.rss",
+      siteUrl: "https://www.reddit.com/r/overclocking/",
+    });
+    expect(plan("https://www.reddit.com/")).toBeNull();
+    expect(plan("https://notreddit.com/r/x")).toBeNull();
+  });
+});
+
+describe("YouTube input", () => {
+  it("accepts a bare channel ID and spots consent pages", () => {
+    expect(normaliseYouTubeInput("UCz9qw5nupdzCGwHwQiqs7qA")).toBe("https://www.youtube.com/channel/UCz9qw5nupdzCGwHwQiqs7qA");
+    expect(isConsentPage("https://consent.youtube.com/m?continue=x")).toBe(true);
+    expect(isConsentPage("https://m.youtube.com/@x")).toBe(false);
   });
 });

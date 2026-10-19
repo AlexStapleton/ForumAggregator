@@ -11,6 +11,11 @@ export interface ParsedItem {
   imageUrl: string | null;
   /** null when the feed gave no usable date. */
   publishedAt: number | null;
+  /**
+   * Full article HTML when the feed carries it (content:encoded / Atom content), else null.
+   * UNTRUSTED: only ever shown after reader/sanitize.ts has cleaned it.
+   */
+  contentHtml: string | null;
 }
 
 export interface ParsedFeed {
@@ -63,6 +68,16 @@ function cleanSummary(...values: unknown[]): string | null {
       const plain = htmlToText(t);
       if (plain) return truncate(plain, SUMMARY_MAX);
     }
+  }
+  return null;
+}
+
+/** Feed HTML worth showing in the reader: more than a teaser (>= 500 characters of text). */
+const FULL_TEXT_MIN = 500;
+function fullContent(...values: unknown[]): string | null {
+  for (const v of values) {
+    const t = text(v);
+    if (t && htmlToText(t).length >= FULL_TEXT_MIN) return t.slice(0, 500_000);
   }
   return null;
 }
@@ -150,6 +165,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           summary: cleanSummary(it.description, it["content:encoded"]),
           imageUrl: imageFrom(it, feedUrl),
           publishedAt: parseDate(it.pubDate, it["dc:date"], it.published, it.updated),
+          contentHtml: fullContent(it["content:encoded"], it.description),
         });
       })
       .filter((i): i is ParsedItem => i !== null);
@@ -173,6 +189,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           summary: cleanSummary(e.summary, e.content, group["media:description"]),
           imageUrl: imageFrom(e, feedUrl),
           publishedAt: parseDate(e.published, e.updated, e.issued, e.modified),
+          contentHtml: fullContent(e.content, e.summary),
         });
       })
       .filter((i): i is ParsedItem => i !== null);
@@ -195,6 +212,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           summary: cleanSummary(it.description, it["content:encoded"]),
           imageUrl: imageFrom(it, feedUrl),
           publishedAt: parseDate(it["dc:date"]),
+          contentHtml: fullContent(it["content:encoded"], it.description),
         });
       })
       .filter((i): i is ParsedItem => i !== null);

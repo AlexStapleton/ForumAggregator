@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ItemsFilter } from "@fa/shared";
 import { AddSourceRequest, MarkReadRequest, UpdateItemRequest, UpdateSourceRequest } from "@fa/shared/schemas";
 import { parseBody, sendError } from "../http.js";
+import type { ReaderService } from "../reader/service.js";
 import type { ItemService } from "./items.js";
 import { SourceError, type FeedService } from "./service.js";
 
@@ -10,7 +11,7 @@ function handleSourceError(reply: FastifyReply, err: unknown) {
   throw err;
 }
 
-export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, items: ItemService): void {
+export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, items: ItemService, reader: ReaderService): void {
   // ---- sources ----
   app.get("/api/sources", async () => feeds.listSources());
 
@@ -46,10 +47,24 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
   });
 
   // ---- items ----
-  app.get<{ Querystring: { filter?: string; sourceId?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
+  app.get("/api/tags", async () => feeds.listTags());
+
+  app.get<{ Querystring: { filter?: string; sourceId?: string; tag?: string; cursor?: string; limit?: string } }>("/api/items", async (request) => {
     const q = request.query;
     const filter: ItemsFilter = q.filter === "all" || q.filter === "saved" ? q.filter : "unread";
-    return items.list({ filter, sourceId: q.sourceId || undefined, cursor: q.cursor || undefined, limit: q.limit ? Number(q.limit) : undefined });
+    return items.list({
+      filter,
+      sourceId: q.sourceId || undefined,
+      tag: q.tag || undefined,
+      cursor: q.cursor || undefined,
+      limit: q.limit ? Number(q.limit) : undefined,
+    });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/items/:id/reader", async (request, reply) => {
+    const content = await reader.get(request.params.id);
+    if (!content) return sendError(reply, 404, "not_found", "Item not found");
+    return content;
   });
 
   app.patch<{ Params: { id: string } }>("/api/items/:id", async (request, reply) => {

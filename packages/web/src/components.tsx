@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 export function Field(props: {
   label: string;
@@ -12,7 +12,8 @@ export function Field(props: {
   inputMode?: "numeric" | "text";
   autoFocus?: boolean;
 }) {
-  const id = `f-${props.name}`;
+  // useId: unique even when two forms on a page have a field with the same name.
+  const id = `f-${props.name}-${useId().replace(/:/g, "")}`;
   return (
     <div className="field">
       <label htmlFor={id}>{props.label}</label>
