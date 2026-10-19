@@ -287,6 +287,23 @@ example. Forum page reading (M2) is crawling, and does follow robots.txt.
   to forever). Saved items are never deleted; removed items are remembered so feeds can't
   re-add them (D-055).
 
+### Layout, timeline, import/export and reader extras (M1.2)
+
+- **Layout per device** (Settings → This device, stored in the browser): *Automatic* shows the
+  list and the reader side by side at 1100 px and wider, *Side by side* from 760 px, *Full-screen
+  reader* always. Side by side keeps the list usable, highlights the open item and follows j/k
+  (D-070).
+- **Timeline:** items are grouped under day headings; Newest first / Oldest first is remembered
+  per device. `GET /api/items?order=oldest` pages forward in time with the same keyset cursor
+  (D-071).
+- **OPML** export/import at `/api/sources/opml`. Imports create "pending" sources and leave the
+  fetching to the scheduler (D-073).
+- **Reader selectors** per feed source: an article selector and a remove selector, run on the
+  original page before sanitising, with a preview endpoint
+  (`POST /api/sources/:id/reader-preview`) that saves nothing (D-074).
+- **Comments:** Reddit from the post's comments feed on request (D-065); YouTube top comments
+  through the YouTube Data API with the user's own key, stored encrypted (D-075).
+
 ---
 
 ## 10. Hardware: i3 server vs Raspberry Pi

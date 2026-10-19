@@ -22,6 +22,9 @@ of FreshRSS's docs rather than its official site, that's noted.
 
 ## Recommendations
 
+_Status (2026-10-19): 1 and 2 are built (D-073, D-074). 3 is planned for M2; 4 and 5 are on the
+roadmap under "Later"._
+
 **Adopt now (small, high value)**
 1. **OPML import/export** of sources (with tags as categories).
 2. **Per-source "article selector" for the reader**, plus "remove these elements" and a preview,

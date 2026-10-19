@@ -4,7 +4,7 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-10-19 (after first real use)_
+_Last updated: 2026-10-19 (M1.2 built)_
 
 ## Status at a glance
 
@@ -12,8 +12,8 @@ _Last updated: 2026-10-19 (after first real use)_
 |---|---|
 | **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
 | **Current release** | **v1.0.0** (2026-10-19), images `alexstapo/forumaggregator:1.0.0` |
-| **Current milestone** | M1.2: Reddit reader fixes + comments (built), then wide-screen layout, timeline view, FreshRSS comparison (requested 2026-10-19) |
-| **Blocked on** | Decisions on the layout/timeline/YouTube-comments questions; M2 inputs |
+| **Current milestone** | M1.2: built on the branch (layout, timeline, OPML, reader selectors, YouTube and Reddit comments); next release after your check |
+| **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
 
@@ -65,16 +65,20 @@ Goal: YouTube and Reddit work, sources can be organised and edited, and articles
 - ✅ Reddit comments in the reader, on demand (D-065); Reddit requests ≥ 10 s apart (D-066)
 - ✅ Forum thread links explained; board links read the board RSS directly (D-068)
 - ✅ Reader clean-up: NPR's embed snippet, toolbars, repeated headline (D-069). ⏳ Needs your check on the NPR item
-- ⏳ **Wide-screen layout:** list on the left, reader on the right, configurable, with the current full-screen reader kept as an option
-- ⏳ **Timeline view:** sort/group by publish date
-- ✅ **Compared with FreshRSS** ([FRESHRSS-COMPARISON.md](FRESHRSS-COMPARISON.md)); recommendations awaiting your pick
-- ⛔ **YouTube top comments**: YouTube has no comments feed; needs a YouTube Data API key (your decision)
+- ✅ **Wide-screen layout:** list on the left, reader on the right; Automatic / Side by side / Full-screen reader, per device (D-070)
+- ✅ **Timeline view:** day headings, Newest/Oldest first per device (D-071); "Mark all read" now respects the tag filter (D-072)
+- ✅ **Compared with FreshRSS** ([FRESHRSS-COMPARISON.md](FRESHRSS-COMPARISON.md)); you picked: OPML + reader selectors now, web-page sources with XenForo presets in M2, WebSub and a Google Reader API later
+- ✅ **OPML import/export** (D-073)
+- ✅ **Reader selectors per source**, with preview (D-074)
+- ✅ **YouTube top comments** with your own free API key (D-075). ⏳ Needs a real key to confirm against YouTube (tested against a fake API only)
+- ✅ Tests: 162 automated (SQLite + Postgres), plus browser run-throughs at phone and desktop widths
 
 ### M2: Forums 💤 *(needs your input first)*
 Goal: follow forum boards and threads, including members-only content.
 - ⛔ `check-sites` output from your server/Pi (what the forums allow from your IP)
 - ⛔ Saved example pages (forum list, board, thread) from each forum, attached in chat
 - ⛔ Decision: forum email notifications as a fallback (SITE-ACCESS.md option C)?
+- 💤 **"Web page" source type** with CSS selectors (item, title, link, date, author, content) and built-in **XenForo board/thread presets** (from the FreshRSS comparison)
 - 💤 XenForo reader: board discovery + your corrections, `new_threads` / `activity` / `all_posts`
 - 💤 Forum login (session reuse), "needs login" banner
 - 💤 Follow/mute a thread from a feed card
@@ -99,6 +103,7 @@ we've documented why a site can't and what we use instead.
 - 💤 "Catch me up" thread summaries, relevance scoring, daily digest (DESIGN §11)
 
 ### Later 💤
+- 💤 WebSub for YouTube (new videos within seconds, fewer polls) · Google Reader-compatible API (use existing Android feed apps)
 - 💤 Notifications · Android app wrapper · advanced rule builder
 
 ## Why the order changed (2026-10-11)
@@ -114,8 +119,9 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | Update the Pi: `docker compose pull && docker compose up -d` (or pin `alexstapo/forumaggregator:1.0.0`) | Using v1.0 |
-| 2 | Retry `@ImKibitz` and `old.reddit.com/r/overclocking/` on the Pi; send the red message (or `docker logs forumaggregator 2>&1 \| grep "could not add"`) if either still fails | M1.1 sign-off |
+| 1 | After the M1.2 PR is merged: `docker compose pull && docker compose up -d` (the `latest` image) | Trying M1.2 |
+| 2 | Check the NPR item that showed the broken iframe, and the new layout on your desktop and phone | M1.2 sign-off |
+| 2a | Optional: add a YouTube Data API key in Settings and open a video (confirms D-075 against the real API) | M1.2 sign-off |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output | M2 |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |
 | 5 | Email notifications as a forum fallback: yes or no | M2 |
@@ -124,6 +130,7 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
+| 2026-10-19 | M1.2: side-by-side layout, timeline, OPML, reader selectors, YouTube comments | branch, unmerged |
 | 2026-10-19 | Reddit reader fixes, Reddit comments, forum link handling | branch, unmerged |
 | 2026-10-19 | YouTube (`@ImKibitz`) and Reddit confirmed working on a real install | your server |
 | 2026-10-19 | **v1.0.0 released** | tag `v1.0.0` |
