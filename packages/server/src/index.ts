@@ -25,7 +25,7 @@ async function main() {
   const db = openDb({ databaseUrl: env.DATABASE_URL, dataDir: env.DATA_DIR });
   const applied = await migrate(db);
 
-  const { fastify, auth } = await buildApp({ env, secretKey: secret.key, config, db });
+  const { fastify, auth, poller } = await buildApp({ env, secretKey: secret.key, config, db });
   const log = fastify.log;
   if (secret.source === "generated") {
     log.warn({ file: secret.file }, "generated a new encryption key; keep it with your backups of the data folder");
@@ -63,6 +63,7 @@ async function main() {
     closing = true;
     log.info({ signal }, "shutting down");
     clearInterval(purge);
+    poller.stop();
     await fastify.close();
     await db.close();
     process.exit(0);
@@ -71,6 +72,7 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
   await fastify.listen({ port: env.PORT, host: env.HOST });
+  poller.start();
 }
 
 main().catch((err: Error) => {

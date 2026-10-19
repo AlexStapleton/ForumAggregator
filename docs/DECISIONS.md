@@ -2,6 +2,18 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 6: M1, the first usable reader)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-045 | robots.txt governs **crawling** (forum page reading, discovery). A feed the user explicitly subscribes to is fetched like in any feed reader, even where robots.txt lists it (YouTube lists `/feeds/videos.xml`). Bot checks are still never worked around. Claude doesn't fetch these feeds from the build environment; YouTube support is tested against a sample in YouTube's format | Claude | Standard feed-reader practice (Google's feed fetcher works the same way); YouTube publishes these feeds for readers. Refines D-037, which said "follows robots.txt" without that distinction |
+| D-046 | Sources are added and managed in the UI and stored in the database, not in config.yaml. config.yaml keeps the polling/retention defaults | Claude | Pasting a URL is easier than editing YAML; D-012's "settings screen later" happens first for sources |
+| D-047 | On a source's first fetch, items older than 7 days start as read | Claude | A new YouTube channel or blog would otherwise drop up to 15–50 old items into Unread |
+| D-048 | `read` / `saved` live on the item row; no separate ItemState table yet | Claude | Single user (D-013); simpler queries. A per-user table can come if multi-user ever happens |
+| D-049 | CSP allows `https:` images so YouTube thumbnails and feed images show. Only http(s) image URLs are stored, and they're loaded with `no-referrer`. Summaries are plain text; nothing from a feed is rendered as HTML | Claude | Thumbnails make YouTube usable; plain text removes the XSS risk from untrusted feeds |
+| D-050 | The "health view" is part of the Sources page (status, last error, last and next check per source) rather than a separate page | Claude | One place to see and fix a source |
+| D-051 | Scheduler: in-process, checks due sources one at a time every 15 s; per-host spacing via HostLimiter (5 s + jitter for scheduled checks, 1 s when adding interactively); ±10 % interval jitter; backoff 2× per failure up to 6 h; pause after 5 failures; ETag / Last-Modified | Claude | DESIGN §7, applied to feeds |
+
 ## 2026-10-11 (round 5: easier install)
 
 | ID | Decision | Source | Rationale |
@@ -9,7 +21,7 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 | D-040 | Zero-config install: `docker run` one-liner **and** a standalone `docker-compose.yml` (curl + `up -d`), both using a fixed-name volume `forumaggregator-data`. Optional `docker-compose.postgres.yml` | User ("much easier to set up", "compose as an option") + Claude | No `.env`, folders or keys before first start; options A and B share the same data |
 | D-041 | `FA_SECRET_KEY` becomes optional: if unset, a key is generated once into `/data/secret.key` (0600, created with an exclusive write so it's never overwritten). A truncated key file is an error, not silently replaced | Claude | Removes the only required setting. The key sits next to the data it protects, so volume backups include it |
 | D-042 | Entrypoint starts as root only to `chown` `/data` to `PUID:PGID` (default 1000:1000) when needed, then `setpriv` drops to that user with no capabilities and `no_new_privs`. With `user:`/`--user` it skips straight to the app | Claude | Bind mounts work without a manual chown; same PUID/PGID convention as linuxserver.io images. Supersedes "runs as uid 1000" in D-033 |
-| D-044 | *(proposed, awaiting OK)* Reorder: M1 = first usable reader on RSS/Atom (YouTube, Overclock.net boards, subreddits, sites) with the feed screen; forums move to M2. Progress tracked in ROADMAP.md, the single source of truth for milestones | Claude, after the user asked whether the app is usable and where the plan and tracker are | Forum work is blocked on user input; RSS gives a working app now without losing any planned scope |
+| D-044 | **Accepted 2026-10-19.** Reorder: M1 = first usable reader on RSS/Atom (YouTube, Overclock.net boards, subreddits, sites) with the feed screen; forums move to M2. Progress tracked in ROADMAP.md, the single source of truth for milestones | Claude, after the user asked whether the app is usable and where the plan and tracker are | Forum work is blocked on user input; RSS gives a working app now without losing any planned scope |
 | D-043 | First-run setup code also printed as a plain-text banner; tool and backup commands use `docker exec`/`docker stop`, which work for both install options. CI no longer publishes a `:main` tag | Claude | Easier to find in `docker logs`; fewer tags to confuse |
 
 ## 2026-10-11 (round 4: site access)

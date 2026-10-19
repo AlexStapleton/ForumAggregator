@@ -4,9 +4,10 @@ A self-hosted personal news feed. It follows the forum boards and threads, subre
 YouTube creators you choose, logs in to forums as you, filters by keywords, and lets you
 read everything in one place on desktop or phone.
 
-**Status: not usable as a feed reader yet.** The foundation (M0) is done: one-command Docker
-install, secure login with optional 2FA, reverse-proxy support. Following sources starts in M1.
-See the [roadmap](docs/ROADMAP.md).
+**Status: usable for RSS/Atom feeds and YouTube channels (M1).** Add YouTube creators, blogs,
+news sites or forum board RSS feeds on the Sources page and read them in one feed:
+unread / all / saved, newest first, on desktop or phone. Reading forum pages and threads
+directly is next (M2). Subreddit RSS may work but is untested. See the [roadmap](docs/ROADMAP.md).
 
 - [Roadmap and progress](docs/ROADMAP.md): what's done, what's next, what's blocked
 - [Design](docs/DESIGN.md): requirements, architecture, how each part works
@@ -31,8 +32,9 @@ curl -fsSLO https://raw.githubusercontent.com/AlexStapleton/ForumAggregator/main
 docker compose up -d
 ```
 
-Then run `docker logs forumaggregator` to get the first-run setup code, and open
-`http://<server-ip>:8080`. Runs on x86-64 and Raspberry Pi (arm64). HTTPS via Nginx Proxy
+Then run `docker logs forumaggregator` to get the first-run setup code, open
+`http://<server-ip>:8080`, create your account, and go to **Sources** to add what you follow:
+a YouTube channel link or `@handle`, a website, or a feed address. Runs on x86-64 and Raspberry Pi (arm64). HTTPS via Nginx Proxy
 Manager, Postgres, single sign-on and backups are covered in [DEPLOY.md](docs/DEPLOY.md).
 
 ## Development

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { buildApp } from "../src/app.js";
+import { HostLimiter, type Fetcher } from "../src/feeds/fetch.js";
 import { ConfigSchema } from "../src/config.js";
 import { migrate, openDb, type Db } from "../src/db/index.js";
 import { loadEnv } from "../src/env.js";
@@ -26,6 +27,7 @@ export async function createTestApp(
   backend: "sqlite" | "postgres",
   envOverrides: Record<string, string> = {},
   clock: { now: number } = { now: Date.now() },
+  deps: { fetcher?: Fetcher } = {},
 ) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fa-test-"));
   let databaseUrl: string | undefined;
@@ -44,7 +46,16 @@ export async function createTestApp(
   });
   const db: Db = openDb({ databaseUrl: env.DATABASE_URL, dataDir });
   await migrate(db);
-  const app = await buildApp({ env, secretKey: SECRET, config: ConfigSchema.parse({}), db, now: () => clock.now });
+  const app = await buildApp({
+    env,
+    secretKey: SECRET,
+    config: ConfigSchema.parse({}),
+    db,
+    now: () => clock.now,
+    fetcher: deps.fetcher,
+    // No waiting between requests in tests.
+    limiter: new HostLimiter(0, 0, async () => {}),
+  });
   await app.auth.initSetup(SETUP_CODE);
   return {
     ...app,

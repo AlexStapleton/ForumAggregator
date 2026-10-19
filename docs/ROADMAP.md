@@ -4,22 +4,22 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-10-11_
+_Last updated: 2026-10-19_
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Usable as a feed reader?** | **No.** It installs, you can create an account and log in, but it can't follow anything yet. |
-| **Current milestone** | M1 (first usable reader), *proposed order, awaiting your OK* |
-| **Blocked on** | Your go-ahead for the new order; first sources to test with (YouTube creators, subreddits, sites) |
-| **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main` |
+| **Usable as a feed reader?** | **Yes, for RSS/Atom feeds and YouTube channels** (M1, on branch `claude/gifted-gauss-3lnq4v` until merged). Forums aren't readable directly yet. |
+| **Current milestone** | M1 built ✅, waiting on your real-world test. Next: M2 forums |
+| **Blocked on** | Merging the branch; your test on the server/Pi; inputs for M2 (see "Waiting on you") |
+| **Latest image** | `alexstapo/forumaggregator:latest` (amd64 + arm64), built from `main`. M1 lands in it once merged |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
 
 ## Milestones
 
-The order changed on 2026-10-11 (proposed, see "Why the order changed" below). The old order
+The order changed on 2026-10-11 and was approved on 2026-10-19 (see "Why the order changed" below). The old order
 put forum reading first, and that is stuck on bot checks.
 
 ### M0: Foundation ✅
@@ -33,15 +33,18 @@ Goal: a secure app you can install in one command.
 - ✅ `check-sites` diagnostic for forum access
 - ⛔ Tested on a real Raspberry Pi: *waiting on you* (can't be emulated in the build environment)
 
-### M1: First usable reader ⏳ *(proposed)*
+### M1: First usable reader ✅ *(built 2026-10-19, awaiting your test)*
 Goal: open the app on your phone and read new items from real sources.
-- ⏳ Data model: sources, subscriptions, items, read/saved state (DESIGN §3)
-- ⏳ Polite fetcher: per-site rate limits, backoff, circuit breaker (DESIGN §7)
-- ⏳ **RSS/Atom source:** YouTube channels, Overclock.net boards, subreddits, blogs
-- ⏳ YouTube: paste a channel URL or @handle, and the app finds its feed
-- ⏳ Feed screen: newest first, unread/read, save, mark all read, mobile layout
-- ⏳ "Add a source" screen (so the config file isn't needed for this)
-- ⏳ Health view: last check, errors, next check per source
+- ✅ Data model: sources and items with read/saved state (DESIGN §3)
+- ✅ Polite scheduler: per-site spacing, ETag/304, ±10 % jitter, backoff, pause after 5 failures, bot checks never worked around (DESIGN §7, §9)
+- ✅ **RSS/Atom source:** RSS 2.0, RSS 1.0 and Atom; paste a website and its feed is found
+- ✅ YouTube: paste a channel URL, `@handle`, `/user/` or playlist link, and the app finds its feed; cards show thumbnails
+- ✅ Feed screen: Unread / All / Saved, filter by source, newest first, open = mark read, save, mark all read (only what's on screen), load older, refresh on returning to the app
+- ✅ Sources screen: add, check now, pause/resume, delete, with clear errors
+- ✅ Health view: status, last error, last and next check on each source (part of Sources, D-050)
+- ✅ Tests: 91 automated (SQLite + Postgres) plus a browser run-through on phone and desktop widths
+- ⏳ **Your real-world test**: YouTube creators and an Overclock.net board RSS on your server (I can't fetch those from the build environment, D-045)
+- 💤 Not in M1: renaming a source in the UI (the API supports it), hiding YouTube Shorts, per-source interval in the UI
 
 **Done when:** you install it, add a few YouTube creators and an Overclock.net board, and
 new items appear on your phone.
@@ -90,17 +93,18 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | # | What | Unblocks |
 |---|---|---|
-| 1 | OK to the new order above | M1 |
-| 2 | A few YouTube creators, subreddits or sites to test with | M1 testing |
+| 1 | Merge (or ask me to open a PR for) branch `claude/gifted-gauss-3lnq4v` | M1 in the Docker image |
+| 2 | Try M1: add a few YouTube creators and an Overclock.net board RSS; tell me what breaks | M1 sign-off |
 | 3 | `docker exec forumaggregator node packages/server/dist/tools/check-sites.js` output (server and Pi) | M2, Pi test |
 | 4 | Saved forum pages (forum list, board, thread) for each forum, attached in chat | M2 |
 | 5 | Email notifications as a forum fallback: yes or no | M2 |
-| 6 | Merge (or ask me to open a PR for) branch `claude/gifted-gauss-3lnq4v` | Easier install on `main` |
 
 ## Done log
 
 | Date | What | Where |
 |---|---|---|
+| 2026-10-19 | M1: RSS/Atom + YouTube sources, scheduler, feed and sources screens | branch, unmerged |
+| 2026-10-11 | ROADMAP.md progress tracker | branch, unmerged |
 | 2026-10-11 | Docs default to Docker Hub image `alexstapo/forumaggregator` | branch, unmerged |
 | 2026-10-11 | Zero-config install (docker run / compose), generated key, auto permissions | branch, unmerged |
 | 2026-10-11 | Site-access findings, `check-sites` tool, manual CI trigger | [#2](https://github.com/AlexStapleton/ForumAggregator/pull/2) |

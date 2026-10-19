@@ -6,11 +6,14 @@ import { FeedPage } from "./pages/FeedPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SecurityPage } from "./pages/SecurityPage";
 import { SetupPage } from "./pages/SetupPage";
+import { SourcesPage } from "./pages/SourcesPage";
 
-type Route = "feed" | "settings";
+type Route = "feed" | "sources" | "settings";
 
 function routeFromHash(): Route {
-  return location.hash === "#/settings" ? "settings" : "feed";
+  if (location.hash === "#/settings") return "settings";
+  if (location.hash === "#/sources") return "sources";
+  return "feed";
 }
 
 export function App() {
@@ -60,6 +63,7 @@ export function App() {
         </a>
         <nav>
           <a href="#/" aria-current={route === "feed" ? "page" : undefined}>Feed</a>
+          <a href="#/sources" aria-current={route === "sources" ? "page" : undefined}>Sources</a>
           <a href="#/settings" aria-current={route === "settings" ? "page" : undefined}>Settings</a>
           {status.via === "session" && (
             <button className="link" onClick={() => void logout()}>Log out</button>
@@ -67,7 +71,9 @@ export function App() {
         </nav>
       </header>
       <main className="content">
-        {route === "feed" ? <FeedPage /> : <SecurityPage status={status} onChange={refresh} />}
+        {route === "feed" && <FeedPage />}
+        {route === "sources" && <SourcesPage />}
+        {route === "settings" && <SecurityPage status={status} onChange={refresh} />}
       </main>
     </div>
   );

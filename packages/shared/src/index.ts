@@ -11,6 +11,10 @@ export type {
   ChangePasswordRequest,
   TotpEnableRequest,
   TotpDisableRequest,
+  AddSourceRequest,
+  UpdateSourceRequest,
+  UpdateItemRequest,
+  MarkReadRequest,
 } from "./schemas.js";
 
 export type AuthMode = "local" | "proxy" | "both";
@@ -44,3 +48,62 @@ export interface VersionInfo {
   version: string;
   database: "sqlite" | "postgres";
 }
+
+// ---- Sources and feed items (M1) -------------------------------------------------------
+
+export type SourceKind = "feed" | "youtube";
+
+/**
+ * ok          last check succeeded
+ * error       last check failed; retrying with backoff
+ * paused      paused by you, or by the app after repeated failures (circuit breaker)
+ * challenged  the site answered with a bot check; the app stops instead of retrying hard
+ */
+export type SourceStatus = "ok" | "error" | "paused" | "challenged" | "pending";
+
+export interface Source {
+  id: string;
+  kind: SourceKind;
+  title: string;
+  /** The page or channel the user added. */
+  siteUrl: string | null;
+  /** The RSS/Atom URL actually polled. */
+  feedUrl: string;
+  enabled: boolean;
+  status: SourceStatus;
+  lastError: string | null;
+  lastCheckedAt: number | null;
+  lastSuccessAt: number | null;
+  nextCheckAt: number | null;
+  /** Per-source override; null = the default from config.yaml. */
+  pollIntervalMinutes: number | null;
+  unreadCount: number;
+  itemCount: number;
+  createdAt: number;
+}
+
+export interface FeedItem {
+  id: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceKind: SourceKind;
+  /** Always http(s); never rendered as anything but a link. */
+  url: string | null;
+  title: string;
+  author: string | null;
+  /** Plain text, already stripped of HTML and shortened. */
+  summary: string | null;
+  /** http(s) image URL (e.g. a YouTube thumbnail). */
+  imageUrl: string | null;
+  publishedAt: number;
+  read: boolean;
+  saved: boolean;
+}
+
+export interface ItemsPage {
+  items: FeedItem[];
+  /** Pass as `cursor` to load the next (older) page; null when there is nothing more. */
+  nextCursor: string | null;
+}
+
+export type ItemsFilter = "unread" | "all" | "saved";
