@@ -15,12 +15,13 @@ import type { Db } from "./db/index.js";
 import { splitList, type Env } from "./env.js";
 import { sendError } from "./http.js";
 import { VERSION } from "./version.js";
-import { HostLimiter, httpFetch, type Fetcher } from "./feeds/fetch.js";
+import { HostLimiter, httpFetch, httpJson, type Fetcher, type JsonFetcher } from "./feeds/fetch.js";
 import { ItemService } from "./feeds/items.js";
 import { Poller } from "./feeds/poller.js";
 import { registerFeedRoutes } from "./feeds/routes.js";
 import { FeedService } from "./feeds/service.js";
 import { ReaderService } from "./reader/service.js";
+import { registerSettingsRoutes, SettingsService } from "./settings.js";
 
 export interface AppDeps {
   env: Env;
@@ -33,6 +34,8 @@ export interface AppDeps {
   fetcher?: Fetcher;
   /** Host spacing; tests pass a no-wait limiter. */
   limiter?: HostLimiter;
+  /** HTTP client for JSON APIs (YouTube Data API); tests pass a fake. */
+  fetchJson?: JsonFetcher;
 }
 
 export interface App {
@@ -50,7 +53,7 @@ function trustProxySetting(value: string): boolean | string[] {
   return splitList(value);
 }
 
-export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter }: AppDeps): Promise<App> {
+export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter, fetchJson }: AppDeps): Promise<App> {
   const fastify = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -104,9 +107,12 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const sharedLimiter = limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000);
   const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log);
   const items = new ItemService(db, now);
-  const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now);
+  const settings = new SettingsService(db, box, fastify.log);
+  const sharedJson = fetchJson ?? httpJson;
+  const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson);
   const poller = new Poller(feeds, fastify.log);
   registerFeedRoutes(fastify, feeds, items, reader);
+  registerSettingsRoutes(fastify, settings, sharedJson);
 
   fastify.get("/healthz", async (_request, reply) => {
     try {

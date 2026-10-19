@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import type { AuthStatus, TotpBeginResponse } from "@fa/shared";
+import { useEffect, useState, type FormEvent } from "react";
+import type { AuthStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
 import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout } from "../prefs";
@@ -13,6 +13,7 @@ export function SecurityPage({ status, onChange }: { status: AuthStatus; onChang
         {status.via === "proxy" ? " through your SSO proxy" : ""}.
       </p>
       <ThisDevice />
+      <YouTubeComments />
       {status.via === "session" && <ChangePassword />}
       <TwoFactor enabled={!!status.totpEnabled} onChange={onChange} />
     </>
@@ -44,6 +45,84 @@ function ThisDevice() {
           </label>
         ))}
       </fieldset>
+    </section>
+  );
+}
+
+/** Optional YouTube Data API key for top comments in the reader (D-075). */
+function YouTubeComments() {
+  const [status, setStatus] = useState<YouTubeKeyStatus>();
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
+  const [fields, setFields] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api<YouTubeKeyStatus>("GET", "/api/settings/youtube").then(setStatus, (err) => setMessage({ kind: "error", text: errorMessage(err) }));
+  }, []);
+
+  const save = async (key: string | null) => {
+    setBusy(true);
+    setMessage(undefined);
+    setFields({});
+    try {
+      setStatus(await api<YouTubeKeyStatus>("PUT", "/api/settings/youtube", { apiKey: key }));
+      setApiKey("");
+      setMessage({ kind: "ok", text: key ? "Key checked and saved. Open a YouTube video to see its top comments." : "Key removed." });
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+      setFields(fieldErrors(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>YouTube comments</h2>
+      <p className="muted">
+        {status?.configured ? (
+          <>On. Using the key ending <code>{status.keyHint}</code>.</>
+        ) : (
+          "Off. YouTube has no comments feed, so showing top comments under videos needs your own (free) YouTube Data API key."
+        )}
+      </p>
+      {message && <Alert kind={message.kind}>{message.text}</Alert>}
+      <form onSubmit={(e) => { e.preventDefault(); void save(apiKey.trim()); }} noValidate>
+        <Field
+          label={status?.configured ? "Replace the key" : "API key"}
+          name="apiKey"
+          type="password"
+          value={apiKey}
+          onChange={setApiKey}
+          error={fields.apiKey}
+          hint="Checked with one request before it's saved. Stored encrypted; it never leaves this server."
+          autoComplete="off"
+        />
+        <div className="row">
+          <button type="submit" disabled={busy || !apiKey.trim()}>
+            {busy ? "Checking…" : "Save key"}
+          </button>
+          {status?.configured && (
+            <button type="button" className="secondary danger-text" disabled={busy} onClick={() => void save(null)}>
+              Remove key
+            </button>
+          )}
+        </div>
+      </form>
+      <details className="help">
+        <summary>How to get a key (about 5 minutes)</summary>
+        <ol className="small">
+          <li>Open the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud console</a> and create a project (any name).</li>
+          <li>APIs &amp; Services → Library → <strong>YouTube Data API v3</strong> → Enable.</li>
+          <li>APIs &amp; Services → Credentials → Create credentials → <strong>API key</strong>.</li>
+          <li>Edit the key: under API restrictions choose <strong>Restrict key</strong> → YouTube Data API v3. Leave application restrictions on None (or IP addresses: your server's public IP).</li>
+          <li>Paste the key above.</li>
+        </ol>
+        <p className="muted small">
+          Free: 10,000 units a day; each video's comments use 1 unit and are kept for 15 minutes. No billing account is needed.
+        </p>
+      </details>
     </section>
   );
 }

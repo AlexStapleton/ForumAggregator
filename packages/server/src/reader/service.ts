@@ -7,12 +7,14 @@
 // Fetching the page happens only when the user opens the item, like a browser would.
 import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
-import { FetchError, type Fetcher, type HostLimiter } from "../feeds/fetch.js";
+import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
 import { extractWithSelectors, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { sanitizeHtml } from "./sanitize.js";
+import type { SettingsService } from "../settings.js";
+import { topComments, YouTubeApiError } from "./youtubeApi.js";
 
 /** Don't retry a page that failed for this long (avoids hammering a site that blocks us). */
 const FAILED_RETRY_MS = 24 * 3_600_000;
@@ -46,6 +48,8 @@ export class ReaderService {
     private readonly fetcher: Fetcher,
     private readonly limiter: HostLimiter,
     private readonly now: () => number = Date.now,
+    private readonly settings?: SettingsService,
+    private readonly fetchJson?: JsonFetcher,
   ) {}
 
   /** null if the item doesn't exist. Concurrent opens of the same item share the work. */
@@ -196,7 +200,8 @@ export class ReaderService {
 
   /**
    * Comments for an item, loaded on request (one call, cached 15 min). Reddit posts have a
-   * public comments feed; other sources have none the app can read yet.
+   * public comments feed; YouTube videos need the user's API key (D-075); other sources have
+   * none the app can read yet.
    */
   async comments(itemId: string): Promise<ReaderComments | null> {
     const item = await this.db.kysely
@@ -206,6 +211,8 @@ export class ReaderService {
       .where("items.id", "=", itemId)
       .executeTakeFirst();
     if (!item) return null;
+    const videoId = youtubeVideoId(item.url);
+    if (videoId) return this.youtubeComments(itemId, videoId, item.url);
     const feedUrl = item.kind === "reddit" ? redditCommentsFeedUrl(item.url) : null;
     if (!feedUrl) return { available: false, comments: [], notice: null, discussionUrl: item.url };
 
@@ -242,6 +249,32 @@ export class ReaderService {
       return value;
     }
     this.commentsCache.set(itemId, { at: this.now(), value });
+    return value;
+  }
+
+  private async youtubeComments(itemId: string, videoId: string, url: string | null): Promise<ReaderComments> {
+    const apiKey = this.settings && this.fetchJson ? await this.settings.youtubeApiKey() : null;
+    if (!apiKey || !this.fetchJson) {
+      // Says how to turn them on; no request is made.
+      return { available: false, comments: [], notice: "Add a YouTube API key in Settings to see top comments here.", discussionUrl: url };
+    }
+    const cached = this.commentsCache.get(itemId);
+    if (cached && this.now() - cached.at < COMMENTS_TTL_MS) return cached.value;
+    let value: ReaderComments;
+    try {
+      const comments = await topComments(this.fetchJson, apiKey, videoId, MAX_COMMENTS);
+      value = { available: true, comments, notice: comments.length ? null : "No comments yet.", discussionUrl: url };
+      this.commentsCache.set(itemId, { at: this.now(), value });
+    } catch (err) {
+      const notice =
+        err instanceof YouTubeApiError ? err.message
+        : err instanceof FetchError ? `Couldn't load the comments (${err.message}).`
+        : "Couldn't load the comments.";
+      value = { available: true, comments: [], notice, discussionUrl: url };
+      // Comments that are turned off stay off; other failures are retried after a minute.
+      const keep = err instanceof YouTubeApiError && err.reason === "commentsDisabled";
+      this.commentsCache.set(itemId, { at: keep ? this.now() : this.now() - COMMENTS_TTL_MS + 60_000, value });
+    }
     return value;
   }
 

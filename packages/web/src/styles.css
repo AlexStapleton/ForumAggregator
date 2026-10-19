@@ -252,6 +252,7 @@ body.reader-open { overflow: hidden; }
 
 /* ---- Comments (Reddit) ---- */
 .comments { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.comments-hint { margin-top: 1.5rem; }
 .comments-title { font-size: 1.1rem; }
 .comment-list { list-style: none; padding: 0; margin: 0.5rem 0 1rem; }
 .comment { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
@@ -303,3 +304,9 @@ label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 2p
 .preview { margin-top: 0.75rem; }
 .preview .alert { margin-bottom: 0.5rem; }
 .preview-body { max-height: 24rem; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; background: var(--bg); font-size: 0.95rem; }
+
+/* ---- Help text (Settings) ---- */
+.help { margin-top: 1rem; }
+.help summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.help ol { padding-left: 1.25rem; margin: 0.5rem 0; }
+.help li { margin-bottom: 0.35rem; }

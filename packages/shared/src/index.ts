@@ -17,6 +17,7 @@ export type {
   MarkReadRequest,
   OpmlImportRequest,
   ReaderPreviewRequest,
+  YouTubeKeyRequest,
 } from "./schemas.js";
 
 export type AuthMode = "local" | "proxy" | "both";
@@ -193,6 +194,15 @@ export interface ReaderComment {
   html: string;
   publishedAt: number | null;
   url: string | null;
+  /** YouTube only. */
+  likes?: number | null;
+}
+
+/** Whether a YouTube Data API key is saved (the key itself never leaves the server). */
+export interface YouTubeKeyStatus {
+  configured: boolean;
+  /** e.g. "…x9Qz" */
+  keyHint: string | null;
 }
 
 export interface ReaderComments {

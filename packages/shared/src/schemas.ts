@@ -73,6 +73,16 @@ export const AddSourceRequest = z.object({
 });
 export type AddSourceRequest = z.infer<typeof AddSourceRequest>;
 
+/** A YouTube Data API key (Google keys are 39 characters, starting "AIza"); null removes it. */
+export const YouTubeKeyRequest = z.object({
+  apiKey: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{20,100}$/, "That doesn't look like an API key (Google keys are about 39 characters and start with AIza)")
+    .nullable(),
+});
+export type YouTubeKeyRequest = z.infer<typeof YouTubeKeyRequest>;
+
 /** The text of an OPML file (sent as JSON so the CSRF header rules stay the same). */
 export const OpmlImportRequest = z.object({
   opml: z.string().min(1, "The file is empty").max(2_000_000, "The file is too large (2 MB at most)"),

@@ -186,7 +186,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             </div>
           )}
 
-          {item.sourceKind === "reddit" && <Comments key={item.id} itemId={item.id} />}
+          {item.sourceKind === "reddit" && <Comments key={item.id} itemId={item.id} site="Reddit" />}
+          {/* YouTube: loads by itself (1 unit of the user's API quota, cached); without a key the server just says how to add one. */}
+          {item.sourceKind === "youtube" && <Comments key={item.id} itemId={item.id} site="YouTube" autoLoad />}
         </article>
       </div>
 
@@ -210,9 +212,12 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   );
 }
 
-/** Reddit comments, loaded only when asked (each load is a request against Reddit's limit). */
-function Comments({ itemId }: { itemId: string }) {
-  const [state, setState] = useState<"idle" | "loading" | "done">("idle");
+/**
+ * Comments under the article. Reddit: loaded only when asked (each load is a request against
+ * Reddit's limit). YouTube: top comments via the API key from Settings, loaded straight away.
+ */
+function Comments({ itemId, site, autoLoad = false }: { itemId: string; site: "Reddit" | "YouTube"; autoLoad?: boolean }) {
+  const [state, setState] = useState<"idle" | "loading" | "done">(autoLoad ? "loading" : "idle");
   const [data, setData] = useState<ReaderComments>();
   const [error, setError] = useState<string>();
 
@@ -228,9 +233,22 @@ function Comments({ itemId }: { itemId: string }) {
     }
   };
 
+  useEffect(() => {
+    if (autoLoad) void load();
+  }, []); // once: the component is keyed by item
+
+  // No key set: a one-line hint instead of an empty section.
+  if (data && !data.available) {
+    return (
+      <p className="muted small comments-hint">
+        {data.notice} <a href="#/settings">Open Settings</a>
+      </p>
+    );
+  }
+
   return (
     <section className="comments" aria-label="Comments">
-      <h2 className="comments-title">Comments</h2>
+      <h2 className="comments-title">{site === "YouTube" ? "Top comments" : "Comments"}</h2>
       {state === "idle" && (
         <button className="secondary" onClick={() => void load()}>
           Show comments
@@ -246,6 +264,7 @@ function Comments({ itemId }: { itemId: string }) {
               <div className="item-meta">
                 <strong>{c.author ?? "someone"}</strong>
                 {c.publishedAt && <time title={fullDate(c.publishedAt)}>· {relativeTime(c.publishedAt)}</time>}
+                {c.likes ? <span title="Likes">· 👍 {c.likes.toLocaleString()}</span> : null}
               </div>
               {/* Sanitised on the server, like the article. */}
               <div className="reader-content comment-body" dangerouslySetInnerHTML={{ __html: c.html }} />
@@ -255,7 +274,7 @@ function Comments({ itemId }: { itemId: string }) {
       )}
       {data?.discussionUrl && state === "done" && (
         <a href={data.discussionUrl} target="_blank" rel="noopener noreferrer" className="small">
-          Full discussion on Reddit ↗
+          Full discussion on {site} ↗
         </a>
       )}
     </section>

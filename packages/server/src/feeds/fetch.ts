@@ -175,3 +175,29 @@ export class HostLimiter {
     if (allowedAt > now) await this.sleep(allowedAt - now);
   }
 }
+
+/**
+ * For JSON APIs (the YouTube Data API): returns the status and parsed body even for errors,
+ * because the body says why (bad key, quota, comments off). Never put the URL in errors or
+ * logs: it can carry an API key.
+ */
+export type JsonFetcher = (url: string) => Promise<{ status: number; body: unknown }>;
+
+export const httpJson: JsonFetcher = async (url) => {
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { "user-agent": USER_AGENT, accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+  } catch (err) {
+    const e = err as Error & { cause?: { code?: string } };
+    if (e.name === "TimeoutError" || e.name === "AbortError") throw new FetchError("timeout", "The API took too long to answer");
+    throw new FetchError("network", `Couldn't connect (${e.cause?.code ?? e.name})`);
+  }
+  const text = new TextDecoder().decode(await readCapped(res, 2 * 1024 * 1024));
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON (e.g. a proxy's error page); the status still says something.
+  }
+  return { status: res.status, body };
+};

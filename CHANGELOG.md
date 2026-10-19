@@ -11,6 +11,7 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 - Timeline: the feed is grouped under day headings (Today, Yesterday, dates), with a Newest first / Oldest first order (saved per device).
 - Reader selectors per source (Edit source → "Reader: article selectors"): choose the article and elements to remove with CSS selectors, with a preview, for sites where the reader picks the wrong part of the page.
 - OPML import and export of sources (Sources → Import and export). Folders and categories become tags.
+- YouTube top comments under videos in the reader, using your own free YouTube Data API key (Settings → YouTube comments).
 - Reddit comments in the reader ("Show comments"; loaded on request, cached).
 - Forum board links (`…/forums/name.12/`) use the board's RSS directly, even when the board page shows a bot check.
 
