@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Fixed
+- `check-sites`: a feed address is checked as given (it used to add a second `/index.rss`).
+
 ## [1.1.0] - 2026-10-19
 
 Reddit pictures, source checkboxes and tap-to-open cards. Upgrade with

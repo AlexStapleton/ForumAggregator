@@ -14,6 +14,14 @@ visitor's IP address (a cloud data-centre IP is treated with more suspicion than
 | overclock.net | ❌ JavaScript proof-of-work challenge (`POW_CHALLENGE_DATA`, flags headless browsers; we were marked `xf_is_suspected_bot`) | ✅ site-wide feed `/forums/-/index.rss` served real RSS. Threads have no RSS ("cannot be represented in this format") | VerticalScope bot check | Blocks AI agents (ClaudeBot, anthropic-ai, Claude-Web, ChatGPT-User…) entirely. For `*`: everything allowed except `/login/`, `/account/`, `/search/`, `/goto/` and a few others |
 | bikeforums.net | ❌ Cloudflare "Just a moment…" | ❌ Cloudflare | Cloudflare | Not readable (behind the challenge) |
 
+### From your home server (2026-10-19, v1.1.0)
+
+| Site | Board page | Board RSS | Result |
+|---|---|---|---|
+| thehotpepper.com (`/forums/hot-pepper-growing.4/`) | ❌ Cloudflare "Just a moment…" [HTTP 403] | ❌ same [HTTP 403] | **Not readable directly**, even from a home IP. Logging in can't help: Cloudflare checks the visitor before XenForo (or its login page) sees the request. Needs email (C) or the admins letting feed readers through to their RSS |
+| overclock.net | not yet checked from your server | | |
+| bikeforums.net | not yet checked from your server | | |
+
 ### What this means
 
 1. **The build environment (Claude) must not fetch these forums.** Two sites explicitly

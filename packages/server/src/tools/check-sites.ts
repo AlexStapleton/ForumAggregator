@@ -62,6 +62,8 @@ export function rssUrlFor(target: URL): string {
   // XenForo: every forum (board) has <board>/index.rss and the site-wide feed is
   // /forums/-/index.rss. Threads have no feed, so a thread URL checks the site-wide one.
   const path = target.pathname.replace(/\/$/, "");
+  // Already a feed address: check that one.
+  if (/(\.rss|\.xml|\/feed|\/rss)$/i.test(path)) return `${target.origin}${path}`;
   if (path === "" || path === "/forums" || path.startsWith("/threads/")) return `${target.origin}/forums/-/index.rss`;
   return `${target.origin}${path}/index.rss`;
 }
