@@ -66,7 +66,7 @@ Goal: YouTube and Reddit work, sources can be organised and edited, and articles
 - ✅ Forum thread links explained; board links read the board RSS directly (D-068)
 - ⏳ **Wide-screen layout:** list on the left, reader on the right, configurable, with the current full-screen reader kept as an option
 - ⏳ **Timeline view:** sort/group by publish date
-- ⏳ **Compare with FreshRSS** (how it pulls content from sites) and adopt what fits
+- ✅ **Compared with FreshRSS** ([FRESHRSS-COMPARISON.md](FRESHRSS-COMPARISON.md)); recommendations awaiting your pick
 - ⛔ **YouTube top comments**: YouTube has no comments feed; needs a YouTube Data API key (your decision)
 
 ### M2: Forums 💤 *(needs your input first)*
