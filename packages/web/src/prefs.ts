@@ -9,10 +9,12 @@ export type ReaderLayout = "auto" | "split" | "full";
 export interface DevicePrefs {
   layout: ReaderLayout;
   order: ItemsOrder;
+  /** Sources unticked in the feed's source list (D-077). Hidden rather than shown, so new sources appear. */
+  hiddenSources: string[];
 }
 
 const KEY = "fa.prefs";
-const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest" };
+const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [] };
 const EVENT = "fa-prefs";
 
 /** Width at which "auto" switches to side by side, and the narrowest width "split" is used at. */
@@ -25,10 +27,11 @@ export function readPrefs(): DevicePrefs {
     return {
       layout: raw.layout === "split" || raw.layout === "full" ? raw.layout : DEFAULTS.layout,
       order: raw.order === "oldest" ? "oldest" : DEFAULTS.order,
+      hiddenSources: Array.isArray(raw.hiddenSources) ? raw.hiddenSources.filter((id): id is string => typeof id === "string") : [],
     };
   } catch {
     // Private mode or blocked storage: fall back to defaults.
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, hiddenSources: [] };
   }
 }
 

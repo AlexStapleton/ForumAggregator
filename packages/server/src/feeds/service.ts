@@ -475,8 +475,37 @@ export class FeedService {
         .filter((c) => c.content && fresh.has(c.row.id))
         .map((c) => ({ item_id: c.row.id, origin: "feed" as const, status: "raw" as const, html: c.content, error: null, fetched_at: now }));
       if (contents.length) await this.db.kysely.insertInto("item_content").values(contents).execute();
+      await this.backfillContent(sourceId, source?.kind, chunk.filter((c) => c.content && !fresh.has(c.row.id)), now);
     }
     return inserted;
+  }
+
+  /**
+   * Items stored before feed bodies were kept at any length (v1.0.0 kept only 500+ characters)
+   * get their body when the feed shows them again (D-076). Reddit bodies are also re-stored raw
+   * where an older version cached its cleaned copy, so the current Reddit layout applies.
+   */
+  private async backfillContent(sourceId: string, kind: SourceKind | undefined, known: Array<{ content: string | null; row: { guid: string } }>, now: number) {
+    if (!known.length) return;
+    const rows = await this.db.kysely
+      .selectFrom("items")
+      .leftJoin("item_content", "item_content.item_id", "items.id")
+      .select(["items.id", "items.guid", "item_content.status", "item_content.origin"])
+      .where("items.source_id", "=", sourceId)
+      .where("items.guid", "in", known.map((c) => c.row.guid))
+      .execute();
+    const bodies = new Map(known.map((c) => [c.row.guid, c.content!]));
+    for (const r of rows) {
+      const missing = r.status === null;
+      const staleReddit = kind === "reddit" && r.origin === "feed" && r.status !== "raw";
+      const html = bodies.get(r.guid);
+      if (!html || !(missing || staleReddit)) continue;
+      await this.db.kysely
+        .insertInto("item_content")
+        .values({ item_id: r.id, origin: "feed", status: "raw", html, error: null, fetched_at: now })
+        .onConflict((oc) => oc.column("item_id").doUpdateSet({ origin: "feed", status: "raw", html, error: null, fetched_at: now }))
+        .execute();
+    }
   }
 
   /**

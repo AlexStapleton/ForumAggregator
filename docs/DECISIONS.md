@@ -2,6 +2,15 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-19 (round 12: feedback on v1.0.1)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-076 | **Reddit posts in the reader are laid out for pictures.** Reddit's feed puts a thumbnail and the text in a two-column table, which squeezed the picture to a stamp. The wrapper table is unwrapped (a table in the post's own text is kept); image posts (`[link]` to i.redd.it, i.imgur.com or an image file) show the full image instead of the thumbnail and no "Linked" line; image links in the text (preview.redd.it etc.) become pictures and replace the thumbnail crop; gallery and video posts keep the thumbnail with a note to open Reddit. Every image opens full size when tapped. Reddit bodies are now laid out from the raw feed body on each open instead of being cached, so later layout fixes reach old posts. **Backfill:** when a poll sees an item again whose body wasn't stored (v1.0.0 kept bodies only at 500+ characters) or whose Reddit body was cached in the old format, the raw body is stored | User screenshots: "Open the original" on a recent post; a screenshot shrunk next to the text | The picture is usually what a Reddit post is about. Built against entries shaped like Reddit's feed format; not yet checked against a live Reddit feed from this environment (Reddit blocks it) |
+| D-077 | **Source checkboxes** replace the feed's source dropdown: tick any mix, with Select all / Clear all and unread counts. Stored per device as the *unticked* sources, so a new source shows up by default and deleted ones are ignored. The API takes `excludeSourceIds` (items list and mark-read); the Unread count only counts ticked sources | User request | Matches "turn sources on and off"; excluding instead of including means the list never needs to load before the feed |
+| D-079 | Release **v1.1.0** (minor: new features, no breaking changes or migrations needing action). Versions are bumped in the PR *before* the tag, following the new [RELEASING.md](RELEASING.md) checklist, because v1.0.1 was tagged without a bump and reports 1.0.0 | User ("bump to 1.1.0") | The version shown in `/api/version` and the User-Agent must match the image tag |
+| D-078 | **The whole feed card opens the reader**, except its own buttons and links, and not when text is being selected. The title stays a button for keyboard users | User request | Bigger tap target, especially on the phone |
+
 ## 2026-10-19 (round 11: layout, timeline, FreshRSS follow-ups)
 
 | ID | Decision | Source | Rationale |

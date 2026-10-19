@@ -113,6 +113,8 @@ export type UpdateItemRequest = z.infer<typeof UpdateItemRequest>;
 
 export const MarkReadRequest = z.object({
   sourceId: z.string().optional(),
+  /** Leave out these sources (the feed's unticked source checkboxes). */
+  excludeSourceIds: z.array(z.string()).max(1000).optional(),
   /** Only sources with this tag (matches the feed's tag filter). */
   tag: z.string().optional(),
   /** Only items published at or before this time (what the user was looking at). */

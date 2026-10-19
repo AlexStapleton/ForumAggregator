@@ -48,6 +48,50 @@ export function cleanRedditSummary(summary: string | null): string | null {
   return cleaned || null;
 }
 
+const IMAGE_HOSTS = /^(i\.redd\.it|i\.imgur\.com)$/i;
+const PREVIEW_HOSTS = /^(preview\.redd\.it|external-preview\.redd\.it)$/i;
+const IMAGE_PATH = /\.(jpe?g|png|gif|webp)$/i;
+
+/** An https image URL worth showing full size (Reddit/imgur image hosts, or an image file), or null. */
+export function redditImageUrl(href: string | null | undefined): string | null {
+  if (!href) return null;
+  let u: URL;
+  try {
+    u = new URL(href.replace(/&amp;/g, "&"));
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:") return null;
+  if (PREVIEW_HOSTS.test(u.hostname)) return IMAGE_PATH.test(u.pathname) ? u.href : null;
+  return IMAGE_HOSTS.test(u.hostname) || IMAGE_PATH.test(u.pathname) ? u.href : null;
+}
+
+export type RedditPostKind = "image" | "gallery" | "video" | "link" | "self";
+
+/** The "[link]" target in an entry's footer: the image, article, gallery or video posted. */
+export function redditPostLink(html: string): string | null {
+  const at = html.lastIndexOf("submitted by");
+  if (at < 0) return null;
+  const link = /<a [^>]*href="([^"]+)"[^>]*>\s*\[link\]\s*<\/a>/i.exec(html.slice(at))?.[1];
+  return link ? link.replace(/&amp;/g, "&") : null;
+}
+
+/** What kind of post the "[link]" says this is. */
+export function redditPostKind(link: string | null): RedditPostKind {
+  if (!link) return "self";
+  if (redditImageUrl(link)) return "image";
+  try {
+    const u = new URL(link);
+    const reddit = /(^|\.)reddit\.com$/i.test(u.hostname);
+    if (reddit && u.pathname.startsWith("/gallery/")) return "gallery";
+    if (u.hostname === "v.redd.it") return "video";
+    if (reddit || u.hostname === "redd.it") return "self";
+    return "link";
+  } catch {
+    return "self";
+  }
+}
+
 /**
  * Entry HTML without Reddit's footer. For link posts the "[link]" target is the article being
  * discussed, so it's kept as a "Linked: host" line. Run the result through sanitizeHtml.
@@ -59,7 +103,8 @@ export function cleanRedditHtml(html: string): string {
   const body = html.slice(0, at).replace(/(&#32;|\s)+$/, "");
   const link = /<a [^>]*href="([^"]+)"[^>]*>\s*\[link\]\s*<\/a>/i.exec(footer)?.[1];
   let external = "";
-  if (link) {
+  // Image posts show the image itself (reader/redditLayout.ts), not a "Linked: host" line.
+  if (link && !redditImageUrl(link)) {
     try {
       const u = new URL(link.replace(/&amp;/g, "&"));
       if (!/(^|\.)(reddit\.com|redd\.it)$/i.test(u.hostname)) {

@@ -9,9 +9,10 @@ import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
-import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl } from "../feeds/reddit.js";
+import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
 import { extractWithSelectors, polishArticle, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
 import { topComments, YouTubeApiError } from "./youtubeApi.js";
@@ -107,15 +108,22 @@ export class ReaderService {
 
     // Cached result (from the feed or a previous extraction).
     if (item.status === "ok" && item.html && !(selectors && item.origin === "feed")) {
-      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(item.html, item.title), videoId: null, notice: null };
+      // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
+      const html = isReddit ? layoutRedditPost(item.html, null, item.title) : item.html;
+      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(html, item.title), videoId: null, notice: null };
     }
     // The feed's own text, kept as a fallback if the page can't be read.
     let feedHtml: string | null = null;
     if (item.status === "raw" && item.html) {
       const raw = isReddit ? cleanRedditHtml(item.html) : item.html;
-      const html = sanitizeHtml(raw, item.url ?? "https://invalid.invalid/");
+      let html = sanitizeHtml(raw, item.url ?? "https://invalid.invalid/");
       // Reddit posts are often short but complete; elsewhere a short body is just a teaser.
-      if (!selectors && (isReddit || htmlToText(html).length >= FEED_FULL_TEXT_MIN)) {
+      if (isReddit) {
+        // Laid out from the raw body on every open (cheap), so layout fixes reach old posts too.
+        html = layoutRedditPost(html, redditPostLink(item.html), item.title);
+        return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
+      }
+      if (!selectors && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }

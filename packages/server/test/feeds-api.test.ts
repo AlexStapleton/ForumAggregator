@@ -304,6 +304,13 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
 
     // Per-source filter, then delete a source with its items.
     expect((await items(`?filter=all&sourceId=${b.id}`)).items).toHaveLength(1);
+    // Source checkboxes: unticked sources are left out (unknown IDs are ignored).
+    expect((await items(`?filter=all&excludeSourceIds=${a.id}`)).items.map((i: { title: string }) => i.title)).toEqual(["B1"]);
+    expect((await items(`?filter=all&excludeSourceIds=gone-source`)).items).toHaveLength(6);
+    expect((await items(`?filter=all&excludeSourceIds=${a.id},${b.id}`)).items).toEqual([]);
+    expect((await call("POST", "/api/items/mark-read", { excludeSourceIds: [a.id, b.id] })).json().updated).toBe(0);
+    expect((await call("POST", "/api/items/mark-read", { excludeSourceIds: [a.id] })).json().updated).toBe(1);
+    await call("PATCH", `/api/items/${(await items(`?filter=all&sourceId=${b.id}`)).items[0].id}`, { read: false });
     expect((await call("DELETE", `/api/sources/${b.id}`)).statusCode).toBe(200);
     expect((await items("?filter=all")).items.every((i: { sourceTitle: string }) => i.sourceTitle === "A")).toBe(true);
     expect((await call("DELETE", `/api/sources/${b.id}`)).statusCode).toBe(404);
