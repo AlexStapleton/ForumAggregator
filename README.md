@@ -14,6 +14,7 @@ directly is next (M2). Subreddit RSS may work but is untested. See the [roadmap]
 - [Roadmap and progress](docs/ROADMAP.md): what's done, what's next, what's blocked
 - [Design](docs/DESIGN.md): requirements, architecture, how each part works
 - [Decision log](docs/DECISIONS.md): what was decided and why, plus open questions
+- [Performance](docs/PERFORMANCE.md): how fast it is, how it was measured
 - [Deployment](docs/DEPLOY.md): Docker, Nginx Proxy Manager, first-run setup, SSO
 - [Site access](docs/SITE-ACCESS.md): what each forum allows, and the options for reading it
 - [FreshRSS comparison](docs/FRESHRSS-COMPARISON.md): how another reader pulls content, and what to adopt

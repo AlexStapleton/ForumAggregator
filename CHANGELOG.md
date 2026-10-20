@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Changed
+- Faster everywhere (details in docs/PERFORMANCE.md): the feed's source and tag lists ~15–60× faster with a large history, tag filters ~18× faster, opening an article ~5× faster, the app's files and lists sent compressed (first visit on a phone ~1 s quicker), and the feed list reacts ~3× faster with many cards. Database migration 0007 adds two indexes (runs automatically).
+
 ## [1.3.0] - 2026-10-19
 
 Follow forum threads with one updating card, and a fix for threads read through FlareSolverr.

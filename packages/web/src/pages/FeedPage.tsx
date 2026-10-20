@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FeedItem, ItemsFilter, ItemsOrder, ItemsPage, Source, TagCount } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
@@ -233,10 +233,11 @@ export function FeedPage() {
               <ItemCard
                 key={item.id}
                 item={item}
+                index={i}
                 selected={split && item.id === selectedId}
-                onUpdate={(p) => void update(item, p)}
-                onOpen={() => openIndex(i)}
-                onTag={(t) => setTag(t)}
+                onUpdate={update}
+                onOpen={openIndex}
+                onTag={setTag}
               />
             ))}
           </ul>
@@ -275,19 +276,27 @@ export function FeedPage() {
   );
 }
 
-function ItemCard({
+/**
+ * One card. Memoised with stable callbacks (D-086): marking one item read or selecting one only
+ * re-renders the cards that changed, not every card in a long list.
+ */
+const ItemCard = memo(function ItemCard({
   item,
+  index,
   selected,
-  onUpdate,
-  onOpen,
+  onUpdate: update,
+  onOpen: openIndex,
   onTag,
 }: {
   item: FeedItem;
+  index: number;
   selected: boolean;
-  onUpdate: (p: { read?: boolean; saved?: boolean }) => void;
-  onOpen: () => void;
+  onUpdate: (item: FeedItem, p: { read?: boolean; saved?: boolean }) => Promise<void>;
+  onOpen: (index: number) => void;
   onTag: (tag: string) => void;
 }) {
+  const onUpdate = (p: { read?: boolean; saved?: boolean }) => void update(item, p);
+  const onOpen = () => openIndex(index);
   return (
     <li
       id={`item-${item.id}`}
@@ -346,4 +355,4 @@ function ItemCard({
       )}
     </li>
   );
-}
+});

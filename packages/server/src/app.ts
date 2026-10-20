@@ -5,7 +5,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import compress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
+import zlib from "node:zlib";
 import { CSRF_HEADER, type VersionInfo } from "@fa/shared";
 import { registerAuth } from "./auth/routes.js";
 import { AuthService } from "./auth/service.js";
@@ -91,6 +93,14 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
       },
     },
   });
+  // API responses compressed on the fly; brotli at a low level keeps it cheap on a Pi (D-086).
+  // Web files are compressed once at build time and sent as they are (preCompressed below).
+  await fastify.register(compress, {
+    threshold: 1024,
+    encodings: ["br", "gzip"],
+    brotliOptions: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } },
+    zlibOptions: { level: 6 },
+  });
   await fastify.register(cookie);
   await fastify.register(rateLimit, { global: false });
 
@@ -159,6 +169,8 @@ async function registerWebUi(fastify: FastifyInstance, env: Env): Promise<void> 
     await fastify.register(fastifyStatic, {
       root,
       wildcard: false,
+      // index-*.js.br / .gz written by packages/web/scripts/precompress.mjs.
+      preCompressed: true,
       setHeaders(reply, filePath) {
         // Vite fingerprints everything under assets/, so it can be cached forever.
         reply.header(

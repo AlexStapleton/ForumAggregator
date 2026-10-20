@@ -338,3 +338,7 @@ label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 2p
 .item.clickable { cursor: pointer; }
 .item.clickable:hover { border-color: var(--accent); }
 input[readonly] { color: var(--muted); background: transparent; }
+
+/* ---- Long lists (D-086): the browser skips layout and paint for cards off screen. The size
+   hint keeps the scrollbar steady; "auto" remembers each card's real size once seen. ---- */
+.items .item { content-visibility: auto; contain-intrinsic-size: auto 150px; }

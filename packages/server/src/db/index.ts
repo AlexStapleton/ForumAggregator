@@ -48,6 +48,13 @@ export function openDb(opts: { databaseUrl?: string; dataDir: string }): Db {
   sqlite.pragma("synchronous = NORMAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
+  // Reads (D-086): a 16 MB page cache, memory-mapped reads (up to 256 MB; pages come from the OS
+  // cache instead of being copied), temporary sort tables in memory, and up-to-date planner
+  // statistics (optimize only re-analyses tables that changed a lot; cheap at startup).
+  sqlite.pragma("cache_size = -16000");
+  sqlite.pragma("mmap_size = 268435456");
+  sqlite.pragma("temp_store = MEMORY");
+  sqlite.pragma("optimize = 0x10002");
   const kysely = new Kysely<Database>({ dialect: new SqliteDialect({ database: sqlite }) });
   return {
     kysely,

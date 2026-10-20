@@ -5,6 +5,7 @@
 //   4. if that fails         → the feed summary, with a notice saying why
 // A source with CSS selectors set (D-074) always reads the original page (step 3) with them.
 // Fetching the page happens only when the user opens the item, like a browser would.
+import crypto from "node:crypto";
 import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
@@ -28,6 +29,12 @@ const COMMENTS_TTL_MS = 15 * 60_000;
 const THREAD_REFRESH_MS = 30 * 60_000;
 /** Replies shown on a followed thread's card (D-084). */
 const THREAD_CARD_MAX_POSTS = 100;
+/**
+ * Finished reader HTML kept in memory (D-086): cleaning it again on every open costs a DOM parse.
+ * Bounded by count and by size (~16 MB of text), so a Pi's memory isn't eaten by long articles.
+ */
+const HTML_CACHE_ENTRIES = 200;
+const HTML_CACHE_CHARS = 8_000_000;
 const MAX_COMMENTS = 30;
 
 class SelectorMiss extends Error {
@@ -63,6 +70,32 @@ export class ReaderService {
   ) {}
 
   private flareFetcher?: Fetcher;
+  /** key → finished HTML; Map order doubles as least-recently-used order. */
+  private htmlCache = new Map<string, string>();
+  private htmlCacheChars = 0;
+
+  /**
+   * Finished HTML for stored content, built once. Keyed by a hash of exactly what goes in, so
+   * anything re-fetched, re-stored or renamed misses the cache.
+   */
+  private finished(parts: string[], build: () => string): string {
+    const key = crypto.createHash("sha1").update(parts.join("\u0000")).digest("base64");
+    const hit = this.htmlCache.get(key);
+    if (hit !== undefined) {
+      this.htmlCache.delete(key);
+      this.htmlCache.set(key, hit);
+      return hit;
+    }
+    const html = build();
+    this.htmlCache.set(key, html);
+    this.htmlCacheChars += html.length;
+    while (this.htmlCache.size > HTML_CACHE_ENTRIES || this.htmlCacheChars > HTML_CACHE_CHARS) {
+      const [oldestKey, oldest] = this.htmlCache.entries().next().value!;
+      this.htmlCache.delete(oldestKey);
+      this.htmlCacheChars -= oldest.length;
+    }
+    return html;
+  }
 
   /** Direct, or through FlareSolverr for sources set to use it (D-080). */
   private fetcherFor(viaFlareSolverr: boolean): Fetcher {
@@ -140,21 +173,26 @@ export class ReaderService {
 
     // Cached result (from the feed or a previous extraction).
     if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed") && !stalePage) {
-      // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
-      const html = isReddit ? layoutRedditPost(item.html, null, item.title) : item.html;
-      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html: polishArticle(html, item.title), videoId: null, notice: null };
+      const stored = item.html;
+      const html = this.finished(["ok", String(isReddit), item.title, stored], () =>
+        // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
+        polishArticle(isReddit ? layoutRedditPost(stored, null, item.title) : stored, item.title),
+      );
+      return { ...base, kind: item.origin === "feed" ? "feed" : "page", html, videoId: null, notice: null };
     }
     // The feed's own text, kept as a fallback if the page can't be read.
     let feedHtml: string | null = null;
     if (item.status === "raw" && item.html) {
-      const raw = isReddit ? cleanRedditHtml(item.html) : item.html;
-      let html = sanitizeHtml(raw, item.url ?? "https://invalid.invalid/");
+      const rawHtml = item.html;
       // Reddit posts are often short but complete; elsewhere a short body is just a teaser.
       if (isReddit) {
-        // Laid out from the raw body on every open (cheap), so layout fixes reach old posts too.
-        html = layoutRedditPost(html, redditPostLink(item.html), item.title);
-        return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
+        // Laid out from the raw body (once per process), so layout fixes reach old posts too.
+        const html = this.finished(["reddit", item.title, item.url ?? "", rawHtml], () =>
+          polishArticle(layoutRedditPost(sanitizeHtml(cleanRedditHtml(rawHtml), item.url ?? "https://invalid.invalid/"), redditPostLink(rawHtml), item.title), item.title),
+        );
+        return { ...base, kind: "feed", html, videoId: null, notice: null };
       }
+      const html = sanitizeHtml(rawHtml, item.url ?? "https://invalid.invalid/");
       if (!preferPage && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
