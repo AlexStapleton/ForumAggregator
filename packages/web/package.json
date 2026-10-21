@@ -1,11 +1,11 @@
 {
   "name": "@fa/web",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/precompress.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

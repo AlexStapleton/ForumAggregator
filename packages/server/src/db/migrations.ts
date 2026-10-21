@@ -1,6 +1,6 @@
 // Schema migrations, written with Kysely's schema builder so they run on SQLite and Postgres.
 // Never edit a migration once released; add a new one.
-import type { Kysely } from "kysely";
+import { sql, type Kysely } from "kysely";
 import type { Migration, MigrationProvider } from "kysely/migration";
 
 const migrations: Record<string, Migration> = {
@@ -172,6 +172,20 @@ const migrations: Record<string, Migration> = {
     async down(db: Kysely<any>) {
       await db.schema.dropTable("thread_posts").execute();
       await db.schema.alterTable("sources").dropColumn("thread_batch_from").execute();
+    },
+  },
+  "0007_performance": {
+    async up(db: Kysely<any>) {
+      // Per-source total/unread counts and tag unread counts read only this index (D-086).
+      await db.schema.createIndex("items_source_read").on("items").columns(["source_id", "read"]).execute();
+      // The Saved filter, newest first.
+      await db.schema.createIndex("items_saved_published").on("items").columns(["saved", "published_at"]).execute();
+      // Fresh statistics, so the planner picks these.
+      await sql`analyze`.execute(db);
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.dropIndex("items_saved_published").execute();
+      await db.schema.dropIndex("items_source_read").execute();
     },
   },
 };

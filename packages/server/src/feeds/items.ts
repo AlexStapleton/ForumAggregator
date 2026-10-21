@@ -48,7 +48,11 @@ export class ItemService {
     if (opts.excludeSourceIds?.length) q = q.where("items.source_id", "not in", opts.excludeSourceIds);
     const tag = opts.tag;
     if (tag) {
-      q = q.where("items.source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
+      // EXISTS, not IN: the planner then walks items newest first and stops at the page size,
+      // instead of collecting and sorting every item of the tag's sources (D-086).
+      q = q.where(({ exists, selectFrom }) =>
+        exists(selectFrom("source_tags").select("source_tags.source_id").whereRef("source_tags.source_id", "=", "items.source_id").where("source_tags.tag", "=", tag)),
+      );
     }
     const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
     if (cursor) {
@@ -109,7 +113,11 @@ export class ItemService {
     if (req.sourceId) q = q.where("source_id", "=", req.sourceId);
     if (req.excludeSourceIds?.length) q = q.where("source_id", "not in", req.excludeSourceIds);
     const tag = req.tag;
-    if (tag) q = q.where("source_id", "in", (eb) => eb.selectFrom("source_tags").select("source_tags.source_id").where("source_tags.tag", "=", tag));
+    if (tag) {
+      q = q.where(({ exists, selectFrom }) =>
+        exists(selectFrom("source_tags").select("source_tags.source_id").whereRef("source_tags.source_id", "=", "items.source_id").where("source_tags.tag", "=", tag)),
+      );
+    }
     if (req.upTo !== undefined) q = q.where("published_at", "<=", req.upTo);
     const res = await q.executeTakeFirst();
     return Number(res.numUpdatedRows);

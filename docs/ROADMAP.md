@@ -11,7 +11,7 @@ _Last updated: 2026-10-19 (M1.2 built)_
 | | |
 |---|---|
 | **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
-| **Current release** | **v1.2.0** (2026-10-19), images `alexstapo/forumaggregator:1.2.0` |
+| **Current release** | **v1.3.0** (2026-10-19), images `alexstapo/forumaggregator:1.3.0` |
 | **Current milestone** | M2: forums. FlareSolverr route and thread reading built on the branch |
 | **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
 
@@ -143,7 +143,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-19 | FlareSolverr detection fix; follow a thread with an updating card; version 1.3.0 | PR, unmerged |
+| 2026-10-21 | Performance pass (indexes, compression, reader cache, faster feed list); version 1.3.1 | PR |
+| 2026-10-19 | **v1.3.0 released** (follow a thread; FlareSolverr fix) | [#8](https://github.com/AlexStapleton/ForumAggregator/pull/8) |
 | 2026-10-19 | **v1.2.0 released** (M2 start: FlareSolverr route, forum threads in the reader) | [#7](https://github.com/AlexStapleton/ForumAggregator/pull/7), tag `v1.2.0` |
 | 2026-10-19 | **v1.1.0 released** (M1.3: Reddit pictures, source checkboxes, whole-card tap) | [#6](https://github.com/AlexStapleton/ForumAggregator/pull/6), tag `v1.1.0` |
 | 2026-10-19 | **v1.0.1 released** (M1.2: layout, timeline, OPML, reader selectors, YouTube and Reddit comments) | [#5](https://github.com/AlexStapleton/ForumAggregator/pull/5), tag `v1.0.1` |

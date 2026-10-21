@@ -2,6 +2,13 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-10-20 (round 15: performance)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-087 | Release **v1.3.1** (patch: performance only; migration 0007 adds two indexes, nothing to do by hand) | User | Follows RELEASING.md |
+| D-086 | **Performance pass, measured first** ([PERFORMANCE.md](PERFORMANCE.md)). Database: migration 0007 adds `items(source_id, read)` (per-source and per-tag counts read the index only) and `items(saved, published_at)`, then `ANALYZE`; the tag filter uses `EXISTS` instead of `IN` so the planner walks items newest-first and stops at the page size; SQLite gets a 16 MB cache, memory-mapped reads, in-memory temp tables and `PRAGMA optimize` at start-up. Server: API responses compressed (`@fastify/compress`: brotli level 4 or gzip, over 1 KB); web files compressed once at build time (brotli 11 / gzip 9, `preCompressed`); finished reader HTML cached in memory keyed by a hash of its inputs (200 articles / ~16 MB at most). Browser: feed cards memoised with stable callbacks; off-screen cards use `content-visibility: auto`. Not done: running totals for source counts (10 ms didn't justify the bookkeeping), code-splitting (the app files are cached forever after the first visit), a service worker (M4) | User ("make this fast") | Sources and tags were 150+ ms on every feed load with a year of items; the first visit on a phone spent most of its time downloading uncompressed JavaScript |
+
 ## 2026-10-19 (round 14: FlareSolverr fixes, thread following)
 
 | ID | Decision | Source | Rationale |
