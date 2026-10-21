@@ -1,10 +1,11 @@
 // Reader: one item at a time, in the feed's current order. Either full screen ("overlay", where
 // Back closes it) or as the right-hand pane of the split layout ("pane", D-070).
 // Next/previous via buttons, swipe (phone) or keys (→/j, ←/k); Esc closes.
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeedItem, ReaderComments, ReaderContent } from "@fa/shared";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import type { FeedItem, ReaderComments, ReaderContent, ReaderPagination } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
+import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
 
 interface Props {
@@ -25,12 +26,28 @@ interface Props {
 const cache = new Map<string, ReaderContent>();
 const cacheKey = (item: FeedItem) => `${item.id}|${item.publishedAt}|${item.summary ?? ""}`;
 
-async function loadContent(item: FeedItem): Promise<ReaderContent> {
-  const key = cacheKey(item);
+/** A page of a forum thread: a number, the newest ("last"), or undefined for the item's default. */
+type Page = number | "last" | undefined;
+
+const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)/;
+
+/** Where an item opens (D-088): forum threads on the page chosen in Settings; a followed thread's card on its new replies. */
+function startPage(item: FeedItem): Page {
+  if (item.sourceKind === "thread" || !item.url) return undefined;
+  try {
+    return THREAD_LINK.test(new URL(item.url).pathname) && readPrefs().threadStart === "last" ? "last" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadContent(item: FeedItem, page: Page): Promise<ReaderContent> {
+  const key = `${cacheKey(item)}|${page ?? ""}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const content = await api<ReaderContent>("GET", `/api/items/${item.id}/reader`);
+  const content = await api<ReaderContent>("GET", `/api/items/${item.id}/reader${page === undefined ? "" : `?page=${page}`}`);
   cache.set(key, content);
+  if (content.pagination && page === "last") cache.set(`${cacheKey(item)}|${content.pagination.page}`, content);
   return content;
 }
 
@@ -38,6 +55,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const item = items[index];
   const [content, setContent] = useState<ReaderContent>();
   const [error, setError] = useState<string>();
+  const [page, setPage] = useState<Page>(() => (item ? startPage(item) : undefined));
+  // The pager stays put while the next page loads.
+  const [pager, setPager] = useState<ReaderPagination | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);
   const closing = useRef(false);
@@ -66,7 +86,16 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     history.back(); // triggers popstate → onClose
   }, [mode, onClose]);
 
-  // Load the current item; mark it read; warm up the next one.
+  // A different item starts on its own start page.
+  const itemKey = item ? cacheKey(item) : null;
+  const shownKey = useRef(itemKey);
+  if (shownKey.current !== itemKey) {
+    shownKey.current = itemKey;
+    setPage(item ? startPage(item) : undefined);
+    setPager(null);
+  }
+
+  // Load the current item (or another page of a thread); mark it read; warm up the next item.
   useEffect(() => {
     if (!item) return;
     let cancelled = false;
@@ -74,15 +103,19 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     setError(undefined);
     scroller.current?.scrollTo({ top: 0 });
     if (!item.read) onUpdate(item, { read: true });
-    loadContent(item)
-      .then((c) => !cancelled && setContent(c))
+    loadContent(item, page)
+      .then((c) => {
+        if (cancelled) return;
+        setContent(c);
+        setPager(c.pagination && c.pagination.pages > 1 ? c.pagination : null);
+      })
       .catch((err) => !cancelled && setError(errorMessage(err)));
     const next = items[index + 1];
-    if (next) void loadContent(next).catch(() => undefined);
+    if (next) void loadContent(next, startPage(next)).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [item ? cacheKey(item) : null]); // only when the item (or a thread card's replies) changes
+  }, [itemKey, page]); // only when the item (or a thread card's replies) or the page changes
 
   const go = useCallback(
     async (delta: 1 | -1) => {
@@ -163,6 +196,21 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             </div>
           )}
 
+          {item.sourceKind === "thread" && (
+            // A followed thread's card shows its new replies; this switches to the thread itself (D-088).
+            <p className="thread-switch">
+              {page === undefined ? (
+                <button className="secondary" onClick={() => setPage(readPrefs().threadStart === "last" ? "last" : 1)}>
+                  Read the whole thread
+                </button>
+              ) : (
+                <button className="secondary" onClick={() => setPage(undefined)}>
+                  ← Back to the new replies
+                </button>
+              )}
+            </p>
+          )}
+
           {error && <div className="alert alert-error">{error}</div>}
           {!content && !error && <p className="muted reader-loading">Loading…</p>}
 
@@ -198,6 +246,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
         </article>
       </div>
 
+      {pager && <Pager pagination={pager} onGo={(n) => setPage(n)} />}
       <footer className="reader-bar reader-nav">
         <button className="secondary" onClick={() => void go(-1)} disabled={index === 0} aria-label="Previous item">
           ← Prev
@@ -284,5 +333,59 @@ function Comments({ itemId, site, autoLoad = false }: { itemId: string; site: "R
         </a>
       )}
     </section>
+  );
+}
+
+/**
+ * Pages of a forum thread (D-088), like the forum's own: first, previous, nearby page numbers,
+ * next, last, and a box to type a page number.
+ */
+function Pager({ pagination, onGo }: { pagination: ReaderPagination; onGo: (page: number) => void }) {
+  const { page, pages } = pagination;
+  const [draft, setDraft] = useState(String(page));
+  useEffect(() => setDraft(String(page)), [page]);
+  const go = (n: number) => {
+    const target = Math.min(Math.max(1, Math.round(n)), pages);
+    if (target !== page) onGo(target);
+    else setDraft(String(page));
+  };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const n = Number(draft);
+    if (Number.isFinite(n)) go(n);
+  };
+  // 1 … p-1 p p+1 … last
+  const numbers: Array<number | "gap"> = [];
+  for (const n of [1, page - 1, page, page + 1, pages]) {
+    if (n < 1 || n > pages || numbers.includes(n)) continue;
+    const prev = numbers[numbers.length - 1];
+    if (typeof prev === "number" && n > prev + 1) numbers.push("gap");
+    numbers.push(n);
+  }
+  return (
+    <nav className="reader-bar reader-pager" aria-label="Thread pages">
+      <button className="secondary" onClick={() => go(1)} disabled={page <= 1} aria-label="First page">«</button>
+      <button className="secondary" onClick={() => go(page - 1)} disabled={page <= 1} aria-label="Previous page">‹</button>
+      <span className="pager-numbers">
+        {numbers.map((n, i) =>
+          n === "gap" ? (
+            <span key={`gap${i}`} className="muted" aria-hidden="true">…</span>
+          ) : (
+            <button key={n} className={n === page ? "" : "secondary"} aria-current={n === page ? "page" : undefined} onClick={() => go(n)}>
+              {n}
+            </button>
+          ),
+        )}
+      </span>
+      <form className="pager-jump" onSubmit={submit} noValidate>
+        <label>
+          <span className="visually-hidden">Go to page</span>
+          <input type="number" inputMode="numeric" min={1} max={pages} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={`Page, 1 to ${pages}`} />
+        </label>
+        <span className="muted small">of {pages}</span>
+      </form>
+      <button className="secondary" onClick={() => go(page + 1)} disabled={page >= pages} aria-label="Next page">›</button>
+      <button className="secondary" onClick={() => go(pages)} disabled={page >= pages} aria-label="Last page">»</button>
+    </nav>
   );
 }

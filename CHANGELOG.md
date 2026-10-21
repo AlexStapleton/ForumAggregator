@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- Page through forum threads in the reader: a pager above the bottom buttons (first, previous, page numbers, next, last, and a box to type a page). Settings → This device → "Forum threads open on" first or last page. A followed thread's card can open the whole thread.
+
 ## [1.3.1] - 2026-10-21
 
 Performance release. Upgrade with `docker compose pull && docker compose up -d`, or pin

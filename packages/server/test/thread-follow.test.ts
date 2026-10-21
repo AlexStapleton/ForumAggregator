@@ -126,6 +126,58 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     expect((await card())[0]!.summary).toMatch(/^30 new replies/);
   });
 
+  it("reads any page of a thread in the reader, the newest with page=last, kept for 30 minutes (D-088)", async () => {
+    const { clock, web, call, setThread } = await start();
+    setThread(45); // pages 1–3 (20, 20, 5 posts)
+    // A board feed whose item links to the thread, like a forum's board RSS.
+    web.set("https://forum.example/forums/gpus.12/index.rss", {
+      body: `<?xml version="1.0"?><rss version="2.0"><channel><title>GPUs</title><item><guid>1816698</guid><title>Owners Club</title><link>${THREAD}</link><pubDate>${new Date(NOW).toUTCString()}</pubDate></item></channel></rss>`,
+    });
+    await call("POST", "/api/sources", { url: "https://forum.example/forums/gpus.12/" });
+    const item = (await call("GET", "/api/items")).json().items[0];
+    const read = (q = "") => call("GET", `/api/items/${item.id}/reader${q}`).then((r) => r.json());
+
+    const first = await read();
+    expect(first.pagination).toEqual({ page: 1, pages: 3 });
+    expect(first.html).toContain("Member1000");
+    expect(first.html).not.toContain("Member1020");
+
+    const second = await read("?page=2");
+    expect(second.pagination).toEqual({ page: 2, pages: 3 });
+    expect(second.html).toContain("Member1020");
+    expect(second.html).not.toContain("Member1000");
+
+    const newest = await read("?page=last");
+    expect(newest.pagination).toEqual({ page: 3, pages: 3 });
+    expect(newest.html).toContain("Member1044");
+
+    // Pages read in the last 30 minutes come from memory; "last" also filled page 3.
+    const before = web.requests.length;
+    await read("?page=2");
+    await read("?page=3");
+    expect(web.requests.length).toBe(before);
+
+    // Junk page values are ignored (page 1).
+    expect((await read("?page=abc")).pagination).toEqual({ page: 1, pages: 3 });
+
+    // Later, the newest page is read again and shows new replies.
+    clock.now += 31 * 60_000;
+    setThread(48);
+    expect((await read("?page=last")).html).toContain("Member1047");
+  });
+
+  it("a followed thread's card can open the whole thread", async () => {
+    const { call, setThread } = await start();
+    setThread(25);
+    await call("POST", "/api/sources", { url: THREAD });
+    const card = (await call("GET", "/api/items")).json().items[0];
+    const replies = (await call("GET", `/api/items/${card.id}/reader`)).json();
+    expect(replies.pagination ?? null).toBeNull(); // the new replies, no pager
+    const whole = (await call("GET", `/api/items/${card.id}/reader?page=1`)).json();
+    expect(whole.pagination).toEqual({ page: 1, pages: 2 });
+    expect(whole.html).toContain("Member1000");
+  });
+
   it("refuses duplicates, address changes and pages without posts; leaves threads out of OPML", async () => {
     const { web, call, setThread } = await start();
     setThread(5);

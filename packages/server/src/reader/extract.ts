@@ -12,6 +12,8 @@ export interface Extracted {
   title: string | null;
   byline: string | null;
   textLength: number;
+  /** Forum thread pages: this page and the thread's page count (D-088). */
+  pages?: { page: number; pages: number };
 }
 
 export function extractArticle(pageHtml: string, pageUrl: string): Extracted | null {
@@ -155,15 +157,14 @@ export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "dateti
     .join("\n");
 }
 
-/** A thread page for the reader: up to 50 posts, plus a note when there are more pages (D-081). */
+/** A thread page for the reader: up to 50 posts, and which page of how many (D-081, D-088). */
 function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
   const thread = parseForumThread(doc, pageUrl);
   if (!thread) return null;
-  let html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
-  if (thread.pages > 1) html += `\n<p><em>Page ${thread.page} of ${thread.pages}. Open the original for the rest of the thread.</em></p>`;
+  const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
   const textLength = htmlToText(html).length;
   if (!thread.posts.some((p) => htmlToText(p.html).length)) return null;
-  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength };
+  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength, pages: { page: thread.page, pages: thread.pages } };
 }
 
 const validator = new JSDOM("<!doctype html><p></p>").window.document;
