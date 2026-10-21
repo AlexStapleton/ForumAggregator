@@ -6,6 +6,11 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-21
+
+Performance release. Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.3.1`. Database migration 0007 (two indexes) runs automatically.
+
 ### Changed
 - Faster everywhere (details in docs/PERFORMANCE.md): the feed's source and tag lists ~15–60× faster with a large history, tag filters ~18× faster, opening an article ~5× faster, the app's files and lists sent compressed (first visit on a phone ~1 s quicker), and the feed list reacts ~3× faster with many cards. Database migration 0007 adds two indexes (runs automatically).
 
