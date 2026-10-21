@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
+import { latestPageUrl, threadAddress, threadPageUrl } from "../feeds/thread.js";
 import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
@@ -25,8 +26,13 @@ const INTERACTIVE = { minDelayMs: 1000, jitterMs: 300 };
 /** Feed text shorter than this is a teaser: try the article page instead (except Reddit). */
 const FEED_FULL_TEXT_MIN = 500;
 const COMMENTS_TTL_MS = 15 * 60_000;
-/** A forum thread read more than this long ago is read again, for new replies (D-081). */
+/** A forum thread page read more than this long ago is read again, for new replies (D-081, D-088). */
 const THREAD_REFRESH_MS = 30 * 60_000;
+/** Thread pages kept in memory (each is at most 50 posts). */
+const THREAD_PAGES_KEPT = 100;
+
+/** Which page of a forum thread to show: a number, or the newest ("last"). */
+export type ThreadPageRequest = number | "last";
 /** Replies shown on a followed thread's card (D-084). */
 const THREAD_CARD_MAX_POSTS = 100;
 /**
@@ -57,6 +63,8 @@ function pageErrorMessage(err: unknown): string {
 
 export class ReaderService {
   private inFlight = new Map<string, Promise<ReaderContent | null>>();
+  /** "itemId|page" → a thread page as shown, and when it was read (D-088). LRU by Map order. */
+  private threadPages = new Map<string, { at: number; content: ReaderContent }>();
   private commentsCache = new Map<string, { at: number; value: ReaderComments }>();
 
   constructor(
@@ -105,15 +113,16 @@ export class ReaderService {
   }
 
   /** null if the item doesn't exist. Concurrent opens of the same item share the work. */
-  get(itemId: string): Promise<ReaderContent | null> {
-    const running = this.inFlight.get(itemId);
+  get(itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
+    const key = `${itemId}|${page ?? ""}`;
+    const running = this.inFlight.get(key);
     if (running) return running;
-    const p = this.load(itemId).finally(() => this.inFlight.delete(itemId));
-    this.inFlight.set(itemId, p);
+    const p = this.load(itemId, page).finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, p);
     return p;
   }
 
-  private async load(itemId: string): Promise<ReaderContent | null> {
+  private async load(itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
     const item = await this.db.kysely
       .selectFrom("items")
       .innerJoin("sources", "sources.id", "items.source_id")
@@ -152,7 +161,12 @@ export class ReaderService {
       summary: item.source_kind === "reddit" ? cleanRedditSummary(item.summary) : item.summary,
     };
     const isReddit = item.source_kind === "reddit";
-    if (item.source_kind === "thread") return this.threadCard(base, item.source_id, item.thread_batch_from);
+    const via = item.via_flaresolverr === 1;
+    // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
+    if (item.source_kind === "thread") {
+      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from);
+      return this.forumThread(base, item, null, via, page, () => null);
+    }
 
     const videoId = youtubeVideoId(item.url);
     if (videoId) return { ...base, kind: "video", html: null, videoId, notice: null };
@@ -161,18 +175,19 @@ export class ReaderService {
     const selectors: ReaderSelectors | null =
       !isReddit && (item.article_selector || item.remove_selector) ? { article: item.article_selector, remove: item.remove_selector } : null;
 
-    // Forum threads are read from the page (the posts), like sources with selectors (D-081).
-    const isThread = !isReddit && isForumThreadUrl(item.url);
-    const preferPage = !!selectors || isThread;
-    const via = item.via_flaresolverr === 1;
-    // A thread read a while ago may have new replies: read it again, keeping the old copy in case.
-    const stalePage =
-      isThread && item.status === "ok" && item.origin === "page" && item.html && item.fetched_at !== null && this.now() - item.fetched_at > THREAD_REFRESH_MS
-        ? item.html
+    // Forum threads are read from their pages (the posts), page by page (D-081, D-088).
+    if (!isReddit && item.url && isForumThreadUrl(item.url)) {
+      const row = item;
+      const feedText = () =>
+        row.status === "raw" && row.html ? sanitizeHtml(row.html, row.url ?? "https://invalid.invalid/") || null
+        : row.status === "ok" && row.origin === "feed" ? row.html
         : null;
+      return this.forumThread(base, item, selectors, via, page ?? 1, feedText);
+    }
+    const preferPage = !!selectors;
 
     // Cached result (from the feed or a previous extraction).
-    if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed") && !stalePage) {
+    if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed")) {
       const stored = item.html;
       const html = this.finished(["ok", String(isReddit), item.title, stored], () =>
         // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
@@ -216,12 +231,9 @@ export class ReaderService {
       return { ...base, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
     } catch (err) {
       const message = pageErrorMessage(err);
-      if (stalePage) {
-        return { ...base, kind: "page", html: polishArticle(stalePage, item.title), videoId: null, notice: `Couldn't load new replies: ${message} Showing the copy read earlier.` };
-      }
       // The feed's own body still beats the one-line summary.
       if (feedHtml) {
-        // With selectors or a thread, keep retrying the page on later opens.
+        // With selectors, keep retrying the page on later opens (the user may be fixing them).
         if (preferPage) {
           return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: `${message} Showing the feed's text instead.` };
         }
@@ -231,6 +243,62 @@ export class ReaderService {
       await this.store(item.id, "page", "failed", null, message);
       return this.summaryOnly(base, message);
     }
+  }
+
+  /**
+   * One page of a forum thread (D-088): read on demand (through FlareSolverr when the source uses
+   * it) and kept in memory for 30 minutes per page. "last" reads XenForo's newest page. If reading
+   * fails: the copy read earlier, else the feed's own text, else the summary, each with the reason.
+   */
+  private async forumThread(
+    base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">,
+    item: { id: string; url: string | null; title: string; status: string | null; origin: string | null; html: string | null },
+    selectors: ReaderSelectors | null,
+    via: boolean,
+    want: ThreadPageRequest,
+    feedText: () => string | null,
+  ): Promise<ReaderContent> {
+    const address = threadAddress(new URL(item.url!));
+    if (!address) return this.summaryOnly(base, "This link isn't a forum thread.");
+    const key = `${item.id}|${want}`;
+    const known = this.threadPages.get(key);
+    if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
+
+    const url = want === "last" ? latestPageUrl(address) : threadPageUrl(address, want);
+    try {
+      const { article } = await this.readPage(url, selectors ?? {}, via);
+      const content: ReaderContent = {
+        ...base,
+        author: base.author ?? article.byline,
+        kind: "page",
+        html: polishArticle(article.html, item.title),
+        videoId: null,
+        notice: null,
+        pagination: article.pages ?? null,
+      };
+      this.rememberThreadPage(key, content);
+      // "last" is also page N, and page 1 is what the item opens on.
+      if (article.pages && article.pages.page !== want) this.rememberThreadPage(`${item.id}|${article.pages.page}`, content);
+      if (article.pages?.page === 1) await this.store(item.id, "page", "ok", article.html, null);
+      return content;
+    } catch (err) {
+      const message = pageErrorMessage(err);
+      const earlier =
+        known?.content ??
+        (want === 1 && item.status === "ok" && item.origin === "page" && item.html
+          ? { ...base, kind: "page" as const, html: polishArticle(item.html, item.title), videoId: null, notice: null, pagination: null }
+          : null);
+      if (earlier) return { ...earlier, notice: `Couldn't load new replies: ${message} Showing the copy read earlier.` };
+      const feed = feedText();
+      if (feed) return { ...base, kind: "feed", html: polishArticle(feed, item.title), videoId: null, notice: `${message} Showing the feed's text instead.`, pagination: null };
+      return this.summaryOnly(base, message);
+    }
+  }
+
+  private rememberThreadPage(key: string, content: ReaderContent) {
+    this.threadPages.delete(key);
+    this.threadPages.set(key, { at: this.now(), content });
+    while (this.threadPages.size > THREAD_PAGES_KEPT) this.threadPages.delete(this.threadPages.keys().next().value!);
   }
 
   /**

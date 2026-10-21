@@ -173,6 +173,13 @@ export interface ReaderContent {
   videoId: string | null;
   /** Why only the summary is shown (blocked, paywall, …). */
   notice: string | null;
+  /** Forum threads (D-088): which page this is, out of how many. Absent for everything else. */
+  pagination?: ReaderPagination | null;
+}
+
+export interface ReaderPagination {
+  page: number;
+  pages: number;
 }
 
 /** Lower-case, dashes for spaces, only letters/digits/-/+/./#; max 30 characters. */

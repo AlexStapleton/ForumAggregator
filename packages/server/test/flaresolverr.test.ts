@@ -43,7 +43,7 @@ describe("XenForo thread pages", () => {
     expect(isForumThreadUrl(null)).toBe(false);
   });
 
-  it("shows each post with its author and time, quotes kept, page count noted", () => {
+  it("shows each post with its author and time, quotes kept, and which page of how many", () => {
     const html = THREAD([
       { author: "PepperGrower", text: 'Here are mine. <img src="https://forum.example/attachments/pot.jpg" class="bbImage">' },
       {
@@ -62,7 +62,8 @@ describe("XenForo thread pages", () => {
     expect(out).toContain("Looking great!");
     expect(out.indexOf("PepperGrower</strong>")).toBeLessThan(out.indexOf("Reaper55</strong>"));
     expect(out).not.toMatch(/Click to expand|Sidebar|signature/);
-    expect(out).toContain("Page 1 of 3. Open the original for the rest of the thread.");
+    expect(r.article!.pages).toEqual({ page: 1, pages: 3 }); // shown as a pager, not text (D-088)
+    expect(out).not.toContain("Page 1 of 3");
   });
 });
 

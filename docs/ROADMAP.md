@@ -143,7 +143,8 @@ forum questions get answered. Nothing from the design is dropped; it's only reor
 
 | Date | What | Where |
 |---|---|---|
-| 2026-10-21 | Performance pass (indexes, compression, reader cache, faster feed list); version 1.3.1 | PR |
+| 2026-10-21 | Thread pages in the reader (pager, first/last page setting); version 1.4.0 | PR |
+| 2026-10-21 | **v1.3.1** merged (performance pass) | [#9](https://github.com/AlexStapleton/ForumAggregator/pull/9) |
 | 2026-10-19 | **v1.3.0 released** (follow a thread; FlareSolverr fix) | [#8](https://github.com/AlexStapleton/ForumAggregator/pull/8) |
 | 2026-10-19 | **v1.2.0 released** (M2 start: FlareSolverr route, forum threads in the reader) | [#7](https://github.com/AlexStapleton/ForumAggregator/pull/7), tag `v1.2.0` |
 | 2026-10-19 | **v1.1.0 released** (M1.3: Reddit pictures, source checkboxes, whole-card tap) | [#6](https://github.com/AlexStapleton/ForumAggregator/pull/6), tag `v1.1.0` |

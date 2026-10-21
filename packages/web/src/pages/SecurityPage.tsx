@@ -46,9 +46,26 @@ function ThisDevice() {
           </label>
         ))}
       </fieldset>
+      <fieldset className="choices">
+        <legend>Forum threads open on</legend>
+        {THREAD_STARTS.map((t) => (
+          <label key={t.value} className="choice">
+            <input type="radio" name="threadStart" value={t.value} checked={prefs.threadStart === t.value} onChange={() => setPrefs({ threadStart: t.value })} />
+            <span>
+              <strong>{t.label}</strong>
+              <span className="muted small block">{t.hint}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
     </section>
   );
 }
+
+const THREAD_STARTS: Array<{ value: "first" | "last"; label: string; hint: string }> = [
+  { value: "first", label: "First page", hint: "Start with the opening post, like reading the thread from the beginning." },
+  { value: "last", label: "Last page", hint: "Start with the newest replies. Either way, the pager at the bottom moves between pages." },
+];
 
 /** Optional FlareSolverr instance for forums behind a Cloudflare check (D-080). */
 function FlareSolverrSettings() {

@@ -106,8 +106,11 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
     return comments;
   });
 
-  app.get<{ Params: { id: string } }>("/api/items/:id/reader", async (request, reply) => {
-    const content = await reader.get(request.params.id);
+  app.get<{ Params: { id: string }; Querystring: { page?: string } }>("/api/items/:id/reader", async (request, reply) => {
+    // Forum threads: ?page=N or ?page=last (D-088); ignored for everything else.
+    const raw = request.query.page;
+    const page = raw === "last" ? "last" : raw && /^\d{1,6}$/.test(raw) && Number(raw) >= 1 ? Number(raw) : undefined;
+    const content = await reader.get(request.params.id, page);
     if (!content) return sendError(reply, 404, "not_found", "Item not found");
     return content;
   });
