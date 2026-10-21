@@ -6,6 +6,7 @@ Each entry records what was decided, who decided it, and why. Newest first withi
 
 | ID | Decision | Source | Rationale |
 |---|---|---|---|
+| D-089 | Release **v1.4.0** (minor: new feature, no migration) | User | Follows RELEASING.md |
 | D-088 | **Forum threads are paged in the reader.** `GET /api/items/:id/reader?page=N` or `?page=last` (XenForo's `…/latest`) reads that page of the thread (through FlareSolverr when the source uses it); each page is kept in memory for 30 minutes (up to 100 pages), and page 1 is also stored as before. The page number and count come back as `pagination` instead of a "Page 1 of N" line, and the reader shows a pager above the bottom buttons like the forum's (« ‹ 1 … 3 4 5 … 12 › » plus a box to type a page number; on a phone only the arrows and the box). **Settings → This device → Forum threads open on: First page / Last page.** A followed thread's card keeps showing its new replies, with "Read the whole thread" to page through it and "Back to the new replies". Failures fall back as before (earlier copy, then the feed's text, then the summary) | User ("is there a way to load all of the pages…", "a setting where it pulls the first or last page") | Long threads are read page by page on the forum too; loading every page at once would mean many requests per open |
 
 ## 2026-10-20 (round 15: performance)
