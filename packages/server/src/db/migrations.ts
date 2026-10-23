@@ -223,6 +223,17 @@ export const migrations: Record<string, Migration> = {
       // Nothing to undo: those pages are read again when opened.
     },
   },
+  "0011_reread_forum_pages_with_member_details": {
+    async up(db: Kysely<any>) {
+      // Forum threads read as a generic article before vBulletin threads were understood (D-098)
+      // kept each poster's sidebar ("Joined:", "Posts:"): read them again on the next open.
+      await sql`delete from item_content where origin = 'page' and status = 'ok'
+        and html like '%Joined:%' and html like '%Posts:%'`.execute(db);
+    },
+    async down() {
+      // Nothing to undo: those pages are read again when opened.
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

@@ -15,6 +15,8 @@ export interface Extracted {
   textLength: number;
   /** Forum thread pages: this page and the thread's page count (D-088). */
   pages?: { page: number; pages: number };
+  /** The forum's own link to the next page, when it has one (vBulletin, D-098). */
+  nextPageUrl?: string | null;
 }
 
 export function extractArticle(pageHtml: string, pageUrl: string): Extracted | null {
@@ -99,7 +101,7 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
       };
     }
     // A XenForo thread: the posts, not Readability's guess (D-081).
-    const thread = xenforoThread(doc, pageUrl);
+    const thread = xenforoThread(doc, pageUrl) ?? vbulletinThread(doc, pageUrl);
     if (thread) return { article: thread, matched: null, removed, audio };
     const article = new Readability(doc, { charThreshold: MIN_ARTICLE_TEXT }).parse();
     if (!article?.content) return { article: null, matched: null, removed, audio };
@@ -197,6 +199,112 @@ function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
   const textLength = htmlToText(html).length;
   if (!thread.posts.some((p) => htmlToText(p.html).length)) return null;
   return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength, pages: { page: thread.page, pages: thread.pages } };
+}
+
+/**
+ * vBulletin 3/4 thread page (e.g. Bike Forums) → its posts (D-098): author and date above each
+ * post's own text (#post_message_<id>). The member sidebar (rank, badges, join date, post count),
+ * signatures and buttons sit outside it and are left out. Quotes become block quotes.
+ */
+export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThreadPage | null {
+  const bodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => /^post_message_\d+$/.test(el.id));
+  if (!bodies.length) return null;
+  const posts: ForumPost[] = bodies.map((body) => {
+    const id = body.id.slice("post_message_".length);
+    const post = doc.getElementById(`post${id}`) ?? doc.getElementById(`post_${id}`) ?? body.closest("table, li");
+    const author = post?.querySelector(".bigusername, a.username, .username")?.textContent?.trim() || null;
+    // vB4: .postdate; vB3: the post's header cell ("10-23-26 | 12:23 AM", "#1" in the next cell).
+    const dateEl = post?.querySelector(".postdate .date, .postdate") ?? post?.querySelector(".thead .tcell, td.thead, .thead");
+    const timeLabel = dateEl?.textContent?.replace(/\s+/g, " ").replace(/#\s*\d+\s*$/, "").trim().slice(0, 60) || null;
+    vbulletinQuotes(body);
+    for (const junk of Array.from(body.querySelectorAll("script, noscript, img[alt='View Post']"))) junk.remove();
+    return { id, author, datetime: null, timeLabel, postedAt: null, html: sanitizeHtml(body.innerHTML, pageUrl) };
+  });
+  // Bike Forums' theme: "20 / 21" (#mb_page_current, #mb_page_total). Classic: "Page 20 of 21", an
+  // innermost element of the page navigation (the page links sit beside it).
+  const current = Number(doc.getElementById("mb_page_current")?.textContent);
+  const total = Number(doc.getElementById("mb_page_total")?.textContent);
+  const nav: [unknown, string, string] | null | undefined =
+    current > 0 && total > 0
+      ? [null, String(current), String(total)]
+      : (Array.from(doc.querySelectorAll(".pagenav *, .pagination *, .threadpagenav *"))
+          .filter((el) => !el.firstElementChild)
+          .map((el) => /^\s*Page (\d+) of (\d+)\s*$/i.exec(el.textContent ?? ""))
+          .find(Boolean) as [unknown, string, string] | undefined);
+  const page = nav ? Number(nav[1]) : 1;
+  const pages = nav ? Math.max(page, Number(nav[2])) : 1;
+  const title = doc.querySelector("h1.threadtitle, .threadtitle, h1")?.textContent?.trim() || doc.title || null;
+  return { title, posts, page, pages };
+}
+
+/** vBulletin's quote boxes (vB3 "Quote:" + table, vB4 .bbcode_container) → <blockquote>. */
+function vbulletinQuotes(body: Element) {
+  const doc = body.ownerDocument;
+  const quote = (who: string | null, inner: Element | null) => {
+    const bq = doc.createElement("blockquote");
+    if (who) {
+      const p = doc.createElement("p");
+      const b = doc.createElement("strong");
+      b.textContent = `${who} wrote:`;
+      p.append(b);
+      bq.append(p);
+    }
+    if (inner) bq.append(...Array.from(inner.childNodes));
+    return bq;
+  };
+  // vB4
+  for (const box of Array.from(body.querySelectorAll(".bbcode_container")).reverse()) {
+    const who = box.querySelector(".bbcode_postedby strong")?.textContent?.trim() ?? null;
+    box.querySelector(".bbcode_postedby")?.remove();
+    box.replaceWith(quote(who, box.querySelector(".message, .bbcode_quote") ?? box));
+  }
+  // vB3: <div><div class="smallfont">Quote:</div><table>…<td class="alt2">[<div>Originally Posted by <strong>X</strong></div><div>text</div>]</td>…</table></div>
+  // Bike Forums: <div><div><label>Quote:</label></div><div class="panel alt2">[same]</div></div>
+  const labels = Array.from(body.querySelectorAll("div, label, span"))
+    .filter((el) => /^\s*Quote:?\s*$/i.test(el.textContent ?? ""))
+    // The outermost element that is just the label (a <div> around a <label>).
+    .filter((el) => !(el.parentElement && el.parentElement !== body && /^\s*Quote:?\s*$/i.test(el.parentElement.textContent ?? "")));
+  for (const label of labels.reverse()) {
+    const next = label.nextElementSibling;
+    const cell = next?.tagName === "TABLE" ? next.querySelector("td") : next;
+    if (!next || !cell) continue;
+    let who: string | null = null;
+    const by = Array.from(cell.children).find((c) => /^\s*Originally Posted by/i.test(c.textContent ?? ""));
+    if (by) {
+      who = by.querySelector("strong, b")?.textContent?.trim() ?? null;
+      by.remove();
+    }
+    const box = label.parentElement && label.parentElement !== body ? label.parentElement : null;
+    const replacement = quote(who, cell);
+    if (box && box.children.length === 2) box.replaceWith(replacement);
+    else {
+      next.replaceWith(replacement);
+      label.remove();
+    }
+  }
+}
+
+/** A vBulletin thread page for the reader (D-098): its posts, which page of how many, and the next page's link. */
+function vbulletinThread(doc: Document, pageUrl: string): Extracted | null {
+  const thread = parseVbulletinThread(doc, pageUrl);
+  if (!thread || !thread.posts.some((p) => htmlToText(p.html).length)) return null;
+  const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
+  const nextPageUrl = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
+  return {
+    html,
+    title: thread.title,
+    byline: thread.posts[0]?.author ?? null,
+    textLength: htmlToText(html).length,
+    pages: { page: thread.page, pages: thread.pages },
+    nextPageUrl,
+  };
+}
+
+/** For a thread page shown without the in-app pager: which page it is, and a link to the next. */
+export function pageNote(article: Pick<Extracted, "pages" | "nextPageUrl">): string {
+  if (!article.pages || article.pages.pages <= 1) return "";
+  const next = article.nextPageUrl ? ` <a href="${escHtml(article.nextPageUrl)}">Next page on the forum</a>` : "";
+  return `<p><em>Page ${article.pages.page} of ${article.pages.pages}.</em>${next}</p>`;
 }
 
 const validator = new JSDOM("<!doctype html><p></p>").window.document;

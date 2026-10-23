@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 // Following a forum thread with one updating card (D-084).
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonPoster } from "../src/feeds/flaresolverr.js";
@@ -177,6 +179,29 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     // Back to the defaults.
     await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 15, threadPagesPerCheck: 3 });
     expect(await app!.db.kysely.selectFrom("settings").select("key").where("key", "like", "%interval%").execute()).toEqual([]);
+  });
+
+  it("pages vBulletin threads from a vBulletin board's feed; 'last' reads page 1 for the count (D-099)", async () => {
+    const { web, call } = await start();
+    const fixture = fs.readFileSync(path.join(import.meta.dirname, "fixtures/pages/vbulletin-thread.html"), "utf8");
+    const pageOf = (n: number) => fixture.replace(/Page 1 of 3/, `Page ${n} of 3`).replace(/Rider One/g, `Rider P${n}`);
+    const T = "https://vb.example/classic-vintage/100-steel-frames";
+    web.set("https://vb.example/external.php?type=RSS2&forumids=181", { body: rss("Classic & Vintage", [{ guid: "t100", title: "Steel frames", date: new Date(NOW - 60_000).toISOString(), link: `${T}.html` }]) });
+    for (const n of [1, 2, 3]) web.set(n === 1 ? `${T}.html` : `${T}-${n}.html`, { body: pageOf(n), contentType: "text/html" });
+    expect((await call("POST", "/api/sources", { url: "https://vb.example/external.php?type=RSS2&forumids=181" })).statusCode).toBe(201);
+    const item = (await call("GET", "/api/items")).json().items[0];
+
+    const p1 = (await call("GET", `/api/items/${item.id}/reader`)).json();
+    expect(p1).toMatchObject({ kind: "page", pagination: { page: 1, pages: 3 } });
+    expect(p1.html).toContain("Rider P1");
+    expect(p1.html).not.toContain("Page 1 of 3"); // the app's pager shows it
+    const p2 = (await call("GET", `/api/items/${item.id}/reader?page=2`)).json();
+    expect(p2).toMatchObject({ pagination: { page: 2, pages: 3 } });
+    expect(p2.html).toContain("Rider P2");
+    const before = web.requests.length;
+    const last = (await call("GET", `/api/items/${item.id}/reader?page=last`)).json();
+    expect(last).toMatchObject({ pagination: { page: 3, pages: 3 } });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-3.html`]); // page 1 was still cached
   });
 
   it("reads any page of a thread in the reader, the newest with page=last, kept for 30 minutes (D-088)", async () => {

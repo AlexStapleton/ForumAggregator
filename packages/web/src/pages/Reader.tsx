@@ -30,7 +30,8 @@ const cacheKey = (item: FeedItem) => `${item.id}|${item.publishedAt}|${item.summ
 /** A page of a forum thread: a number, the newest ("last"), or undefined for the item's default. */
 type Page = number | "last" | undefined;
 
-const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)/;
+/** XenForo thread links, and vBulletin ones (D-099; the server only pages those from a vBulletin board's feed). */
+const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)|\/\d+-[^/]+\.html$|\/showthread\.php$/;
 
 /** Where an item opens (D-088): forum threads on the page chosen in Settings; a followed thread's card on its new replies. */
 function startPage(item: FeedItem): Page {
@@ -59,6 +60,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const [page, setPage] = useState<Page>(() => (item ? startPage(item) : undefined));
   // The pager stays put while the next page loads.
   const [pager, setPager] = useState<ReaderPagination | null>(null);
+  // Thread pages added below the current one with "Load next page" (D-100).
+  const [more, setMore] = useState<ReaderContent[]>([]);
+  const [moreState, setMoreState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const scroller = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);
   const closing = useRef(false);
@@ -102,6 +106,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     let cancelled = false;
     setContent(undefined);
     setError(undefined);
+    setMore([]);
+    setMoreState({ busy: false });
     scroller.current?.scrollTo({ top: 0 });
     if (!item.read) onUpdate(item, { read: true });
     loadContent(item, page)
@@ -117,6 +123,34 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
       cancelled = true;
     };
   }, [itemKey, page]); // only when the item (or a thread card's replies) or the page changes
+
+  // The last thread page shown, and whether there's one after it.
+  const lastShown = more.at(-1)?.pagination ?? content?.pagination ?? null;
+  const nextPage = lastShown && lastShown.page < lastShown.pages ? lastShown.page + 1 : null;
+  const loadNextPage = async () => {
+    if (!item || nextPage === null || moreState.busy) return;
+    const forItem = itemKey;
+    setMoreState({ busy: true });
+    try {
+      const c = await loadContent(item, nextPage);
+      if (shownKey.current !== forItem) return;
+      setMore((m) => [...m, c]);
+      // The pager follows the bottom of what's shown, so › continues from there.
+      if (c.pagination) setPager(c.pagination);
+      setMoreState({ busy: false });
+    } catch (err) {
+      setMoreState({ busy: false, error: errorMessage(err) });
+    }
+  };
+
+  // A page from the pager. The page the reader opened on (with pages added below it) only needs those removed.
+  const goToPage = (n: number) => {
+    if (n !== page || !content) return setPage(n);
+    setMore([]);
+    setMoreState({ busy: false });
+    setPager(content.pagination && content.pagination.pages > 1 ? content.pagination : null);
+    scroller.current?.scrollTo({ top: 0 });
+  };
 
   const go = useCallback(
     async (delta: 1 | -1) => {
@@ -238,6 +272,22 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             <div className="reader-content" dangerouslySetInnerHTML={{ __html: content.html }} />
           )}
 
+          {more.map((c) => (
+            <section key={c.pagination?.page} aria-label={`Page ${c.pagination?.page}`}>
+              <p className="page-divider">Page {c.pagination?.page}</p>
+              {c.notice && <div className="alert alert-info">{c.notice}</div>}
+              {c.html && <div className="reader-content" dangerouslySetInnerHTML={{ __html: c.html }} />}
+            </section>
+          ))}
+          {content && nextPage !== null && (
+            <div className="load-next">
+              {moreState.error && <div className="alert alert-error">{moreState.error}</div>}
+              <button className="secondary" onClick={() => void loadNextPage()} disabled={moreState.busy}>
+                {moreState.busy ? "Loading…" : `Load next page (${nextPage} of ${lastShown!.pages})`}
+              </button>
+            </div>
+          )}
+
           {content && !content.html && content.summary && <p className="reader-summary">{content.summary}</p>}
 
           {content?.notice && (
@@ -252,7 +302,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
         </article>
       </div>
 
-      {pager && <Pager pagination={pager} onGo={(n) => setPage(n)} />}
+      {pager && <Pager pagination={pager} onGo={goToPage} />}
       <footer className="reader-bar reader-nav">
         <button className="secondary" onClick={() => void go(-1)} disabled={index === 0} aria-label="Previous item">
           ← Prev

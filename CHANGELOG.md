@@ -6,6 +6,19 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-23
+
+vBulletin forums (e.g. Bike Forums) read like XenForo threads, with paging and "Load next page".
+Upgrade with `docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.7.0`.
+Database migration 0011 (data only) runs by itself on start.
+
+### Fixed
+- vBulletin forum threads (e.g. Bike Forums) showed each poster's member details (rank, badges, join date, post count) and little of the posts. They now read like XenForo threads: author and date above each post's text, quotes (including Bike Forums' own quote boxes) as block quotes, and a page count. Threads opened before are read again (database migration 0011) (D-098).
+
+### Added
+- Page through vBulletin threads from a vBulletin board's feed (e.g. Bike Forums) in the reader, with the same pager and "open on first/last page" setting as XenForo threads. Long opening posts now show the whole thread too (D-099).
+- "Load next page" at the end of a forum thread page adds the next page's posts below, while the page bar stays for jumping around (D-100).
+
 ## [1.6.0] - 2026-10-23
 
 Settings → Checking, and audio for NPR news stories. Upgrade with `docker compose pull && docker compose up -d`,

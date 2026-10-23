@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { extractArticle, pageAudio, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { threadPagerFor, vbulletinPager } from "../src/feeds/thread.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
 const BASE = "https://news.example/2026/10/story";
@@ -84,6 +85,72 @@ describe("pageAudio (D-096)", () => {
     // A download link that isn't an audio file, or isn't http(s).
     expect(audioOf('<li class="audio-tool-download"><a href="/story.pdf">Download</a></li>')).toBeNull();
     expect(audioOf('<li class="audio-tool-download"><a href="javascript:alert(1)//.mp3">Download</a></li>')).toBeNull();
+  });
+});
+
+describe("vBulletin threads (D-098)", () => {
+  const html = fs.readFileSync(path.join(import.meta.dirname, "fixtures/pages/vbulletin-thread.html"), "utf8");
+  const url = "https://forum.example/classic-vintage/100-steel-frames.html";
+
+  it("keeps each post's author, date and text, and none of the member sidebar or signature", () => {
+    const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
+    expect(thread.posts.map((p) => [p.id, p.author, p.timeLabel])).toEqual([
+      ["501", "Rider One", "10-23-26 | 12:23 AM"],
+      ["502", "Rider Two", "10-23-26 | 01:34 AM"],
+    ]);
+    expect([thread.page, thread.pages]).toEqual([1, 3]);
+    const all = thread.posts.map((p) => p.html).join("");
+    expect(all).not.toMatch(/Joined|Posts:|Likes|Senior Member|Titanium|Thread Starter|Signature|View Post|alert/);
+    expect(thread.posts[0]!.html).toContain('<img src="https://img.example/frame.jpg"');
+  });
+
+  it("turns vB3, vB4 and Bike Forums quotes into block quotes with who wrote them", () => {
+    const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
+    const reply = thread.posts[1]!.html;
+    expect(reply).toMatch(/<blockquote><p><strong>Rider One wrote:<\/strong><\/p>[\s\S]*Is steel still worth it\?[\s\S]*<\/blockquote>/);
+    expect(reply).toMatch(/<blockquote><p><strong>Someone wrote:<\/strong><\/p>[\s\S]*Steel is real\.[\s\S]*<\/blockquote>/);
+    expect(reply).toMatch(/<blockquote><p><strong>Rider Three wrote:<\/strong><\/p>[\s\S]*Bike Forums' own quote box\.[\s\S]*<\/blockquote>[\s\S]*And a reply to it\./);
+    expect(reply).not.toMatch(/Quote:|Originally Posted by|<table/);
+    expect(reply).toContain("Yes, for comfort.");
+  });
+
+  it("is used by the reader, with the page count and the next page's link", () => {
+    const article = extractWithSelectors(html, url, {}).article!;
+    expect(article.html).toMatch(/^<section><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
+    expect(article.pages).toEqual({ page: 1, pages: 3 });
+    expect(article.nextPageUrl).toBe("https://forum.example/classic-vintage/100-steel-frames-2.html");
+    expect(article.byline).toBe("Rider One");
+    expect(pageNote(article)).toBe('<p><em>Page 1 of 3.</em> <a href="https://forum.example/classic-vintage/100-steel-frames-2.html">Next page on the forum</a></p>');
+  });
+
+  it("reads Bike Forums' page counter (20 / 21)", () => {
+    const themed = html.replace(/<div class="pagenav">[\s\S]*?<\/div>/, '<span id="mb_page"><span id="mb_page_current">20</span> / <span id="mb_page_total">21</span></span>');
+    expect(extractWithSelectors(themed, url, {}).article!.pages).toEqual({ page: 20, pages: 21 });
+  });
+});
+
+describe("thread pagers (D-099)", () => {
+  it("builds vBulletin page addresses from the thread link the feed gives", () => {
+    const seo = vbulletinPager("https://www.bikeforums.net/tandem-cycling/1000939-anyone-looking-one-these-tandems-found-sale.html")!;
+    expect([seo.pageUrl(1), seo.pageUrl(20), seo.latestUrl]).toEqual([
+      "https://www.bikeforums.net/tandem-cycling/1000939-anyone-looking-one-these-tandems-found-sale.html",
+      "https://www.bikeforums.net/tandem-cycling/1000939-anyone-looking-one-these-tandems-found-sale-20.html",
+      null,
+    ]);
+    // A title ending in a number stays whole.
+    expect(vbulletinPager("https://f.example/x/1324707-top-10.html")!.pageUrl(2)).toBe("https://f.example/x/1324707-top-10-2.html");
+    expect(vbulletinPager("https://f.example/x/1324707-top-10-new-post.html")!.pageUrl(1)).toBe("https://f.example/x/1324707-top-10.html");
+    const classic = vbulletinPager("https://f.example/forum/showthread.php?t=123&goto=newpost")!;
+    expect([classic.pageUrl(1), classic.pageUrl(3)]).toEqual(["https://f.example/forum/showthread.php?t=123", "https://f.example/forum/showthread.php?t=123&page=3"]);
+    expect(vbulletinPager("https://news.example/story")).toBeNull();
+  });
+
+  it("pages vBulletin links only when they come from a vBulletin board's feed", () => {
+    const link = "https://www.bikeforums.net/classic-vintage/1324707-cannondale-moves-out-us.html";
+    expect(threadPagerFor(link, "https://www.bikeforums.net/external.php?type=RSS2&forumids=181")).not.toBeNull();
+    // e.g. a news site with ".../12345-title.html" links
+    expect(threadPagerFor("https://news.example/news/12345-title.html", "https://news.example/feed")).toBeNull();
+    expect(threadPagerFor("https://forum.example/threads/gpu.12/", "https://forum.example/forums/x.1/index.rss")!.latestUrl).toBe("https://forum.example/threads/gpu.12/latest");
   });
 });
 
