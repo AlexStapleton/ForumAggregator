@@ -259,11 +259,15 @@ function vbulletinQuotes(body: Element) {
     box.replaceWith(quote(who, box.querySelector(".message, .bbcode_quote") ?? box));
   }
   // vB3: <div><div class="smallfont">Quote:</div><table>…<td class="alt2">[<div>Originally Posted by <strong>X</strong></div><div>text</div>]</td>…</table></div>
-  for (const label of Array.from(body.querySelectorAll("div.smallfont")).reverse()) {
-    if (!/^\s*Quote:?\s*$/i.test(label.textContent ?? "")) continue;
-    const table = label.nextElementSibling;
-    const cell = table?.tagName === "TABLE" ? table.querySelector("td") : null;
-    if (!cell) continue;
+  // Bike Forums: <div><div><label>Quote:</label></div><div class="panel alt2">[same]</div></div>
+  const labels = Array.from(body.querySelectorAll("div, label, span"))
+    .filter((el) => /^\s*Quote:?\s*$/i.test(el.textContent ?? ""))
+    // The outermost element that is just the label (a <div> around a <label>).
+    .filter((el) => !(el.parentElement && el.parentElement !== body && /^\s*Quote:?\s*$/i.test(el.parentElement.textContent ?? "")));
+  for (const label of labels.reverse()) {
+    const next = label.nextElementSibling;
+    const cell = next?.tagName === "TABLE" ? next.querySelector("td") : next;
+    if (!next || !cell) continue;
     let who: string | null = null;
     const by = Array.from(cell.children).find((c) => /^\s*Originally Posted by/i.test(c.textContent ?? ""));
     if (by) {
@@ -274,7 +278,7 @@ function vbulletinQuotes(body: Element) {
     const replacement = quote(who, cell);
     if (box && box.children.length === 2) box.replaceWith(replacement);
     else {
-      table!.replaceWith(replacement);
+      next.replaceWith(replacement);
       label.remove();
     }
   }
