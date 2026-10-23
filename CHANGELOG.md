@@ -6,6 +6,11 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-23
+
+Settings → Checking, and audio for NPR news stories. Upgrade with `docker compose pull && docker compose up -d`,
+or pin `alexstapo/forumaggregator:1.6.0`. Database migration 0010 (data only) runs by itself on start.
+
 ### Added
 - Settings → Checking: how often feeds and followed threads are checked, and how many pages a thread check may read (up to 10). Overrides `config.yaml`, which still sets the defaults (D-095).
 - NPR news stories with audio (e.g. StoryCorps) get the podcast player: the reader finds the story's audio on its page, and the card shows its length. Stories already opened are read again once to find it (database migration 0010) (D-096).
