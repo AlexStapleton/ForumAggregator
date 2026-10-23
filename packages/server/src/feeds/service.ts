@@ -487,7 +487,7 @@ export class FeedService {
       }
     }
 
-    const res = await this.fetchInteractive(url.href, "feed", via);
+    const res = await this.fetchPageOrParent(url, via);
     if (looksLikeFeed(res.body)) {
       const parsed = this.parse(res.body, url.href);
       return { kind: "feed", feedUrl: url.href, siteUrl: parsed.siteUrl ?? url.origin + "/", parsed };
@@ -501,7 +501,36 @@ export class FeedService {
       );
     }
     const feedRes = await this.fetchInteractive(first.url, "feed", via);
-    return { kind: "feed", feedUrl: first.url, siteUrl: url.href, parsed: this.parse(feedRes.body, first.url) };
+    return { kind: "feed", feedUrl: first.url, siteUrl: res.url, parsed: this.parse(feedRes.body, first.url) };
+  }
+
+  /**
+   * The pasted page, or, when it doesn't exist (404), the nearest folder above it that does
+   * (D-090): e.g. factorio.com/blog/post isn't a page, but factorio.com/blog/ is, and it
+   * advertises the blog's feed. At most two levels up, never the site's front page.
+   */
+  private async fetchPageOrParent(url: URL, via: boolean) {
+    const tried = [url.href];
+    try {
+      return await this.fetchInteractive(url.href, "feed", via);
+    } catch (err) {
+      if (!(err instanceof SourceError) || err.code !== "not_found") throw err;
+      const segments = url.pathname.split("/").filter(Boolean);
+      for (let up = 1; up <= 2 && segments.length - up >= 1; up++) {
+        const parent = new URL(`/${segments.slice(0, -up).join("/")}/`, url.origin).href;
+        tried.push(parent);
+        try {
+          return await this.fetchInteractive(parent, "feed", via);
+        } catch (parentErr) {
+          if (!(parentErr instanceof SourceError) || parentErr.code !== "not_found") throw parentErr;
+        }
+      }
+      throw new SourceError(
+        "not_found",
+        `${err.message}${tried.length > 1 ? ` Also tried ${tried.slice(1).join(" and ")}.` : ""} If the site has a feed, paste the feed's own address (often ending in /feed, /rss or .xml).`,
+        err.status,
+      );
+    }
   }
 
   private async fetchInteractive(url: string, expect: "feed" | "html", via = false) {

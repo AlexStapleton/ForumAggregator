@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Changed
+- Adding a source: if the address you paste doesn't exist (404), the app looks for the feed one or two folders up. For example, `factorio.com/blog/post` now finds the Factorio blog's feed (D-090).
+
 ## [1.4.0] - 2026-10-21
 
 Page through forum threads in the reader. Upgrade with `docker compose pull && docker compose up -d`,

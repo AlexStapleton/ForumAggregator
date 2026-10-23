@@ -90,6 +90,31 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     expect(res.json()).toMatchObject({ feedUrl: "https://blog.example/rss", siteUrl: "https://blog.example/", title: "Blog" });
   });
 
+  it("finds the feed one folder up when the pasted address is a 404 (D-090)", async () => {
+    await start();
+    // factorio.com/blog/post is a 404; factorio.com/blog/ advertises the Atom feed.
+    web.set("https://game.example/blog/", {
+      body: '<html><head><link href="/blog/rss" rel="alternate" title="Recent Blog Posts" type="application/atom+xml"></head></html>',
+      contentType: "text/html",
+    });
+    web.set("https://game.example/blog/rss", { body: rss("Game Blog", [{ guid: "fff-1", title: "Friday Facts #1", date: iso(-3_600_000) }]) });
+    const res = await addFeed("game.example/blog/post");
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ feedUrl: "https://game.example/blog/rss", siteUrl: "https://game.example/blog/", title: "Game Blog" });
+
+    // Nothing two levels up either: say what was tried. The front page is never tried.
+    const miss = await addFeed("https://none.example/a/b/c");
+    expect(miss.statusCode).toBe(422);
+    expect(miss.json().message).toBe(
+      "Nothing found at that address on none.example (404). Also tried https://none.example/a/b/ and https://none.example/a/. If the site has a feed, paste the feed's own address (often ending in /feed, /rss or .xml).",
+    );
+    expect(web.requests.map((r) => r.url)).not.toContain("https://none.example/");
+    // Other failures stop at the pasted address.
+    web.set("https://walled.example/x/y", { error: new FetchError("blocked", "forbidden [HTTP 403]", 403) });
+    expect((await addFeed("https://walled.example/x/y")).json().message).toMatch(/refused the request \(403\)/);
+    expect(web.requests.map((r) => r.url)).not.toContain("https://walled.example/x/");
+  });
+
   it("adds a YouTube channel from an @handle", async () => {
     await start();
     web.set("https://www.youtube.com/@ExampleCreator", {
