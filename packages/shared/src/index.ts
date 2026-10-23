@@ -184,6 +184,8 @@ export interface ReaderContent {
   notice: string | null;
   /** Forum threads (D-088): which page this is, out of how many. Absent for everything else. */
   pagination?: ReaderPagination | null;
+  /** The story's audio: from the feed (D-093) or found on its page (D-096). */
+  audio?: ItemAudio | null;
 }
 
 export interface ReaderPagination {

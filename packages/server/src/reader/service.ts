@@ -6,7 +6,7 @@
 // A source with CSS selectors set (D-074) always reads the original page (step 3) with them.
 // Fetching the page happens only when the user opens the item, like a browser would.
 import crypto from "node:crypto";
-import type { ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
+import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
 import { latestPageUrl, threadAddress, threadPageUrl } from "../feeds/thread.js";
@@ -47,6 +47,16 @@ class SelectorMiss extends Error {
   constructor(
     message: string,
     readonly result: SelectorExtraction,
+  ) {
+    super(message);
+  }
+}
+
+/** A page without article text; it may still have the story's audio (D-096). */
+class NoArticle extends Error {
+  constructor(
+    message: string,
+    readonly audio: ItemAudio | null,
   ) {
     super(message);
   }
@@ -135,6 +145,7 @@ export class ReaderService {
         "items.summary",
         "items.published_at",
         "items.audio_url",
+        "items.audio_duration",
         "items.source_id",
         "sources.thread_batch_from",
         "sources.title as source_title",
@@ -160,6 +171,7 @@ export class ReaderService {
       author: item.author,
       publishedAt: item.published_at,
       summary: item.source_kind === "reddit" ? cleanRedditSummary(item.summary) : item.summary,
+      audio: item.audio_url ? { url: item.audio_url, durationSeconds: item.audio_duration } : null,
     };
     const isReddit = item.source_kind === "reddit";
     const via = item.via_flaresolverr === 1;
@@ -188,7 +200,11 @@ export class ReaderService {
     const preferPage = !!selectors;
 
     // Cached result (from the feed or a previous extraction).
-    if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed")) {
+    // A short feed text cached as the article by v1.5.0 and earlier, when the page failed without a
+    // word (D-096): try the page again. Not Reddit (no pages), nor a story whose audio is known.
+    const stuckTeaser =
+      item.status === "ok" && item.origin === "feed" && !isReddit && !item.audio_url && !!item.html && htmlToText(item.html).length < FEED_FULL_TEXT_MIN;
+    if (item.status === "ok" && item.html && !(preferPage && item.origin === "feed") && !stuckTeaser) {
       const stored = item.html;
       const html = this.finished(["ok", String(isReddit), item.title, stored], () =>
         // Reddit posts cached by v1.0.x: still unwrap the thumbnail table (D-076).
@@ -214,7 +230,8 @@ export class ReaderService {
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
       feedHtml = html || null;
-    } else if (preferPage && item.status === "ok" && item.origin === "feed") {
+    } else if (item.origin === "feed" && item.html && (item.status === "failed" || (item.status === "ok" && (preferPage || stuckTeaser)))) {
+      // Already cleaned when it was stored.
       feedHtml = item.html;
     }
     // Reddit pages need JavaScript and count against Reddit's request limit: never fetch them.
@@ -222,24 +239,40 @@ export class ReaderService {
       return this.summaryOnly(base, "Open the original to see the full post on Reddit (images, video, polls).");
     }
     if (item.status === "failed" && item.fetched_at && this.now() - item.fetched_at < FAILED_RETRY_MS) {
-      return this.summaryOnly(base, item.audio_url ? null : item.error);
+      const notice = item.audio_url ? null : item.error;
+      if (feedHtml) return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: notice && `${notice} Showing the feed's text instead.` };
+      return this.summaryOnly(base, notice);
     }
     if (!item.url) return this.summaryOnly(base, "This item has no link to an article.");
 
     try {
-      const { article } = await this.readPage(item.url, selectors ?? {}, via);
-      await this.store(item.id, "page", "ok", article.html, null);
-      return { ...base, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
+      const { article, audio } = await this.readStoryPage(item.url, selectors ?? {}, via);
+      const withAudio = { ...base, audio: base.audio ?? (audio ? await this.rememberAudio(item.id, audio) : null) };
+      if (article) {
+        await this.store(item.id, "page", "ok", article.html, null);
+        return { ...withAudio, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
+      }
+      // An audio story (D-096): the page has no more text than the feed, and the audio is the story.
+      if (feedHtml) {
+        await this.store(item.id, "feed", "ok", feedHtml, null);
+        return { ...withAudio, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: null };
+      }
+      await this.store(item.id, "page", "failed", null, "The page has no article text; the story is its audio.");
+      return this.summaryOnly(withAudio, null);
     } catch (err) {
       const message = pageErrorMessage(err);
       // The feed's own body still beats the one-line summary.
       if (feedHtml) {
+        const html = polishArticle(feedHtml, item.title);
         // With selectors, keep retrying the page on later opens (the user may be fixing them).
         if (preferPage) {
-          return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: `${message} Showing the feed's text instead.` };
+          return { ...base, kind: "feed", html, videoId: null, notice: `${message} Showing the feed's text instead.` };
         }
-        await this.store(item.id, "feed", "ok", feedHtml, null);
-        return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: null };
+        // Kept with the reason, and the page is tried again after a day (D-096). Not when the feed's
+        // text is long enough to be the article itself (it's then shown before the page is tried).
+        await this.store(item.id, "feed", "failed", feedHtml, message);
+        const notice = base.audio ? null : `${message} Showing the feed's text instead.`;
+        return { ...base, kind: "feed", html, videoId: null, notice };
       }
       await this.store(item.id, "page", "failed", null, message);
       // A podcast episode is its audio (played above the text, D-093); its page is a bonus.
@@ -320,6 +353,31 @@ export class ReaderService {
     return { ...base, kind: "page", html, videoId: null, notice };
   }
 
+  /**
+   * An article page for the reader: its article, and its audio (D-096). A page without article
+   * text but with audio is an audio story, not an error.
+   */
+  private async readStoryPage(url: string, selectors: ReaderSelectors, via: boolean): Promise<{ article: SelectorExtraction["article"]; audio: ItemAudio | null }> {
+    try {
+      const result = await this.readPage(url, selectors, via);
+      return { article: result.article, audio: result.audio };
+    } catch (err) {
+      if (err instanceof NoArticle && err.audio) return { article: null, audio: err.audio };
+      throw err;
+    }
+  }
+
+  /** Keeps audio found on a story's page, so its card shows it too. */
+  private async rememberAudio(itemId: string, audio: ItemAudio): Promise<ItemAudio> {
+    await this.db.kysely
+      .updateTable("items")
+      .set({ audio_url: audio.url, audio_duration: audio.durationSeconds })
+      .where("id", "=", itemId)
+      .where("audio_url", "is", null)
+      .execute();
+    return audio;
+  }
+
   /** Fetches an article page and extracts it; throws with a user-facing reason. */
   private async readPage(
     url: string,
@@ -338,7 +396,7 @@ export class ReaderService {
           result,
         );
       }
-      throw new Error("Couldn't find the article text on that page. It may be behind a paywall or need JavaScript.");
+      throw new NoArticle("Couldn't find the article text on that page. It may be behind a paywall or need JavaScript.", result.audio);
     }
     return result as SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> };
   }

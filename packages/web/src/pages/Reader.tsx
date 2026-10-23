@@ -214,8 +214,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             </p>
           )}
 
-          {/* Shown straight away: the episode's audio comes with the item, not with the article text. */}
-          {item.audio && <AudioPlayer key={item.id} itemId={item.id} audio={item.audio} />}
+          {/* From the feed: shown straight away. Found on the story's page (D-096): once that's read. */}
+          {(item.audio ?? content?.audio) && <AudioPlayer key={item.id} itemId={item.id} audio={(item.audio ?? content?.audio)!} />}
 
           {error && <div className="alert alert-error">{error}</div>}
           {!content && !error && <p className="muted reader-loading">Loading…</p>}

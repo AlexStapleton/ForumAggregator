@@ -9,6 +9,11 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ### Added
 - Settings → Checking: how often feeds and followed threads are checked, and how many pages a thread check may read (up to 10). Overrides `config.yaml`, which still sets the defaults (D-095).
 
+- NPR news stories with audio (e.g. StoryCorps) get the podcast player: the reader finds the story's audio on its page, and the card shows its length. Stories already opened are read again once to find it (database migration 0010) (D-096).
+
+### Fixed
+- When a story's page couldn't be read, the reader showed the feed's one-line teaser without saying why, and never tried the page again. It now says why and tries again after a day; stories stuck this way are read again once (D-096).
+
 ### Changed
 - Followed threads are checked every 15 minutes by default (the documented `threadIntervalMinutes`), instead of every 30 like other sources. Set it back to 30 in Settings → Checking if you prefer.
 

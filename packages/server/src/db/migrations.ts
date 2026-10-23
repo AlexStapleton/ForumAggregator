@@ -211,6 +211,18 @@ export const migrations: Record<string, Migration> = {
       await db.schema.alterTable("items").dropColumn("audio_url").execute();
     },
   },
+  "0010_reread_audio_story_pages": {
+    async up(db: Kysely<any>) {
+      // Article pages stored before the reader looked for a story's audio (D-096) that link to an
+      // audio file (e.g. NPR's Download link): read again on the next open, to find the audio.
+      await sql`delete from item_content where origin = 'page' and status = 'ok'
+        and (html like '%.mp3%' or html like '%.m4a%')
+        and item_id in (select id from items where audio_url is null)`.execute(db);
+    },
+    async down() {
+      // Nothing to undo: those pages are read again when opened.
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {
