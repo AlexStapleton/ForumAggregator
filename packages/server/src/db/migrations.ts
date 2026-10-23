@@ -200,6 +200,17 @@ export const migrations: Record<string, Migration> = {
       // Nothing to undo: the next check stores fresh validators.
     },
   },
+  "0009_podcast_audio": {
+    async up(db: Kysely<any>) {
+      // A podcast episode's audio file and its length in seconds (D-093).
+      await db.schema.alterTable("items").addColumn("audio_url", "text").execute();
+      await db.schema.alterTable("items").addColumn("audio_duration", "integer").execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("items").dropColumn("audio_duration").execute();
+      await db.schema.alterTable("items").dropColumn("audio_url").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

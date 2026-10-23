@@ -86,6 +86,10 @@ export interface ItemsTable {
   author: string | null;
   summary: string | null;
   image_url: string | null;
+  /** Podcast episode audio (D-093). */
+  audio_url: string | null;
+  /** Its length in seconds, when the feed says. */
+  audio_duration: number | null;
   published_at: number;
   fetched_at: number;
   read: Generated<number>;

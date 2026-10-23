@@ -35,6 +35,8 @@ export class ItemService {
         "items.author",
         "items.summary",
         "items.image_url",
+        "items.audio_url",
+        "items.audio_duration",
         "items.published_at",
         "items.read",
         "items.saved",
@@ -86,6 +88,7 @@ export class ItemService {
       // Items stored before the clean-up existed still carry Reddit's footer.
       summary: r.source_kind === "reddit" ? cleanRedditSummary(r.summary) : r.summary,
       imageUrl: r.image_url,
+      audio: r.audio_url ? { url: r.audio_url, durationSeconds: r.audio_duration } : null,
       publishedAt: r.published_at,
       read: r.read === 1,
       saved: r.saved === 1,

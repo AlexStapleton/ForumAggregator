@@ -82,6 +82,9 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
         styleSrc: ["'self'"],
         // Feed images (e.g. YouTube thumbnails). Only http(s) URLs are ever stored (feeds/text.ts).
         imgSrc: ["'self'", "data:", "https:"],
+        // Podcast audio straight from the podcast's host (D-093). http: too, for older feeds;
+        // browsers upgrade it to https on an https page.
+        mediaSrc: ["'self'", "https:", "http:"],
         connectSrc: ["'self'"],
         // The reader embeds YouTube videos from the privacy-enhanced domain only.
         frameSrc: ["https://www.youtube-nocookie.com"],

@@ -115,6 +115,29 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     expect(web.requests.map((r) => r.url)).not.toContain("https://walled.example/x/");
   });
 
+  it("lists podcast audio, adds it to episodes stored before, and allows it in the CSP (D-093)", async () => {
+    await start();
+    const feed = (audio: boolean) => `<?xml version="1.0"?><rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>Pod</title>
+      <item><guid>ep1</guid><title>Episode 1</title><link>https://pod.example/ep1</link><pubDate>${new Date(iso(-3_600_000)).toUTCString()}</pubDate>
+      ${audio ? '<enclosure url="https://cdn.pod.example/ep1.mp3" type="audio/mpeg"/><itunes:duration>24:30</itunes:duration>' : ""}</item></channel></rss>`;
+    // As stored by 1.4.x, which ignored audio.
+    web.set("https://pod.example/feed", { body: feed(false) });
+    expect((await addFeed("https://pod.example/feed")).statusCode).toBe(201);
+    expect((await items("?filter=all")).items[0].audio).toBeNull();
+    web.set("https://pod.example/feed", { body: feed(true) });
+    const source = (await app!.fastify.inject({ method: "GET", url: "/api/sources", headers: { cookie } })).json()[0];
+    await app!.fastify.inject({ method: "POST", url: `/api/sources/${source.id}/check`, headers: { cookie, ...CSRF } });
+    const listed = await items("?filter=all");
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0].audio).toEqual({ url: "https://cdn.pod.example/ep1.mp3", durationSeconds: 1470 });
+    // The episode page can't be read (404 here): the description, without a warning.
+    const reader = (await call("GET", `/api/items/${listed.items[0].id}/reader`)).json();
+    expect(reader).toMatchObject({ kind: "summary", notice: null });
+
+    const page = await app!.fastify.inject({ method: "GET", url: "/" });
+    expect(page.headers["content-security-policy"]).toMatch(/media-src 'self' https: http:/);
+  });
+
   it("adds a YouTube channel from an @handle", async () => {
     await start();
     web.set("https://www.youtube.com/@ExampleCreator", {

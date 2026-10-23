@@ -677,6 +677,8 @@ export class FeedService {
           author: it.author,
           summary: source?.kind === "reddit" ? cleanRedditSummary(it.summary) : it.summary,
           image_url: it.imageUrl,
+          audio_url: it.audio?.url ?? null,
+          audio_duration: it.audio?.durationSeconds ?? null,
           published_at: published,
           fetched_at: now,
           read: old ? 1 : 0,
@@ -716,6 +718,21 @@ export class FeedService {
         .map((c) => ({ item_id: c.row.id, origin: "feed" as const, status: "raw" as const, html: c.content, error: null, fetched_at: now }));
       if (contents.length) await this.db.kysely.insertInto("item_content").values(contents).execute();
       await this.backfillContent(sourceId, source?.kind, chunk.filter((c) => c.content && !fresh.has(c.row.id)), now);
+      // Episodes stored before audio was kept (D-093) get their player when the feed shows them again.
+      const withAudio = new Map(chunk.filter((c) => !fresh.has(c.row.id) && c.row.audio_url).map((c) => [c.row.guid, c.row]));
+      if (withAudio.size) {
+        const missing = await this.db.kysely
+          .selectFrom("items")
+          .select(["id", "guid"])
+          .where("source_id", "=", sourceId)
+          .where("guid", "in", [...withAudio.keys()])
+          .where("audio_url", "is", null)
+          .execute();
+        for (const m of missing) {
+          const row = withAudio.get(m.guid)!;
+          await this.db.kysely.updateTable("items").set({ audio_url: row.audio_url, audio_duration: row.audio_duration }).where("id", "=", m.id).execute();
+        }
+      }
     }
     return inserted;
   }

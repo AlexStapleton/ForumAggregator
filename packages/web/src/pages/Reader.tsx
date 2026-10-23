@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { FeedItem, ReaderComments, ReaderContent, ReaderPagination } from "@fa/shared";
 import { api, errorMessage } from "../api";
+import { AudioPlayer } from "../AudioPlayer";
 import { KIND_LABEL } from "../kinds";
 import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
@@ -133,6 +134,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+      // Arrow keys seek in a focused podcast player instead of changing items.
+      if (e.target instanceof HTMLMediaElement && e.key.startsWith("Arrow")) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === "ArrowRight" || e.key === "j") void go(1);
       else if (e.key === "ArrowLeft" || e.key === "k") void go(-1);
@@ -210,6 +213,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
               )}
             </p>
           )}
+
+          {/* Shown straight away: the episode's audio comes with the item, not with the article text. */}
+          {item.audio && <AudioPlayer key={item.id} itemId={item.id} audio={item.audio} />}
 
           {error && <div className="alert alert-error">{error}</div>}
           {!content && !error && <p className="muted reader-loading">Loading…</p>}

@@ -4,7 +4,7 @@ import { api, errorMessage } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert } from "../components";
 import { usePrefs, useSplitView } from "../prefs";
-import { dayLabel, fullDate, relativeTime, startOfDay } from "../time";
+import { dayLabel, durationLabel, fullDate, relativeTime, startOfDay } from "../time";
 import { Reader } from "./Reader";
 import { SourcePicker } from "./SourcePicker";
 
@@ -280,6 +280,15 @@ export function FeedPage() {
  * One card. Memoised with stable callbacks (D-086): marking one item read or selecting one only
  * re-renders the cards that changed, not every card in a long list.
  */
+function HeadphonesIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+      <path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z" />
+    </svg>
+  );
+}
+
 const ItemCard = memo(function ItemCard({
   item,
   index,
@@ -318,6 +327,11 @@ const ItemCard = memo(function ItemCard({
           <time dateTime={new Date(item.publishedAt).toISOString()} title={fullDate(item.publishedAt)}>
             · {relativeTime(item.publishedAt)}
           </time>
+          {item.audio && (
+            <span className="item-audio" title="Podcast episode: plays in the reader">
+              · <HeadphonesIcon /> {item.audio.durationSeconds ? durationLabel(item.audio.durationSeconds) : "Audio"}
+            </span>
+          )}
         </div>
         <h3 className="item-title">
           <button className="title-button" onClick={onOpen}>

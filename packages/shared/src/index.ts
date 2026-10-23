@@ -127,11 +127,20 @@ export interface FeedItem {
   summary: string | null;
   /** http(s) image URL (e.g. a YouTube thumbnail). */
   imageUrl: string | null;
+  /** A podcast episode's audio, played in the reader (D-093). */
+  audio: ItemAudio | null;
   publishedAt: number;
   read: boolean;
   saved: boolean;
   /** The source's tags (so editing them applies to existing items too). */
   tags: string[];
+}
+
+export interface ItemAudio {
+  /** http(s) audio file. */
+  url: string;
+  /** Length in seconds, when the feed gives it. */
+  durationSeconds: number | null;
 }
 
 export interface ItemsPage {

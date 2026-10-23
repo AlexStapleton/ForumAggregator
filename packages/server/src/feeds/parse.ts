@@ -9,6 +9,8 @@ export interface ParsedItem {
   author: string | null;
   summary: string | null;
   imageUrl: string | null;
+  /** A podcast episode's audio file (RSS enclosure, Media RSS, Atom rel="enclosure"), D-093. */
+  audio: { url: string; durationSeconds: number | null } | null;
   /** null when the feed gave no usable date. */
   publishedAt: number | null;
   /**
@@ -129,6 +131,46 @@ function imageFrom(node: Node, base: string | undefined): string | null {
   return null;
 }
 
+const AUDIO_FILE = /\.(mp3|m4a|aac|ogg|oga|opus|wav)(\?|$)/i;
+
+/**
+ * The episode's audio, if this item is a podcast episode: an <enclosure> (RSS) or
+ * <link rel="enclosure"> (Atom) that is audio/* (or, untyped, an audio file name), else Media
+ * RSS audio. Length from itunes:duration, else the media element's duration.
+ */
+function audioFrom(node: Node, base: string | undefined): ParsedItem["audio"] {
+  const isAudio = (type: unknown, url: unknown) =>
+    /^audio\//i.test(String(type ?? "")) || (!type && AUDIO_FILE.test(String(url ?? "")));
+  let url: string | null = null;
+  let mediaDuration: unknown;
+  for (const enc of asArray(node["enclosure"] as Node[] | undefined)) {
+    if (!url && isAudio(enc?.["@_type"], enc?.["@_url"])) url = safeHttpUrl(enc["@_url"], base);
+  }
+  for (const l of asArray(node["link"] as Array<Node | string> | undefined)) {
+    if (!url && typeof l === "object" && l["@_rel"] === "enclosure" && isAudio(l["@_type"], l["@_href"])) url = safeHttpUrl(l["@_href"], base);
+  }
+  const group = (node["media:group"] as Node | undefined) ?? {};
+  for (const holder of [node, group]) {
+    for (const m of asArray(holder["media:content"] as Node[] | undefined)) {
+      const audio = m?.["@_medium"] === "audio" || isAudio(m?.["@_type"], m?.["@_url"]);
+      if (!url && audio) {
+        url = safeHttpUrl(m["@_url"], base);
+        mediaDuration = m["@_duration"];
+      }
+    }
+  }
+  if (!url) return null;
+  return { url, durationSeconds: parseDuration(node["itunes:duration"]) ?? parseDuration(mediaDuration) };
+}
+
+/** "3600", "59:59" or "1:02:03" → seconds; null if unreadable or zero. */
+export function parseDuration(value: unknown): number | null {
+  const t = text(value)?.trim();
+  if (!t || !/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(t)) return null;
+  const seconds = t.split(":").reduce((sum, part) => sum * 60 + Math.floor(Number(part)), 0);
+  return seconds > 0 && seconds < 100 * 3600 ? seconds : null;
+}
+
 function atomLink(links: unknown, base: string | undefined): string | null {
   const list = asArray(links as Node[] | Node | undefined) as Node[];
   const alternate = list.find((l) => typeof l === "object" && (l["@_rel"] === undefined || l["@_rel"] === "alternate"));
@@ -173,6 +215,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           author: cleanTitle(it["dc:creator"] ?? it.author),
           summary: cleanSummary(it.description, it["content:encoded"]),
           imageUrl: imageFrom(it, feedUrl),
+          audio: audioFrom(it, feedUrl),
           publishedAt: parseDate(it.pubDate, it["dc:date"], it.published, it.updated),
           contentHtml: fullContent(it["content:encoded"], it.description),
         });
@@ -197,6 +240,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           author: cleanTitle((asArray(e.author as Node[] | Node | undefined)[0] as Node | undefined)?.name) ?? feedAuthor,
           summary: cleanSummary(e.summary, e.content, group["media:description"]),
           imageUrl: imageFrom(e, feedUrl),
+          audio: audioFrom(e, feedUrl),
           publishedAt: parseDate(e.published, e.updated, e.issued, e.modified),
           contentHtml: fullContent(e.content, e.summary),
         });
@@ -220,6 +264,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           author: cleanTitle(it["dc:creator"]),
           summary: cleanSummary(it.description, it["content:encoded"]),
           imageUrl: imageFrom(it, feedUrl),
+          audio: audioFrom(it, feedUrl),
           publishedAt: parseDate(it["dc:date"]),
           contentHtml: fullContent(it["content:encoded"], it.description),
         });
