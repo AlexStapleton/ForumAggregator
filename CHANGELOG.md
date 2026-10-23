@@ -6,6 +6,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- Settings → Checking: how often feeds and followed threads are checked, and how many pages a thread check may read (up to 10). Overrides `config.yaml`, which still sets the defaults (D-095).
+
+### Changed
+- Followed threads are checked every 15 minutes by default (the documented `threadIntervalMinutes`), instead of every 30 like other sources. Set it back to 30 in Settings → Checking if you prefer.
+
 ## [1.5.0] - 2026-10-23
 
 Podcast episodes play in the reader, plus two fixes for blogs. Upgrade with

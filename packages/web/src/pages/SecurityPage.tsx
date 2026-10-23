@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { AuthStatus, FlareSolverrStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
+import type { AuthStatus, CheckingSettings, CheckingValues, FlareSolverrStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
 import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout } from "../prefs";
@@ -13,6 +13,7 @@ export function SecurityPage({ status, onChange }: { status: AuthStatus; onChang
         {status.via === "proxy" ? " through your SSO proxy" : ""}.
       </p>
       <ThisDevice />
+      <Checking />
       <YouTubeComments />
       <FlareSolverrSettings />
       {status.via === "session" && <ChangePassword />}
@@ -68,6 +69,112 @@ const THREAD_STARTS: Array<{ value: "first" | "last"; label: string; hint: strin
 ];
 
 /** Optional FlareSolverr instance for forums behind a Cloudflare check (D-080). */
+const FEED_MINUTES = [15, 30, 60, 180, 360, 720, 1440];
+const THREAD_MINUTES = [5, 10, 15, 30, 60, 180, 360, 720, 1440];
+const THREAD_PAGES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+/** Just the three values (the server refuses unknown fields, like the defaults). */
+const valuesOf = (c: CheckingValues): CheckingValues => ({ intervalMinutes: c.intervalMinutes, threadIntervalMinutes: c.threadIntervalMinutes, threadPagesPerCheck: c.threadPagesPerCheck });
+
+function minutesText(m: number): string {
+  if (m === 1440) return "Once a day";
+  if (m % 60 === 0) return m === 60 ? "Every hour" : `Every ${m / 60} hours`;
+  return `Every ${m} minutes`;
+}
+
+/** Settings → Checking (D-095): how often sources are checked, for the whole app (stored on the server). */
+function Checking() {
+  const [saved, setSaved] = useState<CheckingSettings>();
+  const [form, setForm] = useState<CheckingValues>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
+
+  useEffect(() => {
+    api<CheckingSettings>("GET", "/api/settings/checking").then(
+      (c) => {
+        setSaved(c);
+        setForm(valuesOf(c));
+      },
+      (err) => setMessage({ kind: "error", text: errorMessage(err) }),
+    );
+  }, []);
+  if (!saved || !form) {
+    return (
+      <section className="card">
+        <h2>Checking</h2>
+        {message ? <Alert kind={message.kind}>{message.text}</Alert> : <p className="muted">Loading…</p>}
+      </section>
+    );
+  }
+
+  const choice = (field: keyof CheckingValues, values: number[], label: (n: number) => string) => {
+    // A value from config.yaml that isn't in the list still shows.
+    const all = [...new Set([...values, form[field], saved.defaults[field]])].sort((a, b) => a - b);
+    return (
+      <select id={`c-${field}`} aria-describedby={field === "threadPagesPerCheck" ? "c-pages-hint" : undefined} value={form[field]} onChange={(e) => setForm({ ...form, [field]: Number(e.target.value) })}>
+        {all.map((n) => (
+          <option key={n} value={n}>
+            {label(n)}
+            {n === saved.defaults[field] ? " (default)" : ""}
+          </option>
+        ))}
+      </select>
+    );
+  };
+  const changed = (Object.keys(form) as Array<keyof CheckingValues>).some((k) => form[k] !== saved[k]);
+
+  const save = async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const c = await api<CheckingSettings>("PUT", "/api/settings/checking", form);
+      setSaved(c);
+      setForm(valuesOf(c));
+      setMessage({ kind: "ok", text: "Saved. Shorter intervals apply now; longer ones from each source's next check." });
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Checking</h2>
+      <p className="muted">How often the app looks for new items. A source with its own interval (Sources → Edit) keeps it.</p>
+      {message && <Alert kind={message.kind}>{message.text}</Alert>}
+      <form onSubmit={(e) => { e.preventDefault(); void save(); }}>
+        <div className="field">
+          <label htmlFor="c-intervalMinutes">Feeds, boards, channels and subreddits</label>
+          {choice("intervalMinutes", FEED_MINUTES, minutesText)}
+        </div>
+        <div className="field">
+          <label htmlFor="c-threadIntervalMinutes">Followed forum threads</label>
+          {choice("threadIntervalMinutes", THREAD_MINUTES, minutesText)}
+        </div>
+        <div className="field">
+          <label htmlFor="c-threadPagesPerCheck">Thread pages read per check</label>
+          {choice("threadPagesPerCheck", THREAD_PAGES, (n) => (n === 1 ? "1 page (the newest)" : `Up to ${n} pages`))}
+          <small id="c-pages-hint" className="hint">
+            The newest page, plus earlier ones only while a whole page of replies is new (a busy thread). Each page is one request to the
+            forum, through FlareSolverr if the source uses it.
+          </small>
+        </div>
+        <div className="row">
+          <button type="submit" disabled={busy || !changed}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+          {changed && (
+            <button type="button" className="secondary" disabled={busy} onClick={() => setForm(valuesOf(saved))}>
+              Undo changes
+            </button>
+          )}
+        </div>
+      </form>
+    </section>
+  );
+}
+
 function FlareSolverrSettings() {
   const [status, setStatus] = useState<FlareSolverrStatus>();
   const [url, setUrl] = useState("");

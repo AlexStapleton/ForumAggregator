@@ -1,18 +1,27 @@
 // App settings kept in the database (the `settings` key/value table). Secrets are encrypted
 // with the SecretBox, like the TOTP secret, so a copied database alone doesn't reveal them.
 import type { FastifyInstance } from "fastify";
-import type { FlareSolverrStatus, YouTubeKeyStatus } from "@fa/shared";
-import { FlareSolverrRequest, YouTubeKeyRequest } from "@fa/shared/schemas";
+import type { CheckingSettings, CheckingValues, FlareSolverrStatus, YouTubeKeyStatus } from "@fa/shared";
+import { CheckingRequest, FlareSolverrRequest, YouTubeKeyRequest } from "@fa/shared/schemas";
 import type { SecretBox } from "./crypto.js";
 import type { Db } from "./db/index.js";
 import { FetchError, type JsonFetcher } from "./feeds/fetch.js";
 import type { FlareSolverr } from "./feeds/flaresolverr.js";
+import type { FeedService } from "./feeds/service.js";
 import { parseBody, sendError } from "./http.js";
 import { checkApiKey, YouTubeApiError } from "./reader/youtubeApi.js";
 
 const YOUTUBE_KEY = "youtube_api_key";
 const FLARESOLVERR_URL = "flaresolverr_url";
 const FLARESOLVERR_VERSION = "flaresolverr_version";
+/** Settings → Checking (D-095); unset = config.yaml's value. */
+const CHECKING_KEYS: Record<keyof CheckingValues, string> = {
+  intervalMinutes: "check_interval_minutes",
+  threadIntervalMinutes: "thread_interval_minutes",
+  threadPagesPerCheck: "thread_pages_per_check",
+};
+
+export type SavedChecking = { [K in keyof CheckingValues]: number | null };
 
 export class SettingsService {
   constructor(
@@ -64,13 +73,46 @@ export class SettingsService {
     await this.set(FLARESOLVERR_VERSION, url ? version : null);
   }
 
+  /** Settings → Checking as saved (null where the default applies). */
+  async checking(): Promise<SavedChecking> {
+    const out = {} as SavedChecking;
+    for (const [field, key] of Object.entries(CHECKING_KEYS) as Array<[keyof CheckingValues, string]>) {
+      const n = Number(await this.get(key));
+      out[field] = Number.isInteger(n) && n > 0 ? n : null;
+    }
+    return out;
+  }
+
+  async setChecking(values: SavedChecking): Promise<void> {
+    for (const [field, key] of Object.entries(CHECKING_KEYS) as Array<[keyof CheckingValues, string]>) {
+      await this.set(key, values[field] === null ? null : String(values[field]));
+    }
+  }
+
   async setYoutubeApiKey(key: string | null): Promise<void> {
     await this.db.kysely.deleteFrom("settings").where("key", "=", YOUTUBE_KEY).execute();
     if (key) await this.db.kysely.insertInto("settings").values({ key: YOUTUBE_KEY, value: this.box.encrypt(key) }).execute();
   }
 }
 
-export function registerSettingsRoutes(app: FastifyInstance, settings: SettingsService, fetchJson: JsonFetcher, flare: FlareSolverr): void {
+export function registerSettingsRoutes(app: FastifyInstance, settings: SettingsService, fetchJson: JsonFetcher, flare: FlareSolverr, feeds: FeedService): void {
+  const checking = (): CheckingSettings => ({ ...feeds.checking(), defaults: feeds.checkingDefaults() });
+  app.get("/api/settings/checking", async () => checking());
+  app.put("/api/settings/checking", async (request, reply) => {
+    const body = parseBody(CheckingRequest, request, reply);
+    if (!body) return;
+    // A value equal to the default is stored as "default", so a later config.yaml change applies.
+    const d = feeds.checkingDefaults();
+    const saved: SavedChecking = {
+      intervalMinutes: body.intervalMinutes === d.intervalMinutes ? null : body.intervalMinutes,
+      threadIntervalMinutes: body.threadIntervalMinutes === d.threadIntervalMinutes ? null : body.threadIntervalMinutes,
+      threadPagesPerCheck: body.threadPagesPerCheck === d.threadPagesPerCheck ? null : body.threadPagesPerCheck,
+    };
+    await settings.setChecking(saved);
+    await feeds.applyChecking(saved);
+    return checking();
+  });
+
   app.get("/api/settings/flaresolverr", async () => settings.flaresolverrStatus());
 
   // Saving checks the address answers like FlareSolverr first.

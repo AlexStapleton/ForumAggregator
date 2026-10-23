@@ -226,6 +226,21 @@ export interface YouTubeKeyStatus {
 }
 
 /** The FlareSolverr instance the app uses for opted-in sources (D-080). */
+/** How often sources are checked (Settings → Checking, D-095). */
+export interface CheckingValues {
+  /** Feeds, boards, channels and subreddits: minutes between checks. */
+  intervalMinutes: number;
+  /** Followed forum threads: minutes between checks. */
+  threadIntervalMinutes: number;
+  /** Pages a thread check may read: the newest, plus earlier ones when a whole page is new. */
+  threadPagesPerCheck: number;
+}
+
+export interface CheckingSettings extends CheckingValues {
+  /** What each setting is when not set here (config.yaml, else the built-in default). */
+  defaults: CheckingValues;
+}
+
 export interface FlareSolverrStatus {
   url: string | null;
   /** Reported by the instance when it was last checked (on save). */

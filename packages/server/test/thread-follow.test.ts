@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { JsonPoster } from "../src/feeds/flaresolverr.js";
 import { FetchError } from "../src/feeds/fetch.js";
 import { threadAddress } from "../src/feeds/thread.js";
-import { FakeWeb } from "./fakeWeb.js";
+import { FakeWeb, rss } from "./fakeWeb.js";
 import { backends, createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
 
 const NOW = Date.UTC(2026, 9, 19, 12);
@@ -124,6 +124,59 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 30 });
     expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}latest`, `${THREAD}page-3`]);
     expect((await card())[0]!.summary).toMatch(/^30 new replies/);
+  });
+
+  it("Settings → Checking: intervals for feeds and threads, and thread pages per check (D-095)", async () => {
+    const { clock, web, call, setThread } = await start();
+    const checking = await call("GET", "/api/settings/checking");
+    expect(checking.json()).toEqual({
+      intervalMinutes: 30,
+      threadIntervalMinutes: 15,
+      threadPagesPerCheck: 3,
+      defaults: { intervalMinutes: 30, threadIntervalMinutes: 15, threadPagesPerCheck: 3 },
+    });
+
+    // Threads use their own interval (±10 % jitter); feeds the general one.
+    setThread(45);
+    const thread = (await call("POST", "/api/sources", { url: THREAD })).json();
+    web.set("https://blog.example/rss", { body: rss("Blog", [{ guid: "p1", title: "Post", date: new Date(NOW - 60_000).toISOString() }]) });
+    const feed = (await call("POST", "/api/sources", { url: "https://blog.example/rss" })).json();
+    expect(thread.nextCheckAt - NOW).toBeGreaterThanOrEqual(13.5 * 60_000);
+    expect(thread.nextCheckAt - NOW).toBeLessThanOrEqual(16.5 * 60_000);
+    expect(feed.nextCheckAt - NOW).toBeGreaterThanOrEqual(27 * 60_000);
+
+    // Out of range.
+    const bad = await call("PUT", "/api/settings/checking", { intervalMinutes: 2, threadIntervalMinutes: 15, threadPagesPerCheck: 11 });
+    expect(bad.statusCode).toBe(400);
+
+    // Shorter intervals bring next checks forward; values equal to the default are stored as "default".
+    const put = await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 1 });
+    expect(put.json()).toMatchObject({ intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 1 });
+    const stored = await app!.db.kysely.selectFrom("settings").select(["key", "value"]).where("key", "in", ["check_interval_minutes", "thread_interval_minutes", "thread_pages_per_check"]).orderBy("key").execute();
+    expect(stored).toEqual([{ key: "thread_interval_minutes", value: "5" }, { key: "thread_pages_per_check", value: "1" }]);
+    const sources = (await call("GET", "/api/sources")).json() as Array<{ id: string; nextCheckAt: number }>;
+    expect(sources.find((x) => x.id === thread.id)!.nextCheckAt).toBe(NOW + 5 * 60_000);
+    expect(sources.find((x) => x.id === feed.id)!.nextCheckAt).toBe(feed.nextCheckAt);
+    expect((await call("GET", "/api/config")).json().polling).toMatchObject({ intervalMinutes: 30, threadIntervalMinutes: 5, maxPagesPerPoll: 1 });
+
+    // One page per check: a busy thread reads only the newest page.
+    clock.now += 6 * 60_000;
+    setThread(78);
+    let before = web.requests.length;
+    await call("POST", `/api/sources/${thread.id}/check`);
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}latest`]);
+
+    // Up to 10: reads back while whole pages are new.
+    await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 10 });
+    clock.now += 6 * 60_000;
+    setThread(140); // posts 1078…1139 are new: pages 4–7
+    before = web.requests.length;
+    expect((await call("POST", `/api/sources/${thread.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 62 });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}latest`, `${THREAD}page-6`, `${THREAD}page-5`, `${THREAD}page-4`]);
+
+    // Back to the defaults.
+    await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 15, threadPagesPerCheck: 3 });
+    expect(await app!.db.kysely.selectFrom("settings").select("key").where("key", "like", "%interval%").execute()).toEqual([]);
   });
 
   it("reads any page of a thread in the reader, the newest with page=last, kept for 30 minutes (D-088)", async () => {
