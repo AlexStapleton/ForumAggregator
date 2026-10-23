@@ -30,7 +30,8 @@ const cacheKey = (item: FeedItem) => `${item.id}|${item.publishedAt}|${item.summ
 /** A page of a forum thread: a number, the newest ("last"), or undefined for the item's default. */
 type Page = number | "last" | undefined;
 
-const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)/;
+/** XenForo thread links, and vBulletin ones (D-099; the server only pages those from a vBulletin board's feed). */
+const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)|\/\d+-[^/]+\.html$|\/showthread\.php$/;
 
 /** Where an item opens (D-088): forum threads on the page chosen in Settings; a followed thread's card on its new replies. */
 function startPage(item: FeedItem): Page {

@@ -9,12 +9,12 @@ import crypto from "node:crypto";
 import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
-import { latestPageUrl, threadAddress, threadPageUrl } from "../feeds/thread.js";
+import { threadPagerFor, xenforoPager, type ThreadPager } from "../feeds/thread.js";
 import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractWithSelectors, isForumThreadUrl, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -153,6 +153,7 @@ export class ReaderService {
         "sources.article_selector",
         "sources.remove_selector",
         "sources.via_flaresolverr",
+        "sources.feed_url",
         "item_content.origin",
         "item_content.status",
         "item_content.html",
@@ -178,7 +179,7 @@ export class ReaderService {
     // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
     if (item.source_kind === "thread") {
       if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from);
-      return this.forumThread(base, item, null, via, page, () => null);
+      return this.forumThread(base, item, null, via, page, () => null, xenforoPager(item.url));
     }
 
     const videoId = youtubeVideoId(item.url);
@@ -188,14 +189,16 @@ export class ReaderService {
     const selectors: ReaderSelectors | null =
       !isReddit && (item.article_selector || item.remove_selector) ? { article: item.article_selector, remove: item.remove_selector } : null;
 
-    // Forum threads are read from their pages (the posts), page by page (D-081, D-088).
-    if (!isReddit && item.url && isForumThreadUrl(item.url)) {
+    // Forum threads are read from their pages (the posts), page by page (D-081, D-088): XenForo
+    // thread links, and links from a vBulletin board's feed (D-099).
+    const pager = isReddit ? null : threadPagerFor(item.url, item.feed_url);
+    if (pager) {
       const row = item;
       const feedText = () =>
         row.status === "raw" && row.html ? sanitizeHtml(row.html, row.url ?? "https://invalid.invalid/") || null
         : row.status === "ok" && row.origin === "feed" ? row.html
         : null;
-      return this.forumThread(base, item, selectors, via, page ?? 1, feedText);
+      return this.forumThread(base, item, selectors, via, page ?? 1, feedText, pager);
     }
     const preferPage = !!selectors;
 
@@ -249,8 +252,10 @@ export class ReaderService {
       const { article, audio } = await this.readStoryPage(item.url, selectors ?? {}, via);
       const withAudio = { ...base, audio: base.audio ?? (audio ? await this.rememberAudio(item.id, audio) : null) };
       if (article) {
-        await this.store(item.id, "page", "ok", article.html, null);
-        return { ...withAudio, author: base.author ?? article.byline, kind: "page", html: polishArticle(article.html, item.title), videoId: null, notice: null };
+        // A forum thread read without the in-app pager (e.g. a vBulletin link from another feed): say which page.
+        const html = article.html + pageNote(article);
+        await this.store(item.id, "page", "ok", html, null);
+        return { ...withAudio, author: base.author ?? article.byline, kind: "page", html: polishArticle(html, item.title), videoId: null, notice: null };
       }
       // An audio story (D-096): the page has no more text than the feed, and the audio is the story.
       if (feedHtml) {
@@ -292,14 +297,23 @@ export class ReaderService {
     via: boolean,
     want: ThreadPageRequest,
     feedText: () => string | null,
+    pager: ThreadPager | null,
   ): Promise<ReaderContent> {
-    const address = threadAddress(new URL(item.url!));
-    if (!address) return this.summaryOnly(base, "This link isn't a forum thread.");
+    if (!pager) return this.summaryOnly(base, "This link isn't a forum thread.");
     const key = `${item.id}|${want}`;
     const known = this.threadPages.get(key);
     if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
 
-    const url = want === "last" ? latestPageUrl(address) : threadPageUrl(address, want);
+    // Without a "newest page" address (vBulletin), the last page is found from page 1's page count.
+    if (want === "last" && !pager.latestUrl) {
+      const first = await this.forumThread(base, item, selectors, via, 1, feedText, pager);
+      const pages = first.pagination?.pages ?? 1;
+      if (pages <= 1 || first.kind !== "page") return first;
+      const last = await this.forumThread(base, item, selectors, via, pages, feedText, pager);
+      this.rememberThreadPage(key, last);
+      return last;
+    }
+    const url = want === "last" ? pager.latestUrl! : pager.pageUrl(want);
     try {
       const { article } = await this.readPage(url, selectors ?? {}, via);
       const content: ReaderContent = {

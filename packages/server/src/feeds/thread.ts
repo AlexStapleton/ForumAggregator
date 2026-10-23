@@ -20,6 +20,58 @@ export function threadPageUrl(thread: string, page: number): string {
   return page <= 1 ? thread : `${thread}page-${page}`;
 }
 
+/** How to reach the pages of a forum thread in the reader (D-088, D-099). */
+export interface ThreadPager {
+  pageUrl(page: number): string;
+  /** The newest page in one request, where the forum has such an address (XenForo); else null. */
+  latestUrl: string | null;
+}
+
+export function xenforoPager(url: string): ThreadPager | null {
+  const address = threadAddress(new URL(url));
+  return address ? { pageUrl: (n) => threadPageUrl(address, n), latestUrl: latestPageUrl(address) } : null;
+}
+
+/** A vBulletin board's feed: …/external.php?type=RSS2… (e.g. Bike Forums). */
+export function isVbulletinFeed(feedUrl: string | null): boolean {
+  try {
+    return !!feedUrl && /\/external\.php$/i.test(new URL(feedUrl).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * vBulletin thread pages (D-099), from the thread link a board feed gives (page 1):
+ * friendly addresses ".../1000939-title.html" → ".../1000939-title-20.html", or
+ * "showthread.php?t=1000939" → "&page=20". The link is taken as page 1 as it is: a title ending
+ * in a number would be ambiguous otherwise.
+ */
+export function vbulletinPager(url: string): ThreadPager | null {
+  const u = new URL(url);
+  const seo = /^(.*\/\d+-[^/]+?)(?:-new-post)?\.html$/.exec(u.pathname);
+  if (seo) {
+    const base = `${u.origin}${seo[1]}`;
+    return { pageUrl: (n) => (n <= 1 ? `${base}.html` : `${base}-${n}.html`), latestUrl: null };
+  }
+  const t = u.searchParams.get("t");
+  if (/\/showthread\.php$/i.test(u.pathname) && t && /^\d+$/.test(t)) {
+    const base = `${u.origin}${u.pathname}?t=${t}`;
+    return { pageUrl: (n) => (n <= 1 ? base : `${base}&page=${n}`), latestUrl: null };
+  }
+  return null;
+}
+
+/** The pager for an item's link: a XenForo thread, or a thread from a vBulletin board's feed. */
+export function threadPagerFor(url: string | null, feedUrl: string | null): ThreadPager | null {
+  if (!url) return null;
+  try {
+    return xenforoPager(url) ?? (isVbulletinFeed(feedUrl) ? vbulletinPager(url) : null);
+  } catch {
+    return null;
+  }
+}
+
 /** A fetched thread page, parsed; null when the page has no posts we can read. */
 export function parseThreadPage(html: string, pageUrl: string): ForumThreadPage | null {
   const dom = new JSDOM(html.slice(0, 3_000_000), { url: pageUrl });

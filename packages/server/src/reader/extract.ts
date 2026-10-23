@@ -15,6 +15,8 @@ export interface Extracted {
   textLength: number;
   /** Forum thread pages: this page and the thread's page count (D-088). */
   pages?: { page: number; pages: number };
+  /** The forum's own link to the next page, when it has one (vBulletin, D-098). */
+  nextPageUrl?: string | null;
 }
 
 export function extractArticle(pageHtml: string, pageUrl: string): Extracted | null {
@@ -218,11 +220,17 @@ export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThrea
     for (const junk of Array.from(body.querySelectorAll("script, noscript, img[alt='View Post']"))) junk.remove();
     return { id, author, datetime: null, timeLabel, postedAt: null, html: sanitizeHtml(body.innerHTML, pageUrl) };
   });
-  // "Page 2 of 5": an innermost element of the page navigation (the page links sit beside it).
-  const nav = Array.from(doc.querySelectorAll(".pagenav *, .pagination *, .threadpagenav *"))
-    .filter((el) => !el.firstElementChild)
-    .map((el) => /^\s*Page (\d+) of (\d+)\s*$/i.exec(el.textContent ?? ""))
-    .find(Boolean);
+  // Bike Forums' theme: "20 / 21" (#mb_page_current, #mb_page_total). Classic: "Page 20 of 21", an
+  // innermost element of the page navigation (the page links sit beside it).
+  const current = Number(doc.getElementById("mb_page_current")?.textContent);
+  const total = Number(doc.getElementById("mb_page_total")?.textContent);
+  const nav: [unknown, string, string] | null | undefined =
+    current > 0 && total > 0
+      ? [null, String(current), String(total)]
+      : (Array.from(doc.querySelectorAll(".pagenav *, .pagination *, .threadpagenav *"))
+          .filter((el) => !el.firstElementChild)
+          .map((el) => /^\s*Page (\d+) of (\d+)\s*$/i.exec(el.textContent ?? ""))
+          .find(Boolean) as [unknown, string, string] | undefined);
   const page = nav ? Number(nav[1]) : 1;
   const pages = nav ? Math.max(page, Number(nav[2])) : 1;
   const title = doc.querySelector("h1.threadtitle, .threadtitle, h1")?.textContent?.trim() || doc.title || null;
@@ -272,16 +280,27 @@ function vbulletinQuotes(body: Element) {
   }
 }
 
-/** A vBulletin thread page for the reader (D-098). Later pages are on the forum: linked at the end. */
+/** A vBulletin thread page for the reader (D-098): its posts, which page of how many, and the next page's link. */
 function vbulletinThread(doc: Document, pageUrl: string): Extracted | null {
   const thread = parseVbulletinThread(doc, pageUrl);
   if (!thread || !thread.posts.some((p) => htmlToText(p.html).length)) return null;
-  let html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
-  const next = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
-  if (thread.pages > 1) {
-    html += `<p><em>Page ${thread.page} of ${thread.pages}.</em>${next ? ` <a href="${escHtml(next)}">Next page on the forum</a>` : ""}</p>`;
-  }
-  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength: htmlToText(html).length };
+  const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
+  const nextPageUrl = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
+  return {
+    html,
+    title: thread.title,
+    byline: thread.posts[0]?.author ?? null,
+    textLength: htmlToText(html).length,
+    pages: { page: thread.page, pages: thread.pages },
+    nextPageUrl,
+  };
+}
+
+/** For a thread page shown without the in-app pager: which page it is, and a link to the next. */
+export function pageNote(article: Pick<Extracted, "pages" | "nextPageUrl">): string {
+  if (!article.pages || article.pages.pages <= 1) return "";
+  const next = article.nextPageUrl ? ` <a href="${escHtml(article.nextPageUrl)}">Next page on the forum</a>` : "";
+  return `<p><em>Page ${article.pages.page} of ${article.pages.pages}.</em>${next}</p>`;
 }
 
 const validator = new JSDOM("<!doctype html><p></p>").window.document;
