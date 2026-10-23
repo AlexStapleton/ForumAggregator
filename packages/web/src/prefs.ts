@@ -13,10 +13,15 @@ export interface DevicePrefs {
   hiddenSources: string[];
   /** Which page a forum thread opens on in the reader (D-088). */
   threadStart: "first" | "last";
+  /** Podcast playback speed (D-093). */
+  playbackRate: number;
 }
 
+/** Speeds offered by the podcast player. */
+export const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+
 const KEY = "fa.prefs";
-const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first" };
+const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first", playbackRate: 1 };
 const EVENT = "fa-prefs";
 
 /** Width at which "auto" switches to side by side, and the narrowest width "split" is used at. */
@@ -31,6 +36,7 @@ export function readPrefs(): DevicePrefs {
       order: raw.order === "oldest" ? "oldest" : DEFAULTS.order,
       hiddenSources: Array.isArray(raw.hiddenSources) ? raw.hiddenSources.filter((id): id is string => typeof id === "string") : [],
       threadStart: raw.threadStart === "last" ? "last" : "first",
+      playbackRate: PLAYBACK_RATES.includes(raw.playbackRate as number) ? (raw.playbackRate as number) : DEFAULTS.playbackRate,
     };
   } catch {
     // Private mode or blocked storage: fall back to defaults.

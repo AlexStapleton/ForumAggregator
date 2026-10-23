@@ -90,6 +90,54 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     expect(res.json()).toMatchObject({ feedUrl: "https://blog.example/rss", siteUrl: "https://blog.example/", title: "Blog" });
   });
 
+  it("finds the feed one folder up when the pasted address is a 404 (D-090)", async () => {
+    await start();
+    // factorio.com/blog/post is a 404; factorio.com/blog/ advertises the Atom feed.
+    web.set("https://game.example/blog/", {
+      body: '<html><head><link href="/blog/rss" rel="alternate" title="Recent Blog Posts" type="application/atom+xml"></head></html>',
+      contentType: "text/html",
+    });
+    web.set("https://game.example/blog/rss", { body: rss("Game Blog", [{ guid: "fff-1", title: "Friday Facts #1", date: iso(-3_600_000) }]) });
+    const res = await addFeed("game.example/blog/post");
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ feedUrl: "https://game.example/blog/rss", siteUrl: "https://game.example/blog/", title: "Game Blog" });
+
+    // Nothing two levels up either: say what was tried. The front page is never tried.
+    const miss = await addFeed("https://none.example/a/b/c");
+    expect(miss.statusCode).toBe(422);
+    expect(miss.json().message).toBe(
+      "Nothing found at that address on none.example (404). Also tried https://none.example/a/b/ and https://none.example/a/. If the site has a feed, paste the feed's own address (often ending in /feed, /rss or .xml).",
+    );
+    expect(web.requests.map((r) => r.url)).not.toContain("https://none.example/");
+    // Other failures stop at the pasted address.
+    web.set("https://walled.example/x/y", { error: new FetchError("blocked", "forbidden [HTTP 403]", 403) });
+    expect((await addFeed("https://walled.example/x/y")).json().message).toMatch(/refused the request \(403\)/);
+    expect(web.requests.map((r) => r.url)).not.toContain("https://walled.example/x/");
+  });
+
+  it("lists podcast audio, adds it to episodes stored before, and allows it in the CSP (D-093)", async () => {
+    await start();
+    const feed = (audio: boolean) => `<?xml version="1.0"?><rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>Pod</title>
+      <item><guid>ep1</guid><title>Episode 1</title><link>https://pod.example/ep1</link><pubDate>${new Date(iso(-3_600_000)).toUTCString()}</pubDate>
+      ${audio ? '<enclosure url="https://cdn.pod.example/ep1.mp3" type="audio/mpeg"/><itunes:duration>24:30</itunes:duration>' : ""}</item></channel></rss>`;
+    // As stored by 1.4.x, which ignored audio.
+    web.set("https://pod.example/feed", { body: feed(false) });
+    expect((await addFeed("https://pod.example/feed")).statusCode).toBe(201);
+    expect((await items("?filter=all")).items[0].audio).toBeNull();
+    web.set("https://pod.example/feed", { body: feed(true) });
+    const source = (await app!.fastify.inject({ method: "GET", url: "/api/sources", headers: { cookie } })).json()[0];
+    await app!.fastify.inject({ method: "POST", url: `/api/sources/${source.id}/check`, headers: { cookie, ...CSRF } });
+    const listed = await items("?filter=all");
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0].audio).toEqual({ url: "https://cdn.pod.example/ep1.mp3", durationSeconds: 1470 });
+    // The episode page can't be read (404 here): the description, without a warning.
+    const reader = (await call("GET", `/api/items/${listed.items[0].id}/reader`)).json();
+    expect(reader).toMatchObject({ kind: "summary", notice: null });
+
+    const page = await app!.fastify.inject({ method: "GET", url: "/" });
+    expect(page.headers["content-security-policy"]).toMatch(/media-src 'self' https: http:/);
+  });
+
   it("adds a YouTube channel from an @handle", async () => {
     await start();
     web.set("https://www.youtube.com/@ExampleCreator", {

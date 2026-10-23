@@ -134,6 +134,7 @@ export class ReaderService {
         "items.author",
         "items.summary",
         "items.published_at",
+        "items.audio_url",
         "items.source_id",
         "sources.thread_batch_from",
         "sources.title as source_title",
@@ -221,7 +222,7 @@ export class ReaderService {
       return this.summaryOnly(base, "Open the original to see the full post on Reddit (images, video, polls).");
     }
     if (item.status === "failed" && item.fetched_at && this.now() - item.fetched_at < FAILED_RETRY_MS) {
-      return this.summaryOnly(base, item.error);
+      return this.summaryOnly(base, item.audio_url ? null : item.error);
     }
     if (!item.url) return this.summaryOnly(base, "This item has no link to an article.");
 
@@ -241,7 +242,8 @@ export class ReaderService {
         return { ...base, kind: "feed", html: polishArticle(feedHtml, item.title), videoId: null, notice: null };
       }
       await this.store(item.id, "page", "failed", null, message);
-      return this.summaryOnly(base, message);
+      // A podcast episode is its audio (played above the text, D-093); its page is a bonus.
+      return this.summaryOnly(base, item.audio_url ? null : message);
     }
   }
 

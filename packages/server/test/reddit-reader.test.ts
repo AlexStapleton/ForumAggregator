@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FetchError, HostLimiter } from "../src/feeds/fetch.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl } from "../src/feeds/reddit.js";
+import { migrations } from "../src/db/migrations.js";
 import { FakeWeb, rss } from "./fakeWeb.js";
 import { backends, createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
 
@@ -124,6 +125,34 @@ describe.each(backends)("Reddit and forum links in the app (%s)", (backend) => {
     expect(web.requests.some((q) => q.url === "https://b.example/1")).toBe(true); // tried the page first
     expect(r).toMatchObject({ kind: "feed" });
     expect(r.html).toContain("A short but real body.");
+  });
+
+  it("repairs feed bodies stored with &#34; left in their tags (D-091)", async () => {
+    await start();
+    const atom = `<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Game Blog</title>
+      <entry><title>FFF 1</title><id>https://game.example/blog/post/fff-1</id><updated>2026-10-19T00:00:00Z</updated>
+      <link href="https://game.example/blog/post/fff-1" /><content type="html">&lt;p&gt;${"Long enough to be the full post. ".repeat(20)}&lt;/p&gt;
+      &lt;img src=&#34;https://cdn.game.example/fff-1.png&#34;&gt;</content></entry></feed>`;
+    web.set("https://game.example/blog/rss", { body: atom, etag: "v1" });
+    expect((await call("POST", "/api/sources", { url: "https://game.example/blog/rss" })).statusCode).toBe(201);
+    const item = (await call("GET", "/api/items")).json().items[0];
+    // As v1.4.0 and earlier stored it, then cached it once read.
+    const broken = `<p>${"Long enough to be the full post. ".repeat(20)}</p><img src=&#34;https://cdn.game.example/fff-1.png&#34;>`;
+    await app!.db.kysely.updateTable("item_content").set({ html: broken, status: "raw" }).where("item_id", "=", item.id).execute();
+    const before = (await call("GET", `/api/items/${item.id}/reader`)).json();
+    expect(before.html).toContain('src="https://game.example/blog/post/%22https://cdn.game.example/fff-1.png%22"');
+
+    // The migration forgets the ETag of affected feeds only; the next check re-stores the body.
+    await app!.db.kysely.insertInto("sources").values({ ...(await app!.db.kysely.selectFrom("sources").selectAll().executeTakeFirstOrThrow()), id: "other", feed_url: "https://other.example/rss", etag: "keep" }).execute();
+    await migrations["0008_refetch_misdecoded_feeds"]!.up(app!.db.kysely);
+    const etags = await app!.db.kysely.selectFrom("sources").select(["id", "etag"]).orderBy("id").execute();
+    expect(etags.find((r) => r.id === "other")!.etag).toBe("keep");
+    expect(etags.find((r) => r.id !== "other")!.etag).toBeNull();
+    const src = (await call("GET", "/api/sources")).json().find((s: { feedUrl: string }) => s.feedUrl === "https://game.example/blog/rss");
+    expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 0 });
+    const after = (await call("GET", `/api/items/${item.id}/reader`)).json();
+    expect(after).toMatchObject({ kind: "feed" });
+    expect(after.html).toContain('src="https://cdn.game.example/fff-1.png"');
   });
 
   // Thread links are followed since D-084 (thread-follow.test.ts).

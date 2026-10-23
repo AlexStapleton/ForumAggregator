@@ -21,6 +21,12 @@ import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput
 type SourceRow = Selectable<SourcesTable>;
 
 /** A user-facing failure with a message that says what to do about it. */
+/**
+ * A feed body stored before numeric character references were decoded (D-091): quotes left as
+ * &#34; inside a tag (raw), or the broken ".../%22https://..." links that made once cleaned.
+ */
+const MISDECODED = /<[^>]*=\s*&#(?:34|x22);|="[^"]*%22https?:/i;
+
 export class SourceError extends Error {
   constructor(
     readonly code: string,
@@ -487,7 +493,7 @@ export class FeedService {
       }
     }
 
-    const res = await this.fetchInteractive(url.href, "feed", via);
+    const res = await this.fetchPageOrParent(url, via);
     if (looksLikeFeed(res.body)) {
       const parsed = this.parse(res.body, url.href);
       return { kind: "feed", feedUrl: url.href, siteUrl: parsed.siteUrl ?? url.origin + "/", parsed };
@@ -501,7 +507,36 @@ export class FeedService {
       );
     }
     const feedRes = await this.fetchInteractive(first.url, "feed", via);
-    return { kind: "feed", feedUrl: first.url, siteUrl: url.href, parsed: this.parse(feedRes.body, first.url) };
+    return { kind: "feed", feedUrl: first.url, siteUrl: res.url, parsed: this.parse(feedRes.body, first.url) };
+  }
+
+  /**
+   * The pasted page, or, when it doesn't exist (404), the nearest folder above it that does
+   * (D-090): e.g. factorio.com/blog/post isn't a page, but factorio.com/blog/ is, and it
+   * advertises the blog's feed. At most two levels up, never the site's front page.
+   */
+  private async fetchPageOrParent(url: URL, via: boolean) {
+    const tried = [url.href];
+    try {
+      return await this.fetchInteractive(url.href, "feed", via);
+    } catch (err) {
+      if (!(err instanceof SourceError) || err.code !== "not_found") throw err;
+      const segments = url.pathname.split("/").filter(Boolean);
+      for (let up = 1; up <= 2 && segments.length - up >= 1; up++) {
+        const parent = new URL(`/${segments.slice(0, -up).join("/")}/`, url.origin).href;
+        tried.push(parent);
+        try {
+          return await this.fetchInteractive(parent, "feed", via);
+        } catch (parentErr) {
+          if (!(parentErr instanceof SourceError) || parentErr.code !== "not_found") throw parentErr;
+        }
+      }
+      throw new SourceError(
+        "not_found",
+        `${err.message}${tried.length > 1 ? ` Also tried ${tried.slice(1).join(" and ")}.` : ""} If the site has a feed, paste the feed's own address (often ending in /feed, /rss or .xml).`,
+        err.status,
+      );
+    }
   }
 
   private async fetchInteractive(url: string, expect: "feed" | "html", via = false) {
@@ -642,6 +677,8 @@ export class FeedService {
           author: it.author,
           summary: source?.kind === "reddit" ? cleanRedditSummary(it.summary) : it.summary,
           image_url: it.imageUrl,
+          audio_url: it.audio?.url ?? null,
+          audio_duration: it.audio?.durationSeconds ?? null,
           published_at: published,
           fetched_at: now,
           read: old ? 1 : 0,
@@ -681,6 +718,21 @@ export class FeedService {
         .map((c) => ({ item_id: c.row.id, origin: "feed" as const, status: "raw" as const, html: c.content, error: null, fetched_at: now }));
       if (contents.length) await this.db.kysely.insertInto("item_content").values(contents).execute();
       await this.backfillContent(sourceId, source?.kind, chunk.filter((c) => c.content && !fresh.has(c.row.id)), now);
+      // Episodes stored before audio was kept (D-093) get their player when the feed shows them again.
+      const withAudio = new Map(chunk.filter((c) => !fresh.has(c.row.id) && c.row.audio_url).map((c) => [c.row.guid, c.row]));
+      if (withAudio.size) {
+        const missing = await this.db.kysely
+          .selectFrom("items")
+          .select(["id", "guid"])
+          .where("source_id", "=", sourceId)
+          .where("guid", "in", [...withAudio.keys()])
+          .where("audio_url", "is", null)
+          .execute();
+        for (const m of missing) {
+          const row = withAudio.get(m.guid)!;
+          await this.db.kysely.updateTable("items").set({ audio_url: row.audio_url, audio_duration: row.audio_duration }).where("id", "=", m.id).execute();
+        }
+      }
     }
     return inserted;
   }
@@ -689,13 +741,14 @@ export class FeedService {
    * Items stored before feed bodies were kept at any length (v1.0.0 kept only 500+ characters)
    * get their body when the feed shows them again (D-076). Reddit bodies are also re-stored raw
    * where an older version cached its cleaned copy, so the current Reddit layout applies.
+   * Bodies stored before v1.4.1 with &#34; left in their tags are replaced too (D-091).
    */
   private async backfillContent(sourceId: string, kind: SourceKind | undefined, known: Array<{ content: string | null; row: { guid: string } }>, now: number) {
     if (!known.length) return;
     const rows = await this.db.kysely
       .selectFrom("items")
       .leftJoin("item_content", "item_content.item_id", "items.id")
-      .select(["items.id", "items.guid", "item_content.status", "item_content.origin"])
+      .select(["items.id", "items.guid", "item_content.status", "item_content.origin", "item_content.html"])
       .where("items.source_id", "=", sourceId)
       .where("items.guid", "in", known.map((c) => c.row.guid))
       .execute();
@@ -703,8 +756,9 @@ export class FeedService {
     for (const r of rows) {
       const missing = r.status === null;
       const staleReddit = kind === "reddit" && r.origin === "feed" && r.status !== "raw";
+      const misdecoded = r.origin === "feed" && r.status !== "failed" && MISDECODED.test(r.html ?? "");
       const html = bodies.get(r.guid);
-      if (!html || !(missing || staleReddit)) continue;
+      if (!html || !(missing || staleReddit || misdecoded) || (misdecoded && MISDECODED.test(html))) continue;
       await this.db.kysely
         .insertInto("item_content")
         .values({ item_id: r.id, origin: "feed", status: "raw", html, error: null, fetched_at: now })

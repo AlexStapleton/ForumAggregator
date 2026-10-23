@@ -6,6 +6,22 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-23
+
+Podcast episodes play in the reader, plus two fixes for blogs. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.5.0`.
+Database migrations 0008 (data only) and 0009 (two new item columns) run by themselves on start.
+
+### Added
+- Podcast episodes (e.g. NPR's podcasts) play in the reader: the audio player sits under the title and appears straight away. Speed buttons (0.75×–2×) are remembered per device; the place you stopped is remembered per episode on this device ("Resumed at 12:34 · Start over"). Cards show a headphones mark and the episode's length. Episodes already stored get their player when their feed lists them again (D-093).
+- If an episode's web page can't be read, the reader shows its description without a warning, since the audio is the episode.
+
+### Fixed
+- Images and links in posts from feeds that write quotes as `&#34;` (e.g. the Factorio blog) were broken. Posts already stored are repaired at the source's next check (database migration 0008 makes that check read the feed in full) (D-091).
+
+### Changed
+- Adding a source: if the address you paste doesn't exist (404), the app looks for the feed one or two folders up. For example, `factorio.com/blog/post` now finds the Factorio blog's feed (D-090).
+
 ## [1.4.0] - 2026-10-21
 
 Page through forum threads in the reader. Upgrade with `docker compose pull && docker compose up -d`,

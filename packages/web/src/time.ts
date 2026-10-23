@@ -41,3 +41,17 @@ export function startOfDay(ts: number): number {
   const d = new Date(ts);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
+
+/** A podcast's length for a card: "45 min", "1 h 05 min", "50 s". */
+export function durationLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+}
+
+/** A position in an episode: "4:07", "1:02:03". */
+export function clockLabel(seconds: number): string {
+  const s = Math.floor(seconds);
+  const hms = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60];
+  return hms[0] ? `${hms[0]}:${String(hms[1]).padStart(2, "0")}:${String(hms[2]).padStart(2, "0")}` : `${hms[1]}:${String(hms[2]).padStart(2, "0")}`;
+}

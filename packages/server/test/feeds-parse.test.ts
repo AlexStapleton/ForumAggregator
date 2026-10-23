@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { discoverFeeds } from "../src/feeds/discover.js";
-import { FeedParseError, looksLikeFeed, parseFeed } from "../src/feeds/parse.js";
+import { FeedParseError, looksLikeFeed, parseDuration, parseFeed } from "../src/feeds/parse.js";
 import { htmlToText, safeHttpUrl, truncate } from "../src/feeds/text.js";
 import { planReddit } from "../src/feeds/reddit.js";
 import { channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
@@ -45,6 +45,7 @@ describe("parseFeed", () => {
       author: "volt_fan",
       summary: "Got -100mV stable & cooler.",
       imageUrl: "https://forum.example/img/100.jpg",
+      audio: null,
       publishedAt: Date.UTC(2026, 9, 10, 18, 30),
       contentHtml: null, // only a short description: not full text
     });
@@ -95,6 +96,45 @@ describe("parseFeed", () => {
     expect(a!.contentHtml).toBe(long);
     expect(a!.summary).toBe("Short teaser");
     expect(b!.contentHtml).toBeNull();
+  });
+
+  it("decodes numeric character references in escaped HTML once (D-091)", () => {
+    // Shaped like factorio.com/blog/rss: quotes in the escaped HTML written as &#34;.
+    const xml = `<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title type="text">Game Blog</title>
+      <entry xml:base="https://game.example/blog/rss"><title type="text">Friday Facts &#8217;1&#8217;</title><id>https://game.example/blog/post/fff-1</id>
+      <updated>2026-10-23T00:00:00Z</updated><link href="https://game.example/blog/post/fff-1" />
+      <content type="html">&lt;p&gt;See &lt;a href=&#34;https://game.example/blog/post/release&#34;&gt;the release&lt;/a&gt;.&lt;/p&gt;
+      &lt;img src=&#34;https://cdn.game.example/fff-1.png&#34;&gt;&lt;p&gt;Shown literally: &amp;lt;b&amp;gt; and &amp;#34;&lt;/p&gt;</content></entry></feed>`;
+    const [item] = parseFeed(xml, "https://game.example/blog/rss").items;
+    expect(item!.title).toBe("Friday Facts ’1’");
+    expect(item!.contentHtml).toContain('<a href="https://game.example/blog/post/release">');
+    expect(item!.contentHtml).toContain('<img src="https://cdn.game.example/fff-1.png">');
+    expect(item!.contentHtml).toContain("Shown literally: &lt;b&gt; and &#34;");
+  });
+
+  it("keeps a podcast episode's audio and length (D-093)", () => {
+    // Shaped like an NPR podcast feed: an audio enclosure next to an image, itunes:duration.
+    const rss = `<?xml version="1.0"?><rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>P</title>
+      <item><guid>1</guid><title>Ep 1</title><enclosure url="https://img.example/1.jpg" type="image/jpeg" length="1"/>
+        <enclosure url="https://audio.example/ep1.mp3?d=1" type="audio/mpeg" length="123"/><itunes:duration>1:02:03</itunes:duration></item>
+      <item><guid>2</guid><title>Ep 2</title><enclosure url="/ep2.m4a"/><itunes:duration>754</itunes:duration></item>
+      <item><guid>3</guid><title>Ep 3</title><media:group><media:content url="https://audio.example/ep3.ogg" medium="audio" duration="90"/></media:group></item>
+      <item><guid>4</guid><title>Article</title><enclosure url="https://img.example/4.jpg" type="image/jpeg"/></item>
+      <item><guid>5</guid><title>Bad</title><enclosure url="javascript:alert(1)" type="audio/mpeg"/></item></channel></rss>`;
+    const audio = parseFeed(rss, "https://pod.example/feed").items.map((i) => i.audio);
+    expect(audio).toEqual([
+      { url: "https://audio.example/ep1.mp3?d=1", durationSeconds: 3723 },
+      { url: "https://pod.example/ep2.m4a", durationSeconds: 754 },
+      { url: "https://audio.example/ep3.ogg", durationSeconds: 90 },
+      null,
+      null,
+    ]);
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>A</title><entry><id>e1</id><title>E</title>
+      <link href="https://a.example/e1"/><link rel="enclosure" type="audio/mpeg" href="https://a.example/e1.mp3"/></entry></feed>`;
+    const [entry] = parseFeed(atom).items;
+    expect(entry!.url).toBe("https://a.example/e1");
+    expect(entry!.audio).toEqual({ url: "https://a.example/e1.mp3", durationSeconds: null });
+    expect([parseDuration("45:07"), parseDuration("0"), parseDuration("about an hour"), parseDuration(undefined)]).toEqual([2707, null, null, null]);
   });
 
   it("rejects non-feeds and entity bombs", () => {

@@ -245,6 +245,13 @@ body.reader-open { overflow: hidden; }
 .reader-content table { display: block; overflow-x: auto; border-collapse: collapse; }
 .reader-content td, .reader-content th { border: 1px solid var(--border); padding: 0.3rem 0.5rem; }
 .video { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 0.75rem 0; background: #000; border-radius: 8px; overflow: hidden; }
+.audio { margin: 0.75rem 0; display: grid; gap: 0.5rem; }
+.audio audio { width: 100%; }
+.audio-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+.audio-speeds { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.audio-speeds button { padding: 0.2rem 0.5rem; font-size: 0.8rem; min-width: 3rem; }
+.item-audio { display: inline-flex; align-items: center; gap: 0.25rem; }
+.item-audio .icon { vertical-align: -2px; }
 .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 @media (max-width: 480px) {
   .reader-nav { gap: 0.35rem; padding-left: 0.5rem; padding-right: 0.5rem; }
