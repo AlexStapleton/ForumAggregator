@@ -10,7 +10,7 @@ feed (unread / all / saved, by source or tag) or in the built-in reader: tap an 
 or press Next to go through your feed. Each source can keep items forever or for N days. Reading forum pages and threads
 directly is next (M2). Subreddit RSS may work but is untested. See the [roadmap](docs/ROADMAP.md).
 
-- [Changelog](CHANGELOG.md): what's in each release (current: **1.5.0**); how to cut one: [docs/RELEASING.md](docs/RELEASING.md)
+- [Changelog](CHANGELOG.md): what's in each release (current: **1.6.0**); how to cut one: [docs/RELEASING.md](docs/RELEASING.md)
 - [Roadmap and progress](docs/ROADMAP.md): what's done, what's next, what's blocked
 - [Design](docs/DESIGN.md): requirements, architecture, how each part works
 - [Decision log](docs/DECISIONS.md): what was decided and why, plus open questions

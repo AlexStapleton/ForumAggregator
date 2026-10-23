@@ -155,6 +155,61 @@ describe.each(backends)("Reddit and forum links in the app (%s)", (backend) => {
     expect(after.html).toContain('src="https://cdn.game.example/fff-1.png"');
   });
 
+  it("NPR audio stories: the page's audio plays, the teaser shows without a warning (D-096)", async () => {
+    await start();
+    const teaser = "<p>For StoryCorps, two strangers who meet on a park bench become friends.</p>";
+    const body = `<?xml version="1.0"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>NPR Topics: National</title>
+      <item><guid>s1</guid><title>Two strangers share a bench</title><link>https://www.npr.org/2026/10/23/x/two-strangers</link><description>For StoryCorps.</description><content:encoded><![CDATA[${teaser}]]></content:encoded></item>
+      <item><guid>s2</guid><title>Blocked story</title><link>https://www.npr.org/2026/10/23/x/blocked</link><content:encoded><![CDATA[<p>Just a teaser.</p>]]></content:encoded></item></channel></rss>`;
+    web.set("https://feeds.npr.example/1003/rss.xml", { body });
+    web.set("https://www.npr.org/2026/10/23/x/two-strangers", { body: fixture("../pages/npr-audio-story.html"), contentType: "text/html" });
+    web.set("https://www.npr.org/2026/10/23/x/blocked", { error: new FetchError("blocked", "refused [HTTP 403]", 403) });
+    await call("POST", "/api/sources", { url: "https://feeds.npr.example/1003/rss.xml" });
+    const [story, blocked] = (await call("GET", "/api/items")).json().items;
+
+    const r = (await call("GET", `/api/items/${story.id}/reader`)).json();
+    expect(r).toMatchObject({ kind: "feed", notice: null, audio: { url: expect.stringContaining("20261023_me_two_strangers.mp3"), durationSeconds: 168 } });
+    expect(r.html).toContain("two strangers who meet");
+    // Remembered: the card shows it, and opening again reads nothing.
+    expect((await call("GET", "/api/items")).json().items[0].audio).toMatchObject({ durationSeconds: 168 });
+    const before = web.requests.length;
+    expect((await call("GET", `/api/items/${story.id}/reader`)).json()).toMatchObject({ kind: "feed", notice: null, audio: { durationSeconds: 168 } });
+    expect(web.requests.length).toBe(before);
+
+    // A page that can't be read: the feed's text, with the reason; tried again after a day.
+    const b1 = (await call("GET", `/api/items/${blocked.id}/reader`)).json();
+    expect(b1).toMatchObject({ kind: "feed", audio: null });
+    expect(b1.notice).toMatch(/couldn't be loaded .*403.* Showing the feed's text instead\./);
+    expect(b1.html).toContain("Just a teaser.");
+    const tries = () => web.requests.filter((q) => q.url.endsWith("/blocked")).length;
+    expect((await call("GET", `/api/items/${blocked.id}/reader`)).json().notice).toMatch(/Showing the feed's text instead/);
+    expect(tries()).toBe(1);
+    clock.now += 25 * 3_600_000;
+    web.set("https://www.npr.org/2026/10/23/x/blocked", { body: fixture("../pages/npr-audio-story.html"), contentType: "text/html" });
+    expect((await call("GET", `/api/items/${blocked.id}/reader`)).json()).toMatchObject({ notice: null, audio: { durationSeconds: 168 } });
+    expect(tries()).toBe(2);
+  });
+
+  it("re-reads the page of a story stuck on its teaser by v1.5.0 and earlier (D-096)", async () => {
+    await start();
+    const body = `<?xml version="1.0"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>N</title>
+      <item><guid>s1</guid><title>Story</title><link>https://n.example/s1</link><content:encoded><![CDATA[<p>Teaser.</p>]]></content:encoded></item></channel></rss>`;
+    web.set("https://n.example/feed", { body });
+    web.set("https://n.example/s1", { body: `<html><body><article><h1>Story</h1>${"<p>The whole story, at last, in full detail here.</p>".repeat(12)}</article></body></html>`, contentType: "text/html" });
+    await call("POST", "/api/sources", { url: "https://n.example/feed" });
+    const item = (await call("GET", "/api/items")).json().items[0];
+    // How the old silent fallback left it.
+    await app!.db.kysely.updateTable("item_content").set({ status: "ok", origin: "feed", html: "<p>Teaser.</p>" }).where("item_id", "=", item.id).execute();
+    const r = (await call("GET", `/api/items/${item.id}/reader`)).json();
+    expect(r).toMatchObject({ kind: "page", notice: null });
+    expect(r.html).toContain("The whole story, at last");
+
+    // A page stored before audio was looked for, linking the story's mp3: migration 0010 drops it.
+    await app!.db.kysely.updateTable("item_content").set({ html: '<p>2-Minute Listen</p><ul><li><a href="https://ondemand.npr.org/x.mp3?d=168">Download</a></li></ul>' }).where("item_id", "=", item.id).execute();
+    await migrations["0010_reread_audio_story_pages"]!.up(app!.db.kysely);
+    expect(await app!.db.kysely.selectFrom("item_content").select("item_id").where("item_id", "=", item.id).execute()).toEqual([]);
+  });
+
   // Thread links are followed since D-084 (thread-follow.test.ts).
   it("reads board RSS directly", async () => {
     await start();

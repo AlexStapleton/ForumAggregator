@@ -134,3 +134,13 @@ export const MarkReadRequest = z.object({
   upTo: z.number().int().optional(),
 });
 export type MarkReadRequest = z.infer<typeof MarkReadRequest>;
+
+/** Settings → Checking (D-095). null = back to the default. */
+export const CheckingRequest = z
+  .object({
+    intervalMinutes: z.number().int().min(5).max(1440).nullable(),
+    threadIntervalMinutes: z.number().int().min(5).max(1440).nullable(),
+    threadPagesPerCheck: z.number().int().min(1).max(10).nullable(),
+  })
+  .strict();
+export type CheckingRequest = z.infer<typeof CheckingRequest>;

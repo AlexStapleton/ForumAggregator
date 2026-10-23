@@ -1,7 +1,7 @@
 // Sources: adding (with feed discovery and YouTube lookup), checking, and storing new items.
 import crypto from "node:crypto";
 import type { Selectable } from "kysely";
-import type { AddSourceRequest, OpmlImportResult, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
+import type { AddSourceRequest, CheckingValues, OpmlImportResult, Source, SourceKind, TagCount, UpdateSourceRequest } from "@fa/shared";
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
@@ -50,8 +50,6 @@ const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
 const INSERT_CHUNK = 50;
 /** Posts kept per followed thread (D-084). */
 const THREAD_POSTS_KEPT = 300;
-/** Extra (older) pages read in one check when a whole page of replies is new. */
-const THREAD_MAX_BACK_PAGES = 2;
 
 /** A thread page without posts we can read. */
 class ThreadParseError extends Error {}
@@ -101,7 +99,51 @@ export class FeedService {
     private readonly now: () => number = Date.now,
     private readonly log?: Logger,
     private readonly flare?: FlareSolverr,
-  ) {}
+  ) {
+    this.polling = { ...config.polling };
+  }
+
+  /** config.yaml's polling, with Settings → Checking applied on top (D-095). */
+  private polling: AppConfig["polling"];
+
+  /** The check intervals and thread pages in use now. */
+  checking(): CheckingValues {
+    return { intervalMinutes: this.polling.intervalMinutes, threadIntervalMinutes: this.polling.threadIntervalMinutes, threadPagesPerCheck: this.polling.maxPagesPerPoll };
+  }
+
+  /** What Settings → Checking falls back to: config.yaml, else the built-in defaults. */
+  checkingDefaults(): CheckingValues {
+    const p = this.config.polling;
+    return { intervalMinutes: p.intervalMinutes, threadIntervalMinutes: p.threadIntervalMinutes, threadPagesPerCheck: p.maxPagesPerPoll };
+  }
+
+  /**
+   * Applies Settings → Checking (null = the default). Sources on the default interval whose next
+   * check is now further away than the new interval allows are brought forward; a longer
+   * interval applies from each source's next check.
+   */
+  async applyChecking(saved: { [K in keyof CheckingValues]: number | null }, reschedule = true): Promise<void> {
+    const d = this.checkingDefaults();
+    this.polling = {
+      ...this.config.polling,
+      intervalMinutes: saved.intervalMinutes ?? d.intervalMinutes,
+      threadIntervalMinutes: saved.threadIntervalMinutes ?? d.threadIntervalMinutes,
+      maxPagesPerPoll: saved.threadPagesPerCheck ?? d.threadPagesPerCheck,
+    };
+    if (!reschedule) return;
+    for (const [threads, minutes] of [[false, this.polling.intervalMinutes], [true, this.polling.threadIntervalMinutes]] as const) {
+      await this.db.kysely
+        .updateTable("sources")
+        .set((eb) => ({ next_check_at: eb("last_checked_at", "+", minutes * 60_000) }))
+        .where("poll_interval_minutes", "is", null)
+        .where("kind", threads ? "=" : "!=", "thread")
+        .where("consecutive_failures", "=", 0)
+        .where("last_checked_at", "is not", null)
+        // Beyond the new interval plus its jitter (nextCheck adds up to 10 %), so unchanged ones stay put.
+        .where((eb) => eb("next_check_at", ">", eb("last_checked_at", "+", Math.round(minutes * 60_000 * 1.1))))
+        .execute();
+    }
+  }
 
   private flareFetcher?: Fetcher;
 
@@ -165,7 +207,7 @@ export class FeedService {
     await this.setTags(id, input.tags ?? []);
     // We already have the feed from resolving it, so store its items straight away.
     const added = await this.ingest(id, resolved.parsed, true);
-    await this.recordSuccess(id, now, null, null);
+    await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: resolved.kind });
     this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
     return (await this.getSource(id))!;
   }
@@ -217,7 +259,7 @@ export class FeedService {
       .execute();
     await this.setTags(id, input.tags ?? []);
     const added = await this.ingestThread(id, read.pages, read.lastUrl, true);
-    await this.recordSuccess(id, now, null, null);
+    await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: "thread" });
     this.log?.info({ sourceId: id, thread: address, posts: added }, "thread followed");
     return (await this.getSource(id))!;
   }
@@ -244,7 +286,8 @@ export class FeedService {
     }
     const pages = [page];
     let current = page;
-    for (let back = 0; back < THREAD_MAX_BACK_PAGES && knownMax !== null && current.page > 1; back++) {
+    // Earlier pages, while a whole page of replies is new, up to the pages allowed per check (D-095).
+    for (let back = 0; back < this.polling.maxPagesPerPoll - 1 && knownMax !== null && current.page > 1; back++) {
       const oldest = Math.min(...current.posts.map((p) => (p.id ? postNumber(p.id) : Infinity)));
       if (oldest <= knownMax) break; // this page already reaches posts we have
       const previous = await get(threadPageUrl(address, current.page - 1));
@@ -600,12 +643,12 @@ export class FeedService {
     }
   }
 
-  private intervalMinutes(row: Pick<SourceRow, "poll_interval_minutes">): number {
-    return row.poll_interval_minutes ?? this.config.polling.intervalMinutes;
+  private intervalMinutes(row: Pick<SourceRow, "poll_interval_minutes" | "kind">): number {
+    return row.poll_interval_minutes ?? (row.kind === "thread" ? this.polling.threadIntervalMinutes : this.polling.intervalMinutes);
   }
 
-  private async recordSuccess(id: string, at: number, etag: string | null, lastModified: string | null, row?: SourceRow) {
-    const next = nextCheck({ now: at, intervalMinutes: this.intervalMinutes(row ?? { poll_interval_minutes: null }), failures: 0, polling: this.config.polling });
+  private async recordSuccess(id: string, at: number, etag: string | null, lastModified: string | null, row: Pick<SourceRow, "poll_interval_minutes" | "kind">) {
+    const next = nextCheck({ now: at, intervalMinutes: this.intervalMinutes(row), failures: 0, polling: this.polling });
     await this.db.kysely
       .updateTable("sources")
       .set({
@@ -629,7 +672,7 @@ export class FeedService {
       now: at,
       intervalMinutes: this.intervalMinutes(row),
       failures,
-      polling: this.config.polling,
+      polling: this.polling,
       retryAfterMs: err?.retryAfterMs,
     });
     const status = next.paused ? "paused" : err?.isChallenge ? "challenged" : "error";

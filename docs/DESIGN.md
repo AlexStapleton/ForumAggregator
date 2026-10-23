@@ -252,8 +252,9 @@ All settings are configurable globally, per site and per subscription:
 
 The app fetches and validates it immediately, then stores its items. Items older than 7 days
 start out read, so a new source doesn't flood the feed (D-047). After that, the scheduler
-checks it every `intervalMinutes` (default 30, ±10 % jitter), using ETag / Last-Modified, so an
-unchanged feed costs one tiny 304 response.
+checks it every `intervalMinutes` (default 30, ±10 % jitter; followed threads every
+`threadIntervalMinutes`, default 15; both adjustable in Settings → Checking, D-095), using
+ETag / Last-Modified, so an unchanged feed costs one tiny 304 response.
 
 When a check fails, it backs off 30 min → 1 h → 2 h → 4 h (capped at 6 h, and longer if the
 site sends Retry-After). After 5 failures in a row the source is paused, with the reason

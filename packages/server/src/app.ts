@@ -129,7 +129,9 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson, flare);
   const poller = new Poller(feeds, fastify.log);
   registerFeedRoutes(fastify, feeds, items, reader);
-  registerSettingsRoutes(fastify, settings, sharedJson, flare);
+  registerSettingsRoutes(fastify, settings, sharedJson, flare, feeds);
+  // Settings → Checking overrides config.yaml's intervals (D-095).
+  await feeds.applyChecking(await settings.checking(), false);
 
   fastify.get("/healthz", async (_request, reply) => {
     try {
@@ -147,8 +149,11 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
     database: db.kind,
   }));
 
-  // Read-only view of the effective config, for the (future) settings screen.
-  fastify.get("/api/config", async () => config);
+  // Read-only view of the effective config: config.yaml with Settings → Checking applied.
+  fastify.get("/api/config", async () => {
+    const c = feeds.checking();
+    return { ...config, polling: { ...config.polling, intervalMinutes: c.intervalMinutes, threadIntervalMinutes: c.threadIntervalMinutes, maxPagesPerPoll: c.threadPagesPerCheck } };
+  });
 
   await registerWebUi(fastify, env);
 

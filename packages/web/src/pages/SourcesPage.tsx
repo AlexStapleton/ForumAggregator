@@ -18,7 +18,7 @@ export function SourcesPage() {
   const [url, setUrl] = useState("");
   const [newTags, setNewTags] = useState("");
   const [editing, setEditing] = useState<string>();
-  const [defaults, setDefaults] = useState<Defaults>({ intervalMinutes: 30, keepDays: 0 });
+  const [defaults, setDefaults] = useState<Defaults>({ intervalMinutes: 30, threadIntervalMinutes: 15, keepDays: 0 });
   const [adding, setAdding] = useState(false);
   const [flareOn, setFlareOn] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
@@ -34,8 +34,8 @@ export function SourcesPage() {
 
   useEffect(() => {
     void load();
-    api<{ polling: { intervalMinutes: number }; retention: { keepDays: number } }>("GET", "/api/config")
-      .then((c) => setDefaults({ intervalMinutes: c.polling.intervalMinutes, keepDays: c.retention.keepDays }))
+    api<{ polling: { intervalMinutes: number; threadIntervalMinutes: number }; retention: { keepDays: number } }>("GET", "/api/config")
+      .then((c) => setDefaults({ intervalMinutes: c.polling.intervalMinutes, threadIntervalMinutes: c.polling.threadIntervalMinutes, keepDays: c.retention.keepDays }))
       .catch(() => undefined);
     api<FlareSolverrStatus>("GET", "/api/settings/flaresolverr")
       .then((f) => setFlareOn(!!f.url))
@@ -284,6 +284,7 @@ function splitTags(text: string): string[] {
 
 export interface Defaults {
   intervalMinutes: number;
+  threadIntervalMinutes: number;
   keepDays: number;
 }
 
@@ -395,7 +396,7 @@ function EditSource({
       <div className="field">
         <label htmlFor="f-interval">Check for new items</label>
         <select id="f-interval" value={pollInterval ?? ""} onChange={(e) => setPollInterval(e.target.value === "" ? null : Number(e.target.value))}>
-          <option value="">Default ({minutesLabel(defaults.intervalMinutes)})</option>
+          <option value="">Default ({minutesLabel(source.kind === "thread" ? defaults.threadIntervalMinutes : defaults.intervalMinutes)}, Settings → Checking)</option>
           {INTERVALS.map(([v, label]) => (
             <option key={label} value={v ?? ""}>
               {label}

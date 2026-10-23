@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { extractArticle, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { extractArticle, pageAudio, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
 const BASE = "https://news.example/2026/10/story";
@@ -60,6 +63,27 @@ describe("extractArticle", () => {
 
   it("returns null for teasers and paywalls", () => {
     expect(extractArticle(page("<p>Subscribe to read more.</p>"), BASE)).toBeNull();
+  });
+});
+
+describe("pageAudio (D-096)", () => {
+  const audioOf = (html: string, url = "https://news.example/story") => pageAudio(new JSDOM(html).window.document, url);
+
+  it("finds NPR's headline audio from its Download link, with the length", () => {
+    const html = fs.readFileSync(path.join(import.meta.dirname, "fixtures/pages/npr-audio-story.html"), "utf8");
+    expect(audioOf(html, "https://www.npr.org/2026/10/23/x/two-strangers")).toEqual({
+      url: "https://ondemand.npr.org/anon.npr-mp3/npr/me/2026/10/20261023_me_two_strangers.mp3?t=progseg&e=1&d=168&size=2701733&sc=siteplayer",
+      durationSeconds: 168,
+    });
+  });
+
+  it("uses og:audio and <audio> addresses, and ignores pages without audio", () => {
+    expect(audioOf('<meta property="og:audio" content="/ep.mp3">')).toEqual({ url: "https://news.example/ep.mp3", durationSeconds: null });
+    expect(audioOf('<audio controls><source src="https://cdn.example/a.ogg"></audio>')).toEqual({ url: "https://cdn.example/a.ogg", durationSeconds: null });
+    expect(audioOf('<audio id="x"></audio><p>Text</p>')).toBeNull();
+    // A download link that isn't an audio file, or isn't http(s).
+    expect(audioOf('<li class="audio-tool-download"><a href="/story.pdf">Download</a></li>')).toBeNull();
+    expect(audioOf('<li class="audio-tool-download"><a href="javascript:alert(1)//.mp3">Download</a></li>')).toBeNull();
   });
 });
 

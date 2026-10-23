@@ -5,12 +5,13 @@
 # How often and how politely sources are fetched (DESIGN.md §7).
 # Sites can override any of these under their own `polling:` key.
 polling:
+  # These three can also be set in the app (Settings → Checking), which overrides this file.
   intervalMinutes: 30          # site/board subscriptions
   threadIntervalMinutes: 15    # followed threads
   minDelaySeconds: 5           # minimum gap between requests to the same site
   jitterSeconds: 3             # plus a random 0..3 s
   maxConcurrentPerHost: 1
-  maxPagesPerPoll: 3           # how far back to page through busy threads/boards
+  maxPagesPerPoll: 3           # pages a thread check may read (the newest + earlier ones on busy threads)
   backoffMaxHours: 6           # cap for exponential backoff after 429/503
   circuitBreakerFailures: 5    # pause a site after this many failures in a row
 

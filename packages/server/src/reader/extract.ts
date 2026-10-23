@@ -1,7 +1,8 @@
 // "Reader mode": pulling the article out of a full web page.
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
-import { htmlToText } from "../feeds/text.js";
+import type { ItemAudio } from "@fa/shared";
+import { htmlToText, safeHttpUrl } from "../feeds/text.js";
 import { sanitizeHtml } from "./sanitize.js";
 
 /** Below this much text, what we got is probably a teaser, a paywall or an error page. */
@@ -34,6 +35,34 @@ export interface SelectorExtraction {
   matched: number | null;
   /** How many elements the remove selector took out (null when not set). */
   removed: number | null;
+  /** The story's own audio, when the page has one (D-096). */
+  audio: ItemAudio | null;
+}
+
+const AUDIO_FILE = /\.(mp3|m4a|aac|ogg|oga|opus|wav)(\?|$)/i;
+
+/**
+ * The story's audio on an article page (D-096): og:audio, an <audio> (or its <source>) with an
+ * address, or NPR's headline player's Download link (NPR fills its <audio> by script, which never
+ * runs here). Only http(s) addresses of audio files from the link; any from the tags.
+ */
+export function pageAudio(doc: Document, pageUrl: string): ItemAudio | null {
+  const tagged = [
+    doc.querySelector('meta[property="og:audio:secure_url"]')?.getAttribute("content"),
+    doc.querySelector('meta[property="og:audio"]')?.getAttribute("content"),
+    doc.querySelector("audio[src]")?.getAttribute("src"),
+    doc.querySelector("audio source[src]")?.getAttribute("src"),
+  ];
+  for (const raw of tagged) {
+    const url = safeHttpUrl(raw, pageUrl);
+    if (url) return { url, durationSeconds: null };
+  }
+  const link = doc.querySelector(".headlineaudio .audio-tool-download a[href]") ?? doc.querySelector(".audio-tool-download a[href]");
+  const url = safeHttpUrl(link?.getAttribute("href"), pageUrl);
+  if (!url || !AUDIO_FILE.test(new URL(url).pathname)) return null;
+  // NPR puts the length in seconds in the link (d=168).
+  const d = Number(new URL(url).searchParams.get("d"));
+  return { url, durationSeconds: /(^|\.)npr\.org$/.test(new URL(url).hostname) && Number.isInteger(d) && d > 0 ? d : null };
 }
 
 export function extractWithSelectors(pageHtml: string, pageUrl: string, selectors: ReaderSelectors): SelectorExtraction {
@@ -46,6 +75,8 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
       const real = img.getAttribute("data-src") ?? img.getAttribute("data-lazy-src") ?? img.getAttribute("data-original");
       if (real) img.setAttribute("src", real);
     }
+    // Before anything is removed: the player may sit outside the article.
+    const audio = pageAudio(doc, pageUrl);
     let removed: number | null = null;
     if (selectors.remove) {
       const victims = Array.from(doc.querySelectorAll(selectors.remove));
@@ -64,17 +95,18 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
         article: textLength > 0 || hasImage ? { html, title: doc.title || null, byline: null, textLength } : null,
         matched: matches.length,
         removed,
+        audio,
       };
     }
     // A XenForo thread: the posts, not Readability's guess (D-081).
     const thread = xenforoThread(doc, pageUrl);
-    if (thread) return { article: thread, matched: null, removed };
+    if (thread) return { article: thread, matched: null, removed, audio };
     const article = new Readability(doc, { charThreshold: MIN_ARTICLE_TEXT }).parse();
-    if (!article?.content) return { article: null, matched: null, removed };
+    if (!article?.content) return { article: null, matched: null, removed, audio };
     const html = sanitizeHtml(article.content, pageUrl);
     const textLength = htmlToText(html).length;
-    if (textLength < MIN_ARTICLE_TEXT) return { article: null, matched: null, removed };
-    return { article: { html, title: article.title ?? null, byline: article.byline ?? null, textLength }, matched: null, removed };
+    if (textLength < MIN_ARTICLE_TEXT) return { article: null, matched: null, removed, audio };
+    return { article: { html, title: article.title ?? null, byline: article.byline ?? null, textLength }, matched: null, removed, audio };
   } finally {
     dom.window.close();
   }
