@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Fixed
+- vBulletin forum threads (e.g. Bike Forums) showed each poster's member details (rank, badges, join date, post count) and little of the posts. They now read like XenForo threads: author and date above each post's text, quotes as block quotes, and a link to the next page on the forum. Threads opened before are read again (database migration 0011) (D-098).
+
 ## [1.6.0] - 2026-10-23
 
 Settings → Checking, and audio for NPR news stories. Upgrade with `docker compose pull && docker compose up -d`,

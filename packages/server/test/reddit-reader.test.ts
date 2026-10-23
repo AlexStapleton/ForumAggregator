@@ -208,6 +208,12 @@ describe.each(backends)("Reddit and forum links in the app (%s)", (backend) => {
     await app!.db.kysely.updateTable("item_content").set({ html: '<p>2-Minute Listen</p><ul><li><a href="https://ondemand.npr.org/x.mp3?d=168">Download</a></li></ul>' }).where("item_id", "=", item.id).execute();
     await migrations["0010_reread_audio_story_pages"]!.up(app!.db.kysely);
     expect(await app!.db.kysely.selectFrom("item_content").select("item_id").where("item_id", "=", item.id).execute()).toEqual([]);
+
+    // A vBulletin thread read as a generic article, with each poster's sidebar: migration 0011 drops it.
+    const sidebar = "<p>Senior Member</p><p>Joined: <b>Jan 2015</b></p><p>Posts: <b>1,216</b></p><p>Looks like they will be HQed in Europe</p>";
+    await app!.db.kysely.insertInto("item_content").values({ item_id: item.id, origin: "page", status: "ok", html: sidebar, error: null, fetched_at: NOW }).execute();
+    await migrations["0011_reread_forum_pages_with_member_details"]!.up(app!.db.kysely);
+    expect(await app!.db.kysely.selectFrom("item_content").select("item_id").where("item_id", "=", item.id).execute()).toEqual([]);
   });
 
   // Thread links are followed since D-084 (thread-follow.test.ts).

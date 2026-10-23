@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { extractArticle, pageAudio, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { extractArticle, extractWithSelectors, pageAudio, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
 const BASE = "https://news.example/2026/10/story";
@@ -84,6 +84,39 @@ describe("pageAudio (D-096)", () => {
     // A download link that isn't an audio file, or isn't http(s).
     expect(audioOf('<li class="audio-tool-download"><a href="/story.pdf">Download</a></li>')).toBeNull();
     expect(audioOf('<li class="audio-tool-download"><a href="javascript:alert(1)//.mp3">Download</a></li>')).toBeNull();
+  });
+});
+
+describe("vBulletin threads (D-098)", () => {
+  const html = fs.readFileSync(path.join(import.meta.dirname, "fixtures/pages/vbulletin-thread.html"), "utf8");
+  const url = "https://forum.example/classic-vintage/100-steel-frames.html";
+
+  it("keeps each post's author, date and text, and none of the member sidebar or signature", () => {
+    const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
+    expect(thread.posts.map((p) => [p.id, p.author, p.timeLabel])).toEqual([
+      ["501", "Rider One", "10-23-26 | 12:23 AM"],
+      ["502", "Rider Two", "10-23-26 | 01:34 AM"],
+    ]);
+    expect([thread.page, thread.pages]).toEqual([1, 3]);
+    const all = thread.posts.map((p) => p.html).join("");
+    expect(all).not.toMatch(/Joined|Posts:|Likes|Senior Member|Titanium|Thread Starter|Signature|View Post|alert/);
+    expect(thread.posts[0]!.html).toContain('<img src="https://img.example/frame.jpg"');
+  });
+
+  it("turns vB3 and vB4 quotes into block quotes with who wrote them", () => {
+    const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
+    const reply = thread.posts[1]!.html;
+    expect(reply).toMatch(/<blockquote><p><strong>Rider One wrote:<\/strong><\/p>[\s\S]*Is steel still worth it\?[\s\S]*<\/blockquote>/);
+    expect(reply).toMatch(/<blockquote><p><strong>Someone wrote:<\/strong><\/p>[\s\S]*Steel is real\.[\s\S]*<\/blockquote>/);
+    expect(reply).not.toMatch(/Quote:|Originally Posted by|<table/);
+    expect(reply).toContain("Yes, for comfort.");
+  });
+
+  it("is used by the reader, with a link to the next page", () => {
+    const article = extractWithSelectors(html, url, {}).article!;
+    expect(article.html).toMatch(/^<section><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
+    expect(article.html).toContain('<em>Page 1 of 3.</em> <a href="https://forum.example/classic-vintage/100-steel-frames-2.html"');
+    expect(article.byline).toBe("Rider One");
   });
 });
 
