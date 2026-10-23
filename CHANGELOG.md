@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Fixed
+- Images and links in posts from feeds that write quotes as `&#34;` (e.g. the Factorio blog) were broken. Posts already stored are repaired at the source's next check (database migration 0008 makes that check read the feed in full) (D-091).
+
 ### Changed
 - Adding a source: if the address you paste doesn't exist (404), the app looks for the feed one or two folders up. For example, `factorio.com/blog/post` now finds the Factorio blog's feed (D-090).
 

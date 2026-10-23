@@ -3,7 +3,7 @@
 import { sql, type Kysely } from "kysely";
 import type { Migration, MigrationProvider } from "kysely/migration";
 
-const migrations: Record<string, Migration> = {
+export const migrations: Record<string, Migration> = {
   "0001_auth": {
     async up(db: Kysely<any>) {
       await db.schema
@@ -186,6 +186,18 @@ const migrations: Record<string, Migration> = {
     async down(db: Kysely<any>) {
       await db.schema.dropIndex("items_saved_published").execute();
       await db.schema.dropIndex("items_source_read").execute();
+    },
+  },
+  "0008_refetch_misdecoded_feeds": {
+    async up(db: Kysely<any>) {
+      // Feeds whose stored bodies kept &#34; in their tags (D-091): forget the feed's ETag and
+      // Last-Modified so the next check reads it in full and re-stores those bodies.
+      await sql`update sources set etag = null, last_modified = null where id in (
+        select i.source_id from items i join item_content c on c.item_id = i.id
+        where c.origin = 'feed' and (c.html like '%=&#34;%' or c.html like '%=&#x22;%' or c.html like '%!%22http%' escape '!'))`.execute(db);
+    },
+    async down() {
+      // Nothing to undo: the next check stores fresh validators.
     },
   },
 };

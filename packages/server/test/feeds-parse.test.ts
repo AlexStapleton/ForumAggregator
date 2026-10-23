@@ -97,6 +97,20 @@ describe("parseFeed", () => {
     expect(b!.contentHtml).toBeNull();
   });
 
+  it("decodes numeric character references in escaped HTML once (D-091)", () => {
+    // Shaped like factorio.com/blog/rss: quotes in the escaped HTML written as &#34;.
+    const xml = `<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title type="text">Game Blog</title>
+      <entry xml:base="https://game.example/blog/rss"><title type="text">Friday Facts &#8217;1&#8217;</title><id>https://game.example/blog/post/fff-1</id>
+      <updated>2026-10-23T00:00:00Z</updated><link href="https://game.example/blog/post/fff-1" />
+      <content type="html">&lt;p&gt;See &lt;a href=&#34;https://game.example/blog/post/release&#34;&gt;the release&lt;/a&gt;.&lt;/p&gt;
+      &lt;img src=&#34;https://cdn.game.example/fff-1.png&#34;&gt;&lt;p&gt;Shown literally: &amp;lt;b&amp;gt; and &amp;#34;&lt;/p&gt;</content></entry></feed>`;
+    const [item] = parseFeed(xml, "https://game.example/blog/rss").items;
+    expect(item!.title).toBe("Friday Facts ’1’");
+    expect(item!.contentHtml).toContain('<a href="https://game.example/blog/post/release">');
+    expect(item!.contentHtml).toContain('<img src="https://cdn.game.example/fff-1.png">');
+    expect(item!.contentHtml).toContain("Shown literally: &lt;b&gt; and &#34;");
+  });
+
   it("rejects non-feeds and entity bombs", () => {
     expect(() => parseFeed("<html><body>hi</body></html>")).toThrow(FeedParseError);
     expect(() => parseFeed('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">]><rss><channel/></rss>')).toThrow(/entity/i);

@@ -37,6 +37,9 @@ const parser = new XMLParser({
   parseTagValue: false,
   parseAttributeValue: false,
   trimValues: true,
+  // Numeric character references (&#34;, &#x27;, &#8217;) too, not just the five XML ones:
+  // Factorio's Atom feed writes the quotes in its escaped HTML as &#34; (D-091).
+  htmlEntities: true,
   isArray: (name) => ["item", "entry", "link", "category", "media:thumbnail", "media:content", "enclosure"].includes(name),
 });
 

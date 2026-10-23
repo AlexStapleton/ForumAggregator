@@ -21,6 +21,12 @@ import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput
 type SourceRow = Selectable<SourcesTable>;
 
 /** A user-facing failure with a message that says what to do about it. */
+/**
+ * A feed body stored before numeric character references were decoded (D-091): quotes left as
+ * &#34; inside a tag (raw), or the broken ".../%22https://..." links that made once cleaned.
+ */
+const MISDECODED = /<[^>]*=\s*&#(?:34|x22);|="[^"]*%22https?:/i;
+
 export class SourceError extends Error {
   constructor(
     readonly code: string,
@@ -718,13 +724,14 @@ export class FeedService {
    * Items stored before feed bodies were kept at any length (v1.0.0 kept only 500+ characters)
    * get their body when the feed shows them again (D-076). Reddit bodies are also re-stored raw
    * where an older version cached its cleaned copy, so the current Reddit layout applies.
+   * Bodies stored before v1.4.1 with &#34; left in their tags are replaced too (D-091).
    */
   private async backfillContent(sourceId: string, kind: SourceKind | undefined, known: Array<{ content: string | null; row: { guid: string } }>, now: number) {
     if (!known.length) return;
     const rows = await this.db.kysely
       .selectFrom("items")
       .leftJoin("item_content", "item_content.item_id", "items.id")
-      .select(["items.id", "items.guid", "item_content.status", "item_content.origin"])
+      .select(["items.id", "items.guid", "item_content.status", "item_content.origin", "item_content.html"])
       .where("items.source_id", "=", sourceId)
       .where("items.guid", "in", known.map((c) => c.row.guid))
       .execute();
@@ -732,8 +739,9 @@ export class FeedService {
     for (const r of rows) {
       const missing = r.status === null;
       const staleReddit = kind === "reddit" && r.origin === "feed" && r.status !== "raw";
+      const misdecoded = r.origin === "feed" && r.status !== "failed" && MISDECODED.test(r.html ?? "");
       const html = bodies.get(r.guid);
-      if (!html || !(missing || staleReddit)) continue;
+      if (!html || !(missing || staleReddit || misdecoded) || (misdecoded && MISDECODED.test(html))) continue;
       await this.db.kysely
         .insertInto("item_content")
         .values({ item_id: r.id, origin: "feed", status: "raw", html, error: null, fetched_at: now })
