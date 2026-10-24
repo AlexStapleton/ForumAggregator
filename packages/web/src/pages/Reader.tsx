@@ -124,6 +124,17 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     };
   }, [itemKey, page]); // only when the item (or a thread card's replies) or the page changes
 
+  // Forum post times in this device's time zone, from the exact time (D-102): the forum's own label
+  // ("2d ago", "Today at 8:00 AM") was right only when the page was read.
+  useEffect(() => {
+    for (const el of Array.from(scroller.current?.querySelectorAll(".reader-content time[datetime]") ?? [])) {
+      const at = Date.parse(el.getAttribute("datetime") ?? "");
+      if (!Number.isFinite(at)) continue;
+      el.textContent = new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+      el.setAttribute("title", relativeTime(at));
+    }
+  }, [content, more]);
+
   // The last thread page shown, and whether there's one after it.
   const lastShown = more.at(-1)?.pagination ?? content?.pagination ?? null;
   const nextPage = lastShown && lastShown.page < lastShown.pages ? lastShown.page + 1 : null;
@@ -237,7 +248,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             // A followed thread's card shows its new replies; this switches to the thread itself (D-088).
             <p className="thread-switch">
               {page === undefined ? (
-                <button className="secondary" onClick={() => setPage(readPrefs().threadStart === "last" ? "last" : 1)}>
+                // On the newest page, where the new replies are (D-102); ‹ and the page bar go further back.
+                <button className="secondary" onClick={() => setPage("last")}>
                   Read the whole thread
                 </button>
               ) : (

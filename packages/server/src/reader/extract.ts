@@ -155,27 +155,54 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
   if (!articles.length) return null;
   const posts: ForumPost[] = articles.map((post) => {
     const author = post.getAttribute("data-author") ?? post.querySelector(".message-name, .username")?.textContent?.trim() ?? null;
-    const time = post.querySelector("time.u-dt, time[datetime]");
+    // The post's own time is in its header; the member box can hold another <time> (Overclock.net's
+    // "Joined" date, D-102), so that one is never used.
+    const time =
+      post.querySelector(".message-attribution time, time[qid='post-date-time']") ??
+      Array.from(post.querySelectorAll("time.u-dt, time[datetime]")).find((t) => !t.closest(".message-user, .message-cell--user, .message-userDetails")) ??
+      null;
     const body = post.querySelector(".message-body .bbWrapper, .bbWrapper")!;
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
     const idSource = post.getAttribute("data-content") ?? post.id ?? "";
-    const unix = Number(time?.getAttribute("data-time"));
+    const unix = Number(time?.getAttribute("data-time") ?? time?.getAttribute("california-data-time"));
     const iso = Date.parse((time?.getAttribute("datetime") ?? "").replace(/([+-]\d\d)(\d\d)$/, "$1:$2"));
+    // A Unix time before 2000 isn't a post time (placeholders); the ISO attribute is used then.
+    const postedAt = unix > 946_684_800 ? unix * 1000 : Number.isFinite(iso) ? iso : null;
     return {
-      postedAt: unix > 0 ? unix * 1000 : Number.isFinite(iso) ? iso : null,
+      postedAt,
       id: /(\d+)$/.exec(idSource)?.[1] ?? null,
       author,
-      datetime: time?.getAttribute("datetime") ?? null,
+      // Standard ISO from the exact time, so browsers can show it in local time (XenForo writes "+0000").
+      datetime: postedAt !== null ? new Date(postedAt).toISOString() : (time?.getAttribute("datetime") ?? null),
       timeLabel: time?.textContent?.trim() || null,
       html: sanitizeHtml(body.innerHTML, pageUrl),
     };
   });
-  // Page count from the page navigation ("1 2 3 … 40").
-  const pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
-  const page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
-  const title = doc.querySelector("h1.p-title-value")?.textContent?.trim() || doc.title || null;
+  // Page count from the page navigation ("1 2 3 … 40"); Overclock.net's theme shows "22/23" on the
+  // current page's button instead (D-102).
+  let pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
+  let page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
+  const compact = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(doc.querySelector(".pageNav [aria-current='page']")?.textContent ?? "");
+  if (compact && pages === 1) {
+    page = Number(compact[1]);
+    pages = Math.max(page, Number(compact[2]));
+  }
+  const title =
+    doc.querySelector("h1.p-title-value")?.textContent?.trim() ||
+    doc.querySelector(".p-title h1, .p-body-header h1")?.textContent?.trim() ||
+    cleanPageTitle(doc.title) ||
+    null;
   return { title, posts, page, pages };
+}
+
+/** A browser tab title without the unread count and page/site suffix: "(3) Title | Page 22 | Site" → "Title". */
+export function cleanPageTitle(title: string | null | undefined): string {
+  return (title ?? "")
+    .replace(/^\(\d+\)\s*/, "")
+    .replace(/\s*\|\s*Page \d+\s*(\|.*)?$/i, "")
+    .replace(/\s*\|\s*[^|]+$/, (m) => (/\.(net|com|org)\b|forum/i.test(m) ? "" : m))
+    .trim();
 }
 
 /** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */

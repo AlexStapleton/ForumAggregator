@@ -56,7 +56,7 @@ describe("XenForo thread pages", () => {
     expect(r.article!.byline).toBe("PepperGrower");
     expect(r.article!.title).toBe("Superhots in 5 gallon pots");
     expect(out).toContain("<strong>PepperGrower</strong>");
-    expect(out).toContain('<time datetime="2026-10-11T10:00:00+0000">Oct 11, 2026</time>');
+    expect(out).toContain('<time datetime="2026-10-11T10:00:00.000Z">Oct 11, 2026</time>');
     expect(out).toContain('src="https://forum.example/attachments/pot.jpg"');
     expect(out).toContain("PepperGrower said:");
     expect(out).toContain("Looking great!");

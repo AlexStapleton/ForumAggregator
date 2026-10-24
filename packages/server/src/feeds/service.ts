@@ -302,8 +302,23 @@ export class FeedService {
   /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
   private async ingestThread(sourceId: string, pages: ForumThreadPage[], lastUrl: string, firstFetch: boolean): Promise<number> {
     const now = this.now();
-    const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
+    const known = await this.db.kysely.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).execute();
     const knownIds = new Set(known.map((k) => k.post_id));
+    // Posts already stored that are on the pages read: keep them as the forum shows them now (edits,
+    // and dates misread before D-102 from Overclock.net's member box).
+    const stored = new Map(known.map((k) => [k.post_id, k]));
+    let repaired = false;
+    for (const post of pages.flatMap((p) => p.posts)) {
+      const was = post.id ? stored.get(post.id) : undefined;
+      if (!was || (was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author)) continue;
+      await this.db.kysely
+        .updateTable("thread_posts")
+        .set({ posted_at: post.postedAt, posted_label: post.timeLabel, html: post.html, author: post.author })
+        .where("source_id", "=", sourceId)
+        .where("post_id", "=", post.id!)
+        .execute();
+      repaired = true;
+    }
     const knownMax = Math.max(0, ...known.map((k) => postNumber(k.post_id)));
     const fresh = new Map<string, ForumThreadPage["posts"][number]>();
     for (const post of pages.flatMap((p) => p.posts)) {
@@ -332,11 +347,25 @@ export class FeedService {
       const drop = all.map((r) => r.post_id).sort((a, b) => postNumber(b) - postNumber(a)).slice(THREAD_POSTS_KEPT);
       if (drop.length) await this.db.kysely.deleteFrom("thread_posts").where("source_id", "=", sourceId).where("post_id", "in", drop).execute();
     }
-    if (!fresh.size && !firstFetch) return 0;
+    // The thread's title as the page shows it; a source still named after the old (tab) title follows it.
+    const title = pages.at(-1)?.title ?? null;
+    const card = await this.db.kysely.selectFrom("items").select(["id", "read", "title"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
+    if (title && card && card.title !== title) {
+      await this.db.kysely.updateTable("items").set({ title }).where("id", "=", card.id).execute();
+      await this.db.kysely.updateTable("sources").set({ title }).where("id", "=", sourceId).where("title", "=", card.title).execute();
+    }
+    if (!fresh.size && !firstFetch) {
+      // Dates corrected: the card is dated by its newest post again (read state unchanged).
+      if (repaired && card) {
+        const newest = await this.db.kysely.selectFrom("thread_posts").select(({ fn }) => fn.max("posted_at").as("at")).where("source_id", "=", sourceId).executeTakeFirst();
+        const at = Number(newest?.at);
+        if (at > 0) await this.db.kysely.updateTable("items").set({ published_at: Math.min(at, this.now()) }).where("id", "=", card.id).execute();
+      }
+      return 0;
+    }
 
     // The card: unread again, with the count since the user last read it.
     const source = await this.db.kysely.selectFrom("sources").select(["title", "thread_batch_from"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
-    const card = await this.db.kysely.selectFrom("items").select(["id", "read"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
     const batchFrom = !card || card.read === 1 || source.thread_batch_from === null ? now : source.thread_batch_from;
     await this.db.kysely.updateTable("sources").set({ thread_batch_from: batchFrom }).where("id", "=", sourceId).execute();
     const batch = await this.db.kysely
@@ -350,7 +379,7 @@ export class FeedService {
       ? threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null).replace(/new (reply|replies)/, "latest $1")
       : threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
     const values = {
-      title: pages.at(-1)?.title ?? source.title,
+      title: title ?? source.title,
       url: lastUrl,
       author: latest?.author ?? null,
       summary,

@@ -33,6 +33,8 @@ const THREAD_PAGES_KEPT = 100;
 
 /** Which page of a forum thread to show: a number, or the newest ("last"). */
 export type ThreadPageRequest = number | "last";
+/** Earlier posts shown dimmed above a followed thread's new replies (D-102). */
+const THREAD_CARD_CONTEXT_POSTS = 3;
 /** Replies shown on a followed thread's card (D-084). */
 const THREAD_CARD_MAX_POSTS = 100;
 /**
@@ -360,9 +362,16 @@ export class ReaderService {
     const rows = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
     const shown = rows.slice(-THREAD_CARD_MAX_POSTS);
     if (!shown.length) return this.summaryOnly(base, "No replies stored yet. They appear here after the next check.");
-    const html = renderForumPosts(
-      shown.map((p) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html })),
-    );
+    const asPost = (p: (typeof rows)[number]) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html });
+    // The posts just before the new ones, for context (D-102): what the new replies answer or quote.
+    let context = "";
+    if (batchFrom !== null && shown.length === rows.length) {
+      const earlier = (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId).where("fetched_at", "<", batchFrom).execute())
+        .sort((a, b) => Number(a.post_id) - Number(b.post_id))
+        .slice(-THREAD_CARD_CONTEXT_POSTS);
+      if (earlier.length) context = `<div class="thread-context"><p class="thread-context-label">Earlier in the thread</p>${renderForumPosts(earlier.map(asPost))}</div><p class="thread-new-label">New replies</p>`;
+    }
+    const html = context + renderForumPosts(shown.map(asPost));
     const notice = rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null;
     return { ...base, kind: "page", html, videoId: null, notice };
   }
