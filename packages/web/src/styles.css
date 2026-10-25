@@ -268,6 +268,12 @@ body.reader-open { overflow: hidden; }
 .reader-content table { display: block; overflow-x: auto; border-collapse: collapse; }
 .reader-content td, .reader-content th { border: 1px solid var(--border); padding: 0.3rem 0.5rem; }
 .video { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 0.75rem 0; background: #000; border-radius: 8px; overflow: hidden; }
+/* Signed-in devices (D-110). */
+.sessions { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.75rem; }
+.sessions li { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+.sessions li > div { min-width: 0; overflow-wrap: anywhere; }
+.badge { white-space: nowrap; display: inline-block; margin-left: 0.5rem; font-size: 0.75rem; font-weight: 600; padding: 0.05rem 0.4rem; border-radius: 4px; background: var(--info-bg); color: var(--info-text); }
+
 /* A followed thread's card: earlier posts for context, dimmed (D-102). */
 .thread-context { opacity: 0.6; }
 .thread-context-label, .thread-new-label { margin: 0.5rem 0; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }

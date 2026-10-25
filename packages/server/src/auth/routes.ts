@@ -8,13 +8,16 @@ import {
   TotpDisableRequest,
   TotpEnableRequest,
 } from "@fa/shared/schemas";
-import type { AuthStatus, TotpBeginResponse } from "@fa/shared";
+import type { AuthStatus, ConnectionInfo, SessionView, TotpBeginResponse } from "@fa/shared";
 import type { Env } from "../env.js";
 import { splitList } from "../env.js";
 import { parseBody, sendError } from "../http.js";
-import type { AuthService, AuthUser } from "./service.js";
+import type { AuthService, AuthUser, CheckResult, LoginResult } from "./service.js";
 
 export const SESSION_COOKIE = "fa_session";
+/** Marks a browser that has logged in before (D-111). Grants nothing by itself; only sent to /api/auth. */
+export const DEVICE_COOKIE = "fa_device";
+const DEVICE_COOKIE_DAYS = 365;
 
 export interface RequestAuth {
   user: AuthUser;
@@ -33,6 +36,30 @@ const PUBLIC_API = new Set(["/api/auth/status", "/api/auth/setup", "/api/auth/lo
 
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "15 minutes" };
 
+const minutes = (ms: number) => Math.max(1, Math.ceil(ms / 60_000));
+
+/** The reply for a failed password/code check; 429 with Retry-After while the account is locked (D-110). */
+function failed(reply: FastifyReply, result: Exclude<LoginResult | CheckResult, { ok: true }>) {
+  if (result.reason === "locked" || result.reason === "totp_locked") {
+    reply.header("retry-after", String(Math.ceil(result.retryAfterMs / 1000)));
+    const wait = minutes(result.retryAfterMs);
+    return sendError(
+      reply,
+      429,
+      result.reason === "locked" ? "too_many_attempts" : "totp_locked",
+      result.reason === "locked"
+        ? `Too many wrong passwords. Try again in ${wait} minute${wait === 1 ? "" : "s"}.`
+        : `Too many wrong codes. Two-factor login is locked for ${wait} minute${wait === 1 ? "" : "s"}.`,
+    );
+  }
+  const messages = {
+    invalid_credentials: "Wrong username or password",
+    totp_required: "Enter the 6-digit code from your authenticator app",
+    invalid_totp: "That code is wrong or was already used",
+  };
+  return sendError(reply, 401, result.reason, messages[result.reason]);
+}
+
 export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService): void {
   const localAllowed = env.AUTH_MODE !== "proxy";
   const proxyAllowed = env.AUTH_MODE !== "local";
@@ -47,6 +74,12 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     secure: env.COOKIE_SECURE === "auto" ? request.protocol === "https" : env.COOKIE_SECURE === "true",
     expires: new Date(expiresAt),
   });
+
+  /** Gives this browser its known-device cookie (D-111). */
+  function rememberDevice(request: FastifyRequest, reply: FastifyReply, token: string) {
+    reply.setCookie(DEVICE_COOKIE, token, { ...cookieOptions(request, Date.now() + DEVICE_COOKIE_DAYS * 86_400_000), path: "/api/auth" });
+  }
+  const deviceToken = (request: FastifyRequest) => request.cookies[DEVICE_COOKIE] || undefined;
 
   async function startSession(request: FastifyRequest, reply: FastifyReply, user: AuthUser) {
     const { token, expiresAt } = await auth.createSession(user.id, {
@@ -90,6 +123,18 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     }
   });
 
+  /** What the app sees of a connection: lets the user check their reverse proxy (D-110). */
+  function connectionInfo(request: FastifyRequest): ConnectionInfo {
+    const forwarded = typeof request.headers["x-forwarded-for"] === "string" || typeof request.headers["x-forwarded-proto"] === "string";
+    // A trusted proxy's headers were used if Fastify took a client address from X-Forwarded-For
+    // (request.ips has more than the socket's address) or its protocol from X-Forwarded-Proto.
+    const socketProtocol = (request.socket as { encrypted?: boolean }).encrypted ? "https" : "http";
+    const trusted = (request.ips?.length ?? 0) > 1 || request.protocol !== socketProtocol;
+    const proxy: ConnectionInfo["proxy"] = !forwarded ? "direct" : trusted ? "through-trusted-proxy" : "untrusted-proxy";
+    const https = request.protocol === "https";
+    return { ip: request.ip, https, secureCookie: cookieOptions(request, 0).secure, proxy };
+  }
+
   app.get("/api/auth/status", async (request): Promise<AuthStatus> => {
     const status: AuthStatus = {
       setupRequired: auth.isSetupRequired(),
@@ -100,6 +145,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
       status.username = request.auth.user.username;
       status.totpEnabled = request.auth.user.totpEnabled;
       status.via = request.auth.via;
+      status.connection = connectionInfo(request);
     }
     return status;
   });
@@ -113,6 +159,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     }
     const user = await auth.createInitialUser(body.username, body.password);
     request.log.info({ username: user.username }, "account created");
+    rememberDevice(request, reply, await auth.rememberDevice(user.id));
     if (localAllowed) await startSession(request, reply, user);
     return { ok: true };
   });
@@ -121,16 +168,12 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     if (!localAllowed) return sendError(reply, 403, "local_login_disabled", "Log in through your SSO proxy");
     const body = parseBody(LoginRequest, request, reply);
     if (!body) return;
-    const result = await auth.login(body.username, body.password, body.totpCode);
+    const result = await auth.login(body.username, body.password, body.totpCode, deviceToken(request));
     if (!result.ok) {
-      const messages = {
-        invalid_credentials: "Wrong username or password",
-        totp_required: "Enter the 6-digit code from your authenticator app",
-        invalid_totp: "That code is wrong or was already used",
-      };
-      request.log.warn({ username: body.username, reason: result.reason, ip: request.ip }, "login failed");
-      return sendError(reply, 401, result.reason, messages[result.reason]);
+      request.log.warn({ username: body.username, reason: result.reason, ip: request.ip, peer: request.socket.remoteAddress }, "login failed");
+      return failed(reply, result);
     }
+    if (result.deviceToken) rememberDevice(request, reply, result.deviceToken);
     await startSession(request, reply, result.user);
     return { ok: true };
   });
@@ -145,8 +188,8 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
   app.post("/api/auth/password", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(ChangePasswordRequest, request, reply);
     if (!body) return;
-    const ok = await auth.changePassword(request.auth!.user.id, body.currentPassword, body.newPassword, request.auth!.sessionId);
-    if (!ok) return sendError(reply, 403, "invalid_credentials", "Current password is wrong");
+    const result = await auth.changePassword(request.auth!.user.id, body.currentPassword, body.newPassword, request.auth!.sessionId, deviceToken(request));
+    if (!result.ok) return result.reason === "invalid_credentials" ? sendError(reply, 403, "invalid_credentials", "Current password is wrong") : failed(reply, result);
     return { ok: true };
   });
 
@@ -161,18 +204,45 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
   app.post("/api/auth/totp/enable", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(TotpEnableRequest, request, reply);
     if (!body) return;
-    if (!(await auth.enableTotp(request.auth!.user.id, body.code))) {
-      return sendError(reply, 400, "invalid_totp", "That code didn't match. Check the time on your phone and try again.");
+    const result = await auth.enableTotp(request.auth!.user.id, body.code, request.auth!.sessionId, deviceToken(request));
+    if (!result.ok) {
+      return result.reason === "invalid_totp"
+        ? sendError(reply, 400, "invalid_totp", "That code didn't match. Check the time on your phone and try again.")
+        : failed(reply, result);
     }
+    request.log.info({ username: request.auth!.user.username }, "two-factor login turned on; other devices signed out");
     return { ok: true };
   });
 
   app.post("/api/auth/totp/disable", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(TotpDisableRequest, request, reply);
     if (!body) return;
-    if (!(await auth.disableTotp(request.auth!.user.id, body.password, body.code))) {
-      return sendError(reply, 403, "invalid_credentials", "Password or code is wrong");
+    const result = await auth.disableTotp(request.auth!.user.id, body.password, body.code, request.auth!.sessionId, deviceToken(request));
+    if (!result.ok) {
+      return result.reason === "invalid_credentials" || result.reason === "invalid_totp"
+        ? sendError(reply, 403, "invalid_credentials", "Password or code is wrong")
+        : failed(reply, result);
     }
+    request.log.info({ username: request.auth!.user.username }, "two-factor login turned off; other devices signed out");
     return { ok: true };
+  });
+
+  // ---- signed-in devices (D-110) ----
+  app.get("/api/auth/sessions", async (request): Promise<SessionView[]> => {
+    const current = request.auth!.sessionId;
+    return (await auth.listSessions(request.auth!.user.id)).map((s) => ({ ...s, current: s.id === current }));
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/auth/sessions/:id", async (request, reply) => {
+    if (!/^[0-9a-f]{64}$/.test(request.params.id)) return sendError(reply, 404, "not_found", "No such session");
+    if (!(await auth.endSession(request.auth!.user.id, request.params.id))) return sendError(reply, 404, "not_found", "No such session");
+    if (request.params.id === request.auth!.sessionId) reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    return { ok: true };
+  });
+
+  app.post("/api/auth/sessions/sign-out-others", async (request) => {
+    const signedOut = await auth.signOutOthers(request.auth!.user.id, request.auth!.sessionId);
+    request.log.info({ signedOut }, "signed out other devices");
+    return { ok: true, signedOut };
   });
 }

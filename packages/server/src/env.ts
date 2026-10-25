@@ -36,6 +36,8 @@ const EnvSchema = z
     /** auto = Secure cookie when the request arrived over HTTPS (as reported by a trusted proxy). */
     COOKIE_SECURE: z.enum(["auto", "true", "false"]).default("auto"),
     SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    /** A session must log in again (with its two-factor code) after this long, even if in use (D-110). */
+    SESSION_MAX_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
     /** local = app's own login; proxy = trust a header from an SSO proxy; both = either. */
     AUTH_MODE: z.enum(["local", "proxy", "both"]).default("local"),
     AUTH_PROXY_HEADER: z.string().default("Remote-User"),

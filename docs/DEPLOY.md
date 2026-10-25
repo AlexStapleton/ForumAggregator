@@ -126,8 +126,8 @@ from a clone of the repo: `docker build -t alexstapo/forumaggregator:latest .`
 | | Forward Hostname / IP | The server's LAN IP, or `forumaggregator` if NPM shares a Docker network with it (see below) |
 | | Forward Port | `8080` |
 | | Cache Assets | Off (the app sets its own cache headers) |
-| | Block Common Exploits | On |
-| | **Websockets Support** | **On.** Not used yet, but the built-in login browser (milestone M1) streams over a websocket |
+| | Block Common Exploits | On (the app never puts addresses in query strings, so it isn't affected) |
+| | Websockets Support | Off (the app doesn't use websockets) |
 | SSL | SSL Certificate | Request a new Let's Encrypt certificate |
 | | Force SSL | On |
 | | HTTP/2 Support | On |
@@ -135,8 +135,35 @@ from a clone of the repo: `docker build -t alexstapo/forumaggregator:latest .`
 
 NPM already sends `Host`, `X-Forwarded-For` and `X-Forwarded-Proto`. The default
 `TRUST_PROXY=loopback,uniquelocal` trusts those headers from private addresses (LAN and
-Docker), so the app sees the real client IP for its login rate limit and marks its
-session cookie `Secure`. No extra configuration is needed.
+Docker), so the app sees the real client IP and HTTPS, and marks its session cookie `Secure`.
+No extra configuration is needed to make it work.
+
+**Advanced tab** (recommended): adding a site through FlareSolverr can take over a minute, longer
+than nginx's default 60 s wait for an answer. Paste:
+
+```nginx
+proxy_read_timeout 180s;
+```
+
+**Check it:** log in through your domain and open **Settings → Signed-in devices**. The line
+"This connection" should read *HTTPS, from &lt;your public IP&gt;, through your reverse proxy;
+login cookie marked Secure*. If it says *through a proxy the app doesn't trust*, NPM's address
+isn't covered by `TRUST_PROXY`: set it to NPM's address (below).
+
+**Tighten it** (recommended): `TRUST_PROXY` lets anything at a trusted address claim to be any
+client. The default trusts your whole LAN, so a device on it could pretend to be many clients.
+The login limits that matter can't be dodged this way, since they count per account (wrong
+passwords and wrong two-factor codes, D-110), but the addresses shown under Signed-in devices
+and in the logs could be faked. Trusting only NPM closes that:
+
+```yaml
+environment:
+  TRUST_PROXY: 172.18.0.5     # NPM's address as the app sees it (e.g. its container IP on a shared
+                              # Docker network, or the LAN IP of the machine NPM runs on)
+```
+
+The app logs the connecting address of every failed login (`peer` in the log line); after one
+failed login through your domain, that's NPM's address.
 
 ### Optional: share a Docker network instead of publishing port 8080
 
@@ -161,6 +188,24 @@ if you later turn on SSO (§5).
 Open `https://forumaggregator.<your-domain>` and log in. Under **Settings → Two-factor
 login**, turn on an authenticator code. It's recommended because the app is reachable from
 the internet. Installing it to the home screen (PWA) arrives with milestone M2.
+
+How login is protected (D-110):
+
+- **Wrong two-factor codes:** after 5 in a row, codes are refused for 15 minutes (then 30, 60…,
+  at most a day), whatever address they come from. A code can only be used once.
+- **Wrong passwords:** after 10 in a row, each try has to wait (1 minute, doubling, at most an
+  hour). There is also a limit of 10 tries per 15 minutes per client address.
+- **Someone else's wrong guesses don't lock you out** (D-111). A browser that has logged in
+  before is a *known device* (a cookie that grants nothing by itself) and its tries are counted
+  on their own. A stranger hammering the login locks only browsers the app hasn't seen, so your
+  phone and computer still log in straight away. The one case it can't cover: logging in from
+  a brand-new browser while an attack is going on. Changing your password forgets every other
+  known device.
+- **Turning two-factor on or off signs out every other device**, so a session from before can't
+  outlive it.
+- **Settings → Signed-in devices** lists every logged-in device (browser, address, last use),
+  with **Sign out** for each and **Sign out everywhere else**. Each device must log in again at
+  least every 90 days (`SESSION_MAX_DAYS`).
 
 ## 5. Later: single sign-on with Authelia or Authentik
 
@@ -199,6 +244,7 @@ AUTH_PROXY_TRUSTED=172.20.0.5  # NPM's container IP, and nothing broader
 | `TRUST_PROXY` | `loopback,uniquelocal` | Who may set `X-Forwarded-*`: IPs, CIDRs or presets. `false` disables |
 | `COOKIE_SECURE` | `auto` | `auto` = Secure when the request came in over HTTPS |
 | `SESSION_TTL_DAYS` | `30` | Sliding login lifetime per device |
+| `SESSION_MAX_DAYS` | `90` | A device must log in again (with its two-factor code) after this long, even if in use |
 | `AUTH_MODE` | `local` | `local`, `proxy` or `both` (§5) |
 | `AUTH_PROXY_HEADER` | `Remote-User` | Username header from the SSO proxy |
 | `AUTH_PROXY_TRUSTED` | — | Required for `proxy`/`both`: direct-peer IPs allowed to send that header |

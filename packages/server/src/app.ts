@@ -69,7 +69,7 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   });
 
   const box = createSecretBox(secretKey);
-  const auth = new AuthService(db, box, env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000, now);
+  const auth = new AuthService(db, box, env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000, now, env.SESSION_MAX_DAYS * 24 * 60 * 60 * 1000);
 
   await fastify.register(helmet, {
     // HSTS is the reverse proxy's job (Nginx Proxy Manager has a switch for it), and sending

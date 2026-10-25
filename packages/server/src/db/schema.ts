@@ -11,8 +11,26 @@ export interface UsersTable {
   totp_enabled: Generated<number>;
   /** Last accepted TOTP time step, to reject replayed codes. */
   totp_last_step: number | null;
+  /** Wrong passwords in a row, and until when password login is refused (D-110). */
+  failed_logins: Generated<number>;
+  login_locked_until: number | null;
+  /** Wrong two-factor codes in a row, and until when codes are refused (D-110). */
+  totp_failures: Generated<number>;
+  totp_locked_until: number | null;
   created_at: number;
   updated_at: number;
+}
+
+/** A browser that has logged in before (D-111); its cookie's sha256 is the id. */
+export interface KnownDevicesTable {
+  id: string;
+  user_id: string;
+  created_at: number;
+  last_used_at: number;
+  failed_logins: Generated<number>;
+  login_locked_until: number | null;
+  totp_failures: Generated<number>;
+  totp_locked_until: number | null;
 }
 
 export interface SessionsTable {
@@ -124,6 +142,7 @@ export interface ItemTombstonesTable {
 export interface Database {
   users: UsersTable;
   sessions: SessionsTable;
+  known_devices: KnownDevicesTable;
   settings: SettingsTable;
   sources: SourcesTable;
   thread_posts: ThreadPostsTable;

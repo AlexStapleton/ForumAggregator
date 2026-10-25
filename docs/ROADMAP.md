@@ -4,16 +4,16 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-10-19 (M1.2 built)_
+_Last updated: 2026-10-25 (v1.10.0; the milestone sections below are the history up to M1.2)_
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Usable as a feed reader?** | **Yes**: RSS, YouTube (confirmed 2026-10-19) and Reddit (confirmed, rate-limited) work. Forum threads don't yet (M2). |
-| **Current release** | **v1.3.0** (2026-10-19), images `alexstapo/forumaggregator:1.3.0` |
-| **Current milestone** | M2: forums. FlareSolverr route and thread reading built on the branch |
-| **Blocked on** | Your check of the NPR item and the new layout; M2 inputs |
+| **Usable?** | **Yes**, daily: RSS/Atom feeds and websites (incl. WordPress sections), podcasts, YouTube (with an API-key fallback when YouTube's feeds fail), Reddit (public feeds, rate-limited), XenForo and vBulletin forums (boards, followed threads, paging), sites behind Cloudflare via FlareSolverr |
+| **Current release** | **v1.10.0** (2026-10-25), images `alexstapo/forumaggregator:1.10.0`. What each release added: [CHANGELOG](../CHANGELOG.md) |
+| **Next** | Driven by use: new sites as they come up. Ideas noted: following vBulletin threads with a reply card, a Reddit minimum interval and a requests-per-hour note in Settings → Checking |
+| **Blocked on** | Nothing |
 
 Legend: ✅ done · 🔄 in progress · ⏳ next · ⛔ blocked · 💤 later
 

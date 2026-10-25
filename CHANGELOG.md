@@ -6,6 +6,24 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-25
+
+Stronger login protection, signed-in devices, and a new README with screenshots. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.10.0`.
+Database migrations 0013 and 0014 run by themselves on start. Devices signed in more than 90 days ago
+log in again.
+
+### Security
+- Two-factor codes and passwords are now limited per account, not only per client address: after 5 wrong codes in a row, codes are refused for 15 minutes (longer if it continues); after 10 wrong passwords, each try has to wait. A device on the LAN could get around the old per-address limit by faking `X-Forwarded-For`. Checks run one at a time so parallel guesses can't slip through (database migration 0013) (D-110).
+- Turning two-factor login on or off signs out your other devices; a device must log in again at least every 90 days (`SESSION_MAX_DAYS`).
+- Someone spamming wrong passwords or codes can't lock you out: browsers that have logged in before count their own attempts, so only browsers the app hasn't seen have to wait. Changing your password forgets your other known devices (database migration 0014) (D-111).
+
+### Added
+- Settings → Signed-in devices: every logged-in device, with Sign out and Sign out everywhere else, and what the app sees of your connection (HTTPS, your address, whether your reverse proxy is trusted) (D-110).
+
+### Changed
+- Deployment guide: Nginx Proxy Manager settings corrected (websockets aren't used), a longer read timeout for sites added through FlareSolverr, how to check the setup, and how to narrow `TRUST_PROXY` to the proxy.
+
 ## [1.9.0] - 2026-10-25
 
 YouTube channels keep updating when YouTube's feeds fail, an Appearance setting, Edit source fits
