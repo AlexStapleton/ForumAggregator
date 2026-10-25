@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Fixed
+- The podcast player's buttons were invisible in dark mode on some phone browsers, which draw their built-in audio controls with dark icons on no background. The player now has its own controls in the app's colours: play/pause, back 15 s, forward 30 s, a position slider and the time, plus a link to the audio file when it won't play (D-113).
+
 ## [1.10.0] - 2026-10-25
 
 Stronger login protection, signed-in devices, and a new README with screenshots. Upgrade with

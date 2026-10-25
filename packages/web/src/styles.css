@@ -284,7 +284,13 @@ body.reader-open { overflow: hidden; }
 .load-next { margin: 1rem 0 0.5rem; display: grid; gap: 0.5rem; justify-items: center; }
 .load-next button { width: 100%; max-width: 22rem; }
 .audio { margin: 0.75rem 0; display: grid; gap: 0.5rem; }
-.audio audio { width: 100%; }
+.audio-main { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.audio-play { width: 48px; height: 48px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.audio-skip { padding: 0.3rem 0.6rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.audio-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The base input style (padding, border, background) would turn the slider into a text box. */
+.audio input.audio-seek { padding: 0; border: none; background: none; accent-color: var(--accent); min-height: 32px; }
+.audio-error { color: var(--danger); margin: 0; }
 .audio-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
 .audio-speeds { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .audio-speeds button { padding: 0.2rem 0.5rem; font-size: 0.8rem; min-width: 3rem; }

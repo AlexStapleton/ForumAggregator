@@ -1,5 +1,7 @@
-// Podcast episodes in the reader (D-093): the browser's own audio player, a speed choice kept
-// per device, and the place you stopped kept per episode on this device.
+// Podcast episodes in the reader (D-093): a speed choice kept per device, and the place you
+// stopped kept per episode on this device. The controls are our own, not the browser's (D-113):
+// some phone browsers draw their built-in ones with dark icons on no background, which vanish on
+// a dark page.
 import { useEffect, useRef, useState } from "react";
 import type { ItemAudio } from "@fa/shared";
 import { PLAYBACK_RATES, usePrefs } from "./prefs";
@@ -10,6 +12,8 @@ const POSITIONS_KEY = "fa.audioPositions";
 const POSITIONS_KEPT = 200;
 /** Don't offer to resume within the first or last few seconds. */
 const EDGE_SECONDS = 10;
+const BACK_SECONDS = 15;
+const FORWARD_SECONDS = 30;
 
 type Positions = Record<string, { at: number; seconds: number }>;
 
@@ -40,6 +44,11 @@ export function AudioPlayer({ itemId, audio }: { itemId: string; audio: ItemAudi
   const ref = useRef<HTMLAudioElement>(null);
   const [prefs, setPrefs] = usePrefs();
   const [resumedAt, setResumedAt] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState<number | null>(audio.durationSeconds);
   const lastSaved = useRef(0);
 
   useEffect(() => {
@@ -51,9 +60,11 @@ export function AudioPlayer({ itemId, audio }: { itemId: string; audio: ItemAudi
     const el = ref.current;
     if (!el) return;
     el.playbackRate = prefs.playbackRate;
+    if (Number.isFinite(el.duration) && el.duration > 0) setDuration(el.duration);
     const saved = readPositions()[itemId]?.seconds;
     if (saved && saved > EDGE_SECONDS && (!Number.isFinite(el.duration) || saved < el.duration - EDGE_SECONDS)) {
       el.currentTime = saved;
+      setPosition(saved);
       setResumedAt(saved);
     }
   };
@@ -64,23 +75,93 @@ export function AudioPlayer({ itemId, audio }: { itemId: string; audio: ItemAudi
     lastSaved.current = el.currentTime;
     writePosition(itemId, el.currentTime);
   };
+  const seek = (seconds: number) => {
+    const el = ref.current;
+    if (!el) return;
+    const end = duration ?? Infinity;
+    el.currentTime = Math.max(0, Math.min(seconds, end));
+    setPosition(el.currentTime);
+  };
+  const toggle = () => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.paused) {
+      setFailed(false);
+      el.play().catch((err: unknown) => {
+        // AbortError: paused again before it started; not a failure.
+        if (!(err instanceof DOMException && err.name === "AbortError")) setFailed(true);
+      });
+    } else el.pause();
+  };
 
   return (
     <div className="audio">
       <audio
         ref={ref}
-        controls
         preload="metadata"
         src={audio.url}
         onLoadedMetadata={onLoadedMetadata}
-        onTimeUpdate={() => remember()}
-        onPause={() => remember(true)}
-        onEnded={() => writePosition(itemId, null)}
-      >
-        <a href={audio.url} target="_blank" rel="noopener noreferrer">
-          Download the episode
-        </a>
-      </audio>
+        onDurationChange={() => {
+          const d = ref.current?.duration;
+          if (d && Number.isFinite(d)) setDuration(d);
+        }}
+        onTimeUpdate={() => {
+          setPosition(ref.current?.currentTime ?? 0);
+          remember();
+        }}
+        onPlay={() => setPlaying(true)}
+        onPlaying={() => setWaiting(false)}
+        onWaiting={() => setWaiting(true)}
+        onPause={() => {
+          setPlaying(false);
+          setWaiting(false);
+          remember(true);
+        }}
+        onEnded={() => {
+          setPlaying(false);
+          writePosition(itemId, null);
+        }}
+        onError={() => {
+          setPlaying(false);
+          setWaiting(false);
+          setFailed(true);
+        }}
+      />
+      <div className="audio-main">
+        <button className="audio-play" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
+          {playing ? <PauseIcon /> : <PlayIcon />}
+        </button>
+        <button className="secondary audio-skip" onClick={() => seek(position - BACK_SECONDS)} aria-label={`Back ${BACK_SECONDS} seconds`}>
+          −{BACK_SECONDS}
+        </button>
+        <button className="secondary audio-skip" onClick={() => seek(position + FORWARD_SECONDS)} aria-label={`Forward ${FORWARD_SECONDS} seconds`}>
+          +{FORWARD_SECONDS}
+        </button>
+        <span className="audio-time small">
+          {clockLabel(position)}
+          {duration ? ` / ${clockLabel(duration)}` : ""}
+          {waiting && playing ? " · Loading…" : ""}
+        </span>
+      </div>
+      <input
+        type="range"
+        className="audio-seek"
+        aria-label="Position"
+        min={0}
+        max={duration ? Math.floor(duration) : 0}
+        step={1}
+        value={Math.floor(position)}
+        disabled={!duration}
+        onChange={(e) => seek(Number(e.target.value))}
+      />
+      {failed && (
+        <p className="small audio-error">
+          This episode wouldn't play here.{" "}
+          <a href={audio.url} target="_blank" rel="noopener noreferrer">
+            Open the audio file
+          </a>
+        </p>
+      )}
       <div className="audio-controls">
         <div className="audio-speeds" role="group" aria-label="Playback speed">
           {PLAYBACK_RATES.map((r) => (
@@ -95,7 +176,7 @@ export function AudioPlayer({ itemId, audio }: { itemId: string; audio: ItemAudi
             <button
               className="link"
               onClick={() => {
-                if (ref.current) ref.current.currentTime = 0;
+                seek(0);
                 writePosition(itemId, null);
                 setResumedAt(null);
               }}
@@ -106,5 +187,21 @@ export function AudioPlayer({ itemId, audio }: { itemId: string; audio: ItemAudi
         )}
       </div>
     </div>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="currentColor">
+      <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+    </svg>
   );
 }
