@@ -6,6 +6,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-25
+
+Overclock.net threads fixed, context on followed-thread cards, WordPress sections (e.g. NASA Earth),
+and pictures on cards. Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.8.0`. No database changes.
+
 ### Fixed
 - Overclock.net threads: posts were dated by the poster's join date (so a followed thread's card looked weeks old and sank in the feed), had no page bar, and the title was the browser tab's ("| Page 22 | Overclock.net"). Post times, page counts and titles are now read correctly; followed threads are repaired at their next check (D-102).
 - Forum post times are shown in your time zone from the exact time, instead of the forum's label from when the page was read ("2d ago").
