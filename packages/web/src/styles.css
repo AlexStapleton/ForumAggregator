@@ -296,6 +296,16 @@ body.reader-open { overflow: hidden; }
 .audio-speeds button { padding: 0.2rem 0.5rem; font-size: 0.8rem; min-width: 3rem; }
 .item-audio { display: inline-flex; align-items: center; gap: 0.25rem; }
 .item-audio .icon { vertical-align: -2px; }
+/* Reddit videos and galleries (D-117). */
+.reddit-media { margin: 0.75rem 0; display: grid; gap: 0.5rem; }
+.reddit-video, .reddit-poster { width: 100%; max-height: 75vh; background: #000; border-radius: 8px; display: block; object-fit: contain; }
+.gallery { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; border-radius: 8px; background: #000; }
+.gallery::-webkit-scrollbar { display: none; }
+.gallery-slide { flex: 0 0 100%; scroll-snap-align: center; margin: 0; display: grid; align-content: center; gap: 0.25rem; }
+.gallery-slide img, .gallery-slide video { width: 100%; height: auto; max-height: 75vh; object-fit: contain; display: block; }
+.gallery-slide figcaption { padding: 0.25rem 0.5rem 0.5rem; color: #c9d1d9; }
+.gallery-nav { display: flex; align-items: center; justify-content: center; gap: 1rem; }
+.gallery-nav button { min-width: 44px; padding: 0.3rem 0.8rem; }
 .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 @media (max-width: 480px) {
   .reader-nav { gap: 0.35rem; padding-left: 0.5rem; padding-right: 0.5rem; }

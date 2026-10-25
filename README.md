@@ -6,7 +6,7 @@ is enough) in one Docker container, with no account anywhere else.
 
 ![The feed beside the reader, on a desktop in dark mode](docs/screenshots/feed-and-reader.png)
 
-Current release: **1.11.0** ([changelog](CHANGELOG.md)).
+Current release: **1.12.0** ([changelog](CHANGELOG.md)).
 
 ## What it does
 
@@ -17,7 +17,8 @@ Current release: **1.11.0** ([changelog](CHANGELOG.md)).
   per thread that comes back with just the new replies, the posts before them for context.
 - **Podcasts:** episodes play in the reader, with speed control and resume where you stopped.
 - **YouTube channels** (link or `@handle`), with top comments if you add your own free API key.
-- **Subreddits**, through Reddit's public feeds (Reddit sometimes refuses them).
+- **Subreddits**, through Reddit's public feeds (Reddit sometimes refuses them); videos and
+  galleries play in the reader.
 - **Sites behind a Cloudflare check**, through your own
   [FlareSolverr](docs/DEPLOY.md#forums-behind-a-cloudflare-check-flaresolverr-optional) if you run one.
 

@@ -5,12 +5,13 @@
 //   - image posts (the "[link]" is i.redd.it, i.imgur.com or an image file) show the full image
 //     instead of the thumbnail;
 //   - image links in the text (preview.redd.it etc.) become pictures that open full size;
-//   - gallery and video posts keep the thumbnail and say to open Reddit for the rest.
+//   - gallery and video posts keep the thumbnail and say to open Reddit for the rest, unless the
+//     reader shows them itself (D-117: `player`), when the thumbnail and the note go.
 // Input must already be sanitised; everything added here is built with DOM calls from https URLs.
 import { JSDOM } from "jsdom";
 import { redditImageUrl, redditPostKind } from "../feeds/reddit.js";
 
-export function layoutRedditPost(html: string, link: string | null, title: string): string {
+export function layoutRedditPost(html: string, link: string | null, title: string, player = false): string {
   const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
   try {
     const doc = dom.window.document;
@@ -87,7 +88,9 @@ export function layoutRedditPost(html: string, link: string | null, title: strin
     } else if (inlineImages > 0) {
       for (const t of thumbs) t.remove();
     }
-    if (kind === "gallery" || kind === "video") {
+    if ((kind === "gallery" || kind === "video") && player) {
+      for (const t of thumbs) t.remove();
+    } else if (kind === "gallery" || kind === "video") {
       const em = doc.createElement("em");
       em.textContent = kind === "gallery" ? "Gallery post: open the original to see every image." : "Video post: open the original to play it.";
       const note = block(em);

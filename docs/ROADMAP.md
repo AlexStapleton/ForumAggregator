@@ -4,14 +4,14 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-10-25 (v1.11.0; the milestone sections below are the history up to M1.2)_
+_Last updated: 2026-10-25 (v1.12.0; the milestone sections below are the history up to M1.2)_
 
 ## Status at a glance
 
 | | |
 |---|---|
 | **Usable?** | **Yes**, daily, for you and the people you invite (accounts, D-114): RSS/Atom feeds and websites (incl. WordPress sections), podcasts, YouTube (with an API-key fallback when YouTube's feeds fail), Reddit (public feeds, rate-limited), XenForo and vBulletin forums (boards, followed threads, paging), sites behind Cloudflare via FlareSolverr |
-| **Current release** | **v1.11.0** (2026-10-25), images `alexstapo/forumaggregator:1.11.0`. What each release added: [CHANGELOG](../CHANGELOG.md) |
+| **Current release** | **v1.12.0** (2026-10-25), images `alexstapo/forumaggregator:1.12.0`. What each release added: [CHANGELOG](../CHANGELOG.md) |
 | **Next** | Driven by use: new sites as they come up. Ideas noted: following vBulletin threads with a reply card, a Reddit minimum interval and a requests-per-hour note in Settings → Checking |
 | **Blocked on** | Nothing |
 

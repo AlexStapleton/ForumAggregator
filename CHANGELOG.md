@@ -6,6 +6,18 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-10-25
+
+Reddit videos and galleries in the reader, and security updates of four libraries. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.12.0`. No
+database changes.
+
+### Security
+- Updated libraries with published advisories (D-118): zod 4.6.6 (high: memory exhaustion when validating oversized input; every API request body is validated with it), fast-uri 4.2.3 / 3.1.9 (moderate: URI scheme spoofing), ip-address 10.7.4 (moderate: slow parsing of long IPv6 zone identifiers, used by the login rate limit), fastify 5.12.6 (low: header validation bypass). `npm audit` reports none left.
+
+### Added
+- **Reddit videos and galleries play in the reader** (D-117). Opening such a post asks Reddit for that post's details once; videos play with sound, with speed buttons and fullscreen, and galleries show every picture, swipeable, with captions. If Reddit doesn't answer, a video still tries its usual stream, and a gallery shows its first picture and says why.
+
 ## [1.11.0] - 2026-10-25
 
 Accounts for other people, and a podcast player that shows in dark mode. Upgrade with

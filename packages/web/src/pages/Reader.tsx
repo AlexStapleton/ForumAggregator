@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import type { FeedItem, ReaderComments, ReaderContent, ReaderPagination } from "@fa/shared";
 import { api, errorMessage } from "../api";
 import { AudioPlayer } from "../AudioPlayer";
+import { RedditMediaView } from "../RedditMedia";
 import { KIND_LABEL } from "../kinds";
 import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
@@ -260,7 +261,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
           )}
 
           {/* From the feed: shown straight away. Found on the story's page (D-096): once that's read. */}
-          {(item.audio ?? content?.audio) && <AudioPlayer key={item.id} itemId={item.id} audio={(item.audio ?? content?.audio)!} />}
+          {(item.audio ?? content?.audio) && <AudioPlayer key={`audio-${item.id}`} itemId={item.id} audio={(item.audio ?? content?.audio)!} />}
 
           {error && <div className="alert alert-error">{error}</div>}
           {!content && !error && <p className="muted reader-loading">Loading…</p>}
@@ -277,6 +278,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
               />
             </div>
           )}
+
+          {/* Keys differ between these siblings: the same key twice makes React duplicate one. */}
+          {content?.redditMedia && <RedditMediaView key={`media-${item.id}`} itemId={item.id} hint={content.redditMedia} postUrl={item.url} />}
 
           {content?.html && (
             // Sanitised on the server (reader/sanitize.ts); the CSP blocks scripts as a second line of defence.
@@ -307,9 +311,9 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
             </div>
           )}
 
-          {item.sourceKind === "reddit" && <Comments key={item.id} itemId={item.id} site="Reddit" />}
+          {item.sourceKind === "reddit" && <Comments key={`reddit-${item.id}`} itemId={item.id} site="Reddit" />}
           {/* YouTube: loads by itself (1 unit of the user's API quota, cached); without a key the server just says how to add one. */}
-          {item.sourceKind === "youtube" && <Comments key={item.id} itemId={item.id} site="YouTube" autoLoad />}
+          {item.sourceKind === "youtube" && <Comments key={`youtube-${item.id}`} itemId={item.id} site="YouTube" autoLoad />}
         </article>
       </div>
 

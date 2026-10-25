@@ -112,6 +112,13 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
     return comments;
   });
 
+  // A Reddit post's video or gallery (D-117).
+  app.get<{ Params: { id: string } }>("/api/items/:id/media", async (request, reply) => {
+    const media = await reader.media(viewer(request), request.params.id);
+    if (!media) return sendError(reply, 404, "not_found", "No video or gallery for this item");
+    return media;
+  });
+
   app.get<{ Params: { id: string }; Querystring: { page?: string } }>("/api/items/:id/reader", async (request, reply) => {
     // Forum threads: ?page=N or ?page=last (D-088); ignored for everything else.
     const raw = request.query.page;
