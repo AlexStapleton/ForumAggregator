@@ -6,7 +6,7 @@ is enough) in one Docker container, with no account anywhere else.
 
 ![The feed beside the reader, on a desktop in dark mode](docs/screenshots/feed-and-reader.png)
 
-Current release: **1.9.0** ([changelog](CHANGELOG.md)).
+Current release: **1.10.0** ([changelog](CHANGELOG.md)).
 
 ## What it does
 

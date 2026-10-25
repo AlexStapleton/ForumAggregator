@@ -6,6 +6,13 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-25
+
+Stronger login protection, signed-in devices, and a new README with screenshots. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.10.0`.
+Database migrations 0013 and 0014 run by themselves on start. Devices signed in more than 90 days ago
+log in again.
+
 ### Security
 - Two-factor codes and passwords are now limited per account, not only per client address: after 5 wrong codes in a row, codes are refused for 15 minutes (longer if it continues); after 10 wrong passwords, each try has to wait. A device on the LAN could get around the old per-address limit by faking `X-Forwarded-For`. Checks run one at a time so parallel guesses can't slip through (database migration 0013) (D-110).
 - Turning two-factor login on or off signs out your other devices; a device must log in again at least every 90 days (`SESSION_MAX_DAYS`).
