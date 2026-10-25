@@ -155,27 +155,54 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
   if (!articles.length) return null;
   const posts: ForumPost[] = articles.map((post) => {
     const author = post.getAttribute("data-author") ?? post.querySelector(".message-name, .username")?.textContent?.trim() ?? null;
-    const time = post.querySelector("time.u-dt, time[datetime]");
+    // The post's own time is in its header; the member box can hold another <time> (Overclock.net's
+    // "Joined" date, D-102), so that one is never used.
+    const time =
+      post.querySelector(".message-attribution time, time[qid='post-date-time']") ??
+      Array.from(post.querySelectorAll("time.u-dt, time[datetime]")).find((t) => !t.closest(".message-user, .message-cell--user, .message-userDetails")) ??
+      null;
     const body = post.querySelector(".message-body .bbWrapper, .bbWrapper")!;
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
     const idSource = post.getAttribute("data-content") ?? post.id ?? "";
-    const unix = Number(time?.getAttribute("data-time"));
+    const unix = Number(time?.getAttribute("data-time") ?? time?.getAttribute("california-data-time"));
     const iso = Date.parse((time?.getAttribute("datetime") ?? "").replace(/([+-]\d\d)(\d\d)$/, "$1:$2"));
+    // A Unix time before 2000 isn't a post time (placeholders); the ISO attribute is used then.
+    const postedAt = unix > 946_684_800 ? unix * 1000 : Number.isFinite(iso) ? iso : null;
     return {
-      postedAt: unix > 0 ? unix * 1000 : Number.isFinite(iso) ? iso : null,
+      postedAt,
       id: /(\d+)$/.exec(idSource)?.[1] ?? null,
       author,
-      datetime: time?.getAttribute("datetime") ?? null,
+      // Standard ISO from the exact time, so browsers can show it in local time (XenForo writes "+0000").
+      datetime: postedAt !== null ? new Date(postedAt).toISOString() : (time?.getAttribute("datetime") ?? null),
       timeLabel: time?.textContent?.trim() || null,
       html: sanitizeHtml(body.innerHTML, pageUrl),
     };
   });
-  // Page count from the page navigation ("1 2 3 … 40").
-  const pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
-  const page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
-  const title = doc.querySelector("h1.p-title-value")?.textContent?.trim() || doc.title || null;
+  // Page count from the page navigation ("1 2 3 … 40"); Overclock.net's theme shows "22/23" on the
+  // current page's button instead (D-102).
+  let pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
+  let page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
+  const compact = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(doc.querySelector(".pageNav [aria-current='page']")?.textContent ?? "");
+  if (compact && pages === 1) {
+    page = Number(compact[1]);
+    pages = Math.max(page, Number(compact[2]));
+  }
+  const title =
+    doc.querySelector("h1.p-title-value")?.textContent?.trim() ||
+    doc.querySelector(".p-title h1, .p-body-header h1")?.textContent?.trim() ||
+    cleanPageTitle(doc.title) ||
+    null;
   return { title, posts, page, pages };
+}
+
+/** A browser tab title without the unread count and page/site suffix: "(3) Title | Page 22 | Site" → "Title". */
+export function cleanPageTitle(title: string | null | undefined): string {
+  return (title ?? "")
+    .replace(/^\(\d+\)\s*/, "")
+    .replace(/\s*\|\s*Page \d+\s*(\|.*)?$/i, "")
+    .replace(/\s*\|\s*[^|]+$/, (m) => (/\.(net|com|org)\b|forum/i.test(m) ? "" : m))
+    .trim();
 }
 
 /** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */
@@ -341,6 +368,46 @@ export function youtubeVideoId(url: string | null): string | null {
 }
 
 // ---- polishing extracted/feed HTML before it's shown ----------------------------------------
+
+/**
+ * Page furniture some feeds put around the article (D-103): NASA Science's feed carries the whole
+ * rendered page (its menus, "You may also be interested in", "Keep Exploring"). Matched by
+ * markup, so it runs on the feed's raw HTML, before sanitising removes classes.
+ */
+const FEED_FURNITURE = [
+  "nav",
+  '[role="navigation"]',
+  '[class*="breadcrumb"]',
+  '[class*="secondary-navigation"]',
+  // WordPress: related posts, share buttons (Jetpack and others), NASA's content and topic cards.
+  ".jp-relatedposts, .sharedaddy, .share-buttons, .social-share, .wp-block-social-links",
+  '[class*="related-posts"], [class*="related-articles"], [class*="content-lists"], [class*="topic-cards"], [class*="credits-and-details"]',
+].join(", ");
+/** WordPress's feed footer: "The post X appeared first on Site." */
+const FEED_FOOTER = /^\s*The post .+ appeared first on .+\.\s*$/;
+
+/** Feed HTML without page furniture; unchanged (same string) when there is none. Untrusted in, untrusted out. */
+export function cleanFeedHtml(html: string): string {
+  if (!/<nav\b|navigation|breadcrumb|related|share|content-lists|topic-cards|credits-and-details|appeared first on/i.test(html)) return html;
+  const dom = new JSDOM(`<!doctype html><body>${html.slice(0, 1_000_000)}</body>`);
+  try {
+    const doc = dom.window.document;
+    let changed = false;
+    for (const el of Array.from(doc.body.querySelectorAll(FEED_FURNITURE))) {
+      if (!el.isConnected) continue;
+      el.remove();
+      changed = true;
+    }
+    const last = Array.from(doc.body.querySelectorAll("p")).at(-1);
+    if (last && FEED_FOOTER.test(last.textContent ?? "")) {
+      last.remove();
+      changed = true;
+    }
+    return changed ? doc.body.innerHTML : html;
+  } finally {
+    dom.window.close();
+  }
+}
 
 /** Typical media/share toolbar entries: "Download", "Transcript", "Embed", "Share on X", … */
 const TOOLBAR_ITEM = /^(download|transcript|embed|share|listen|play|pause|email|e-mail|facebook|twitter|x|threads|bluesky|linkedin|reddit|whatsapp|print|copy link|save|subscribe)\b/i;

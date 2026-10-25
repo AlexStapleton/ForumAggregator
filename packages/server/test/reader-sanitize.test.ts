@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { cleanFeedHtml, extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
 import { threadPagerFor, vbulletinPager } from "../src/feeds/thread.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
@@ -151,6 +151,29 @@ describe("thread pagers (D-099)", () => {
     // e.g. a news site with ".../12345-title.html" links
     expect(threadPagerFor("https://news.example/news/12345-title.html", "https://news.example/feed")).toBeNull();
     expect(threadPagerFor("https://forum.example/threads/gpu.12/", "https://forum.example/forums/x.1/index.rss")!.latestUrl).toBe("https://forum.example/threads/gpu.12/latest");
+  });
+});
+
+describe("cleanFeedHtml (D-103)", () => {
+  it("drops the page furniture a feed carries around the article, keeping its images", () => {
+    // Shaped like NASA Science's feed: the whole rendered page as content:encoded.
+    const raw = `<div class="hds-module wp-block-nasa-blocks-secondary-navigation"><nav class="usa-breadcrumb"><ol><li><a href="/">Science</a></li></ol></nav><nav><ul><li><a href="/earth">Earth</a></li><li><a href="/topics">Topics</a></li></ul></nav></div>
+      <div class="hds-module wp-block-image"><img src="https://assets.example/el-nino.jpg" alt="Sea levels"><p>Sea levels are higher than normal.</p></div>
+      <p class="wp-block-paragraph">El Niño is part of a natural climate pattern.</p>
+      <div class="hds-module wp-block-nasa-blocks-credits-and-details">Share Details Last Updated Oct 15, 2026 Editor Jenny</div>
+      <div class="hds-module wp-block-nasa-blocks-related-articles">Explore More <img src="https://assets.example/other.jpg"></div>
+      <div class="hds-module wp-block-nasa-blocks-content-lists">You may also be interested in:</div>
+      <div class="nasa-gb-align-full hds-module wp-block-nasa-blocks-topic-cards">Keep Exploring</div>
+      <p class="">The post El Niño Then and Now appeared first on NASA Science.</p>`;
+    const out = cleanFeedHtml(raw);
+    expect(out).toContain('<img src="https://assets.example/el-nino.jpg"');
+    expect(out).toContain("El Niño is part of a natural climate pattern.");
+    expect(out).not.toMatch(/Topics|Science<|Share Details|Explore More|other\.jpg|interested in|Keep Exploring|appeared first on/);
+  });
+
+  it("leaves ordinary feed HTML untouched", () => {
+    const plain = "<p>Hello, Welcome to another Friday.</p><p>Shared by the team, related to 2.1.</p>";
+    expect(cleanFeedHtml(plain)).toBe(plain);
   });
 });
 

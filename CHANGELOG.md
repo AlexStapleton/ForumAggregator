@@ -6,6 +6,23 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-25
+
+Overclock.net threads fixed, context on followed-thread cards, WordPress sections (e.g. NASA Earth),
+and pictures on cards. Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.8.0`. No database changes.
+
+### Fixed
+- Overclock.net threads: posts were dated by the poster's join date (so a followed thread's card looked weeks old and sank in the feed), had no page bar, and the title was the browser tab's ("| Page 22 | Overclock.net"). Post times, page counts and titles are now read correctly; followed threads are repaired at their next check (D-102).
+- Forum post times are shown in your time zone from the exact time, instead of the forum's label from when the page was read ("2d ago").
+- Adding a section of a WordPress site (e.g. `science.nasa.gov/earth/`) found only the whole site's feed. The app now finds the section's own feed (`/category/earth/feed/`), and removes the menus and "related" blocks some feeds wrap around the article (D-103).
+
+### Added
+- Cards show a picture from the article when the feed doesn't name one (e.g. NASA Science, the Factorio blog, NPR) (D-103).
+
+### Changed
+- A followed thread's card shows the three posts before the new replies, dimmed, for context; "Read the whole thread" opens on the newest page (D-102).
+
 ## [1.7.0] - 2026-10-23
 
 vBulletin forums (e.g. Bike Forums) read like XenForo threads, with paging and "Load next page".

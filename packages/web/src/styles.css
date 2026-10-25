@@ -245,6 +245,11 @@ body.reader-open { overflow: hidden; }
 .reader-content table { display: block; overflow-x: auto; border-collapse: collapse; }
 .reader-content td, .reader-content th { border: 1px solid var(--border); padding: 0.3rem 0.5rem; }
 .video { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 0.75rem 0; background: #000; border-radius: 8px; overflow: hidden; }
+/* A followed thread's card: earlier posts for context, dimmed (D-102). */
+.thread-context { opacity: 0.6; }
+.thread-context-label, .thread-new-label { margin: 0.5rem 0; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.thread-new-label { color: var(--accent, var(--muted)); }
+
 /* "Load next page" on forum threads (D-100). */
 .page-divider { margin: 1.5rem 0 0.5rem; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); text-align: center; }
 .load-next { margin: 1rem 0 0.5rem; display: grid; gap: 0.5rem; justify-items: center; }

@@ -31,6 +31,27 @@ function page(n: number, of: number, posts: Post[]): string {
     .join("")}</body></html>`;
 }
 
+/**
+ * The same, in Overclock.net's theme (D-102): plain <h1>, the tab title with an unread count and
+ * page/site suffix, "22/23" on the current page's button, and each member's join date as the
+ * first <time> in a post (in the member box), before the post's own time.
+ */
+function ocPage(n: number, of: number, posts: Post[]): string {
+  return `<!DOCTYPE html><html><head><title>(3) Official NVIDIA RTX 5070 Ti Owners Club | Page ${n} | Overclock.net</title></head><body>
+  <div class="p-body-header"><h1>Official NVIDIA RTX 5070 Ti Owners Club</h1></div>
+  <nav aria-label="Pagination" class="pageNav"><a class="button pageNav-jump" aria-label="Goto Page 1" href="#">1</a>
+    <a class="button button--primary pageNav-jump" role="button" aria-current="page"> ${n}/${of} </a></nav>
+  ${posts
+    .map(
+      (p) => `<article class="message message--post js-post" data-author="${p.author}" data-content="post-${p.id}" id="js-post-${p.id}">
+      <div class="message-cell message-cell--user"><section class="message-user"><div class="message-userDetails"><div class="message-userStats">
+        Joined <time class="u-dt" datetime="2013-07-05T13:43:19.000Z" california-data-time="1373031799" qid="message-register-date">Jul 5, 2013</time></div></div></section></div>
+      <header class="message-attribution"><div class="message-attribution-main"><a class="u-concealed"><time class="u-dt" datetime="2026-10-19T10:00:00.000Z" california-data-time="${Math.floor((NOW - (100000 - p.id) * 1000) / 1000)}" qid="post-date-time">2d ago</time></a></div></header>
+      <article class="message-body"><div class="bbWrapper">${p.text}</div></article></article>`,
+    )
+    .join("")}</body></html>`;
+}
+
 const posts = (from: number, count: number, who = "Member"): Post[] =>
   Array.from({ length: count }, (_, i) => ({ id: from + i, author: `${who}${from + i}`, text: `Post number ${from + i}: my card runs at 3200 MHz.` }));
 
@@ -106,7 +127,8 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     expect(items[0]!.summary).toMatch(/^2 new replies · Member1046:/);
     r = await reader(items[0]!.id);
     expect(r.html).toContain("Member1045");
-    expect(r.html).not.toContain("Member1044");
+    // Member1044 was read before: it's only in the dimmed context above the new replies (D-102).
+    expect(r.html.split("New replies</p>")[1]).not.toContain("Member1044");
 
     // Not read yet; one more arrives → added to the same batch.
     clock.now += 31 * 60_000;
@@ -202,6 +224,55 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     const last = (await call("GET", `/api/items/${item.id}/reader?page=last`)).json();
     expect(last).toMatchObject({ pagination: { page: 3, pages: 3 } });
     expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-3.html`]); // page 1 was still cached
+  });
+
+  it("Overclock.net's theme: post times (not join dates), page count and title (D-102)", async () => {
+    const { web, call } = await start();
+    const all = posts(1000, 45);
+    for (const n of [1, 2, 3]) web.set(n === 1 ? THREAD : `${THREAD}page-${n}`, { body: ocPage(n, 3, all.slice((n - 1) * 20, n * 20)), contentType: "text/html" });
+    web.set(`${THREAD}latest`, { body: ocPage(3, 3, all.slice(40)), contentType: "text/html", finalUrl: `${THREAD}page-3` });
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    expect(src.title).toBe("Official NVIDIA RTX 5070 Ti Owners Club");
+    const card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    expect(card.title).toBe("Official NVIDIA RTX 5070 Ti Owners Club");
+    // Dated by the newest post's own time, not 2013.
+    expect(card.publishedAt).toBe(NOW - (100000 - 1044) * 1000);
+    const whole = (await call("GET", `/api/items/${card.id}/reader?page=last`)).json();
+    expect(whole.pagination).toEqual({ page: 3, pages: 3 });
+    expect(whole.html).toContain(`datetime="${new Date(NOW - (100000 - 1040) * 1000).toISOString()}"`);
+  });
+
+  it("repairs dates and titles stored before D-102 at the next check, and shows context on the card", async () => {
+    const { clock, call, setThread } = await start();
+    setThread(45);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    let card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    // As an earlier version stored Overclock.net: join dates, and the tab title.
+    const tab = "(3) Official NVIDIA RTX 5070 Ti Owners Club | Page 3 | Overclock.net";
+    await app!.db.kysely.updateTable("thread_posts").set({ posted_at: Date.UTC(2013, 6, 5), posted_label: "Jul 5, 2013" }).execute();
+    await app!.db.kysely.updateTable("items").set({ title: tab, published_at: Date.UTC(2013, 6, 5) }).execute();
+    await app!.db.kysely.updateTable("sources").set({ title: tab }).execute();
+    await call("PATCH", `/api/items/${card.id}`, { read: true });
+
+    clock.now += 16 * 60_000;
+    expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 0 });
+    card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    expect(card).toMatchObject({ title: "Official NVIDIA RTX 5070 Ti Owners Club", read: true, publishedAt: NOW - (100000 - 1044) * 1000 });
+    expect((await call("GET", "/api/sources")).json()[0].title).toBe("Official NVIDIA RTX 5070 Ti Owners Club");
+    const stored = await app!.db.kysely.selectFrom("thread_posts").select("posted_label").execute();
+    expect(stored.every((r) => r.posted_label !== "Jul 5, 2013")).toBe(true);
+
+    // Two replies: the card shows the three posts before them, dimmed, then the new ones.
+    clock.now += 16 * 60_000;
+    setThread(47);
+    await call("POST", `/api/sources/${src.id}/check`);
+    const html = (await call("GET", `/api/items/${card.id}/reader`)).json().html as string;
+    const [context, fresh] = html.split('<p class="thread-new-label">New replies</p>');
+    expect(context).toMatch(/^<div class="thread-context"><p class="thread-context-label">Earlier in the thread<\/p>/);
+    expect(["Member1042", "Member1043", "Member1044"].every((m) => context!.includes(m))).toBe(true);
+    expect(context).not.toContain("Member1041");
+    expect(fresh).toContain("Member1045");
+    expect(fresh).toContain("Member1046");
   });
 
   it("reads any page of a thread in the reader, the newest with page=last, kept for 30 minutes (D-088)", async () => {

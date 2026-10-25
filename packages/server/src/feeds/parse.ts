@@ -70,7 +70,8 @@ function cleanSummary(...values: unknown[]): string | null {
   for (const v of values) {
     const t = text(v);
     if (t) {
-      const plain = htmlToText(t);
+      // WordPress's feed footer isn't part of the summary (D-103).
+      const plain = htmlToText(t).replace(/\s*The post .+? appeared first on [^.]+\.\s*$/, "").trim();
       if (plain) return truncate(plain, SUMMARY_MAX);
     }
   }
@@ -127,6 +128,26 @@ function imageFrom(node: Node, base: string | undefined): string | null {
       const u = safeHttpUrl(enc["@_url"], base);
       if (u) return u;
     }
+  }
+  return null;
+}
+
+/** Not a picture of the article: tracking pixels, spacers, avatars, emoji, feed buttons. */
+const NOT_A_PICTURE = /pixel|spacer|blank\.gif|tracking|feedburner|gravatar|avatar|emoji|smilies|icon|logo|badge|\.svg(\?|$)/i;
+
+/**
+ * The card's picture when the feed names none (D-103): the first real image in the item's HTML
+ * (e.g. the Factorio blog, NASA Science). Only https, so the page's CSP allows it.
+ */
+function firstImage(html: unknown, base: string | undefined): string | null {
+  const t = text(html);
+  if (!t) return null;
+  for (const m of t.slice(0, 200_000).matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    if (/\b(width|height)\s*=\s*["']?[0-9]\b(?!\d)/i.test(tag)) continue; // 1×1 trackers
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.replace(/&amp;/g, "&");
+    const url = safeHttpUrl(src, base);
+    if (url && url.startsWith("https://") && !NOT_A_PICTURE.test(url)) return url;
   }
   return null;
 }
@@ -214,7 +235,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           title: cleanTitle(it.title) ?? "",
           author: cleanTitle(it["dc:creator"] ?? it.author),
           summary: cleanSummary(it.description, it["content:encoded"]),
-          imageUrl: imageFrom(it, feedUrl),
+          imageUrl: imageFrom(it, feedUrl) ?? firstImage(it["content:encoded"] ?? it.description, link ?? feedUrl),
           audio: audioFrom(it, feedUrl),
           publishedAt: parseDate(it.pubDate, it["dc:date"], it.published, it.updated),
           contentHtml: fullContent(it["content:encoded"], it.description),
@@ -239,7 +260,7 @@ export function parseFeed(xml: string, feedUrl?: string): ParsedFeed {
           title: cleanTitle(e.title) ?? "",
           author: cleanTitle((asArray(e.author as Node[] | Node | undefined)[0] as Node | undefined)?.name) ?? feedAuthor,
           summary: cleanSummary(e.summary, e.content, group["media:description"]),
-          imageUrl: imageFrom(e, feedUrl),
+          imageUrl: imageFrom(e, feedUrl) ?? firstImage(e.content ?? e.summary, link ?? feedUrl),
           audio: audioFrom(e, feedUrl),
           publishedAt: parseDate(e.published, e.updated, e.issued, e.modified),
           contentHtml: fullContent(e.content, e.summary),

@@ -14,7 +14,7 @@ import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { cleanFeedHtml, extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -33,6 +33,8 @@ const THREAD_PAGES_KEPT = 100;
 
 /** Which page of a forum thread to show: a number, or the newest ("last"). */
 export type ThreadPageRequest = number | "last";
+/** Earlier posts shown dimmed above a followed thread's new replies (D-102). */
+const THREAD_CARD_CONTEXT_POSTS = 3;
 /** Replies shown on a followed thread's card (D-084). */
 const THREAD_CARD_MAX_POSTS = 100;
 /**
@@ -227,7 +229,8 @@ export class ReaderService {
         );
         return { ...base, kind: "feed", html, videoId: null, notice: null };
       }
-      const html = sanitizeHtml(rawHtml, item.url ?? "https://invalid.invalid/");
+      // Menus and "related" blocks some feeds include are dropped first (D-103).
+      const html = sanitizeHtml(cleanFeedHtml(rawHtml), item.url ?? "https://invalid.invalid/");
       if (!preferPage && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
@@ -360,9 +363,16 @@ export class ReaderService {
     const rows = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
     const shown = rows.slice(-THREAD_CARD_MAX_POSTS);
     if (!shown.length) return this.summaryOnly(base, "No replies stored yet. They appear here after the next check.");
-    const html = renderForumPosts(
-      shown.map((p) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html })),
-    );
+    const asPost = (p: (typeof rows)[number]) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html });
+    // The posts just before the new ones, for context (D-102): what the new replies answer or quote.
+    let context = "";
+    if (batchFrom !== null && shown.length === rows.length) {
+      const earlier = (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId).where("fetched_at", "<", batchFrom).execute())
+        .sort((a, b) => Number(a.post_id) - Number(b.post_id))
+        .slice(-THREAD_CARD_CONTEXT_POSTS);
+      if (earlier.length) context = `<div class="thread-context"><p class="thread-context-label">Earlier in the thread</p>${renderForumPosts(earlier.map(asPost))}</div><p class="thread-new-label">New replies</p>`;
+    }
+    const html = context + renderForumPosts(shown.map(asPost));
     const notice = rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null;
     return { ...base, kind: "page", html, videoId: null, notice };
   }
