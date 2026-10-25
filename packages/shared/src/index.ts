@@ -31,6 +31,33 @@ export interface AuthStatus {
   totpEnabled?: boolean;
   /** How the current request was authenticated. */
   via?: "session" | "proxy";
+  /** What the app sees of this connection, to check a reverse proxy is set up right (D-110). Logged in only. */
+  connection?: ConnectionInfo;
+}
+
+export interface ConnectionInfo {
+  /** The client address the app uses (from X-Forwarded-For when the proxy is trusted). */
+  ip: string;
+  /** Whether the request reached the proxy over HTTPS (or the app directly over HTTPS). */
+  https: boolean;
+  /** Whether the session cookie is marked Secure on this connection. */
+  secureCookie: boolean;
+  /**
+   * through-trusted-proxy: forwarded headers were used; untrusted-proxy: a proxy sent them but
+   * its address isn't in TRUST_PROXY, so they were ignored; direct: no proxy.
+   */
+  proxy: "through-trusted-proxy" | "untrusted-proxy" | "direct";
+}
+
+/** A signed-in device (D-110). */
+export interface SessionView {
+  id: string;
+  current: boolean;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  ip: string | null;
+  userAgent: string | null;
 }
 
 export interface TotpBeginResponse {

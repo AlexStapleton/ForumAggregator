@@ -162,6 +162,132 @@ describe.each(backends)("auth (%s)", (backend) => {
     expect(res.json().error).toBe("rate_limited");
   });
 
+  /** Two-factor on, with the test clock: returns a code generator. */
+  async function withTwoFactor(clock: { now: number }, cookie: string) {
+    const { secret } = (await post("/api/auth/totp/begin", {}, cookie)).json();
+    const totp = new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret), period: 30, digits: 6 });
+    const code = () => totp.generate({ timestamp: clock.now });
+    expect((await post("/api/auth/totp/enable", { code: code() }, cookie)).statusCode).toBe(200);
+    clock.now += 30_000;
+    return { code, wrong: (n = 0) => String((Number(code()) + 500_000 + n) % 1_000_000).padStart(6, "0") };
+  }
+
+  it("locks two-factor codes after 5 wrong ones, whatever IP they claim, until the wait is over (D-110)", async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 12) };
+    app = await createTestApp(backend, {}, clock);
+    const cookie = await setUp();
+    const { code, wrong } = await withTwoFactor(clock, cookie);
+    const login = (totpCode: string, n = 0) =>
+      inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: PASSWORD, totpCode }, headers: { ...CSRF, "x-forwarded-for": `198.51.100.${n}` } });
+    const results: Array<[number, string]> = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await login(wrong(i), i);
+      results.push([r.statusCode, r.json().error]);
+    }
+    expect(results.slice(0, 4)).toEqual(Array(4).fill([401, "invalid_totp"]));
+    expect(results[4]).toEqual([429, "totp_locked"]);
+    // Even the right code is refused while locked; the reply says how long.
+    const locked = await login(code(), 9);
+    expect(locked.statusCode).toBe(429);
+    expect(locked.headers["retry-after"]).toBe("900");
+    expect(locked.json().message).toMatch(/locked for 15 minutes/);
+    // After the wait, the right code works and the count starts over.
+    clock.now += 15 * 60_000 + 1000;
+    expect((await login(code())).statusCode).toBe(200);
+    const row = await app!.db.kysely.selectFrom("users").select(["totp_failures", "totp_locked_until"]).executeTakeFirstOrThrow();
+    expect(row).toEqual({ totp_failures: 0, totp_locked_until: null });
+  });
+
+  it("checks codes one at a time, so a burst of parallel guesses can't outrun the lock", async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 12) };
+    app = await createTestApp(backend, {}, clock);
+    const cookie = await setUp();
+    const { wrong } = await withTwoFactor(clock, cookie);
+    const replies = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => post("/api/auth/login", { username: "alex", password: PASSWORD, totpCode: wrong(i) })),
+    );
+    expect(replies.filter((r) => r.statusCode === 401)).toHaveLength(4);
+    expect(replies.filter((r) => r.statusCode === 429)).toHaveLength(8);
+    const row = await app!.db.kysely.selectFrom("users").select("totp_failures").executeTakeFirstOrThrow();
+    expect(row.totp_failures).toBe(5); // no code was checked after the lock
+  });
+
+  it("makes wrong passwords wait after 10 in a row, per account (D-110)", async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 12) };
+    app = await createTestApp(backend, {}, clock);
+    await setUp();
+    const login = (password: string, n: number) =>
+      inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password }, headers: { ...CSRF, "x-forwarded-for": `203.0.113.${n}` } });
+    const codes: number[] = [];
+    for (let i = 0; i < 10; i++) codes.push((await login("wrong password", i)).statusCode);
+    expect(codes).toEqual(Array(10).fill(401));
+    const waiting = await login(PASSWORD, 50);
+    expect(waiting.statusCode).toBe(429);
+    expect(waiting.json()).toMatchObject({ error: "too_many_attempts", message: expect.stringMatching(/Try again in 1 minute/) });
+    clock.now += 61_000;
+    expect((await login("wrong again", 51)).statusCode).toBe(401); // 11th: now 2 minutes
+    clock.now += 61_000;
+    expect((await login(PASSWORD, 52)).statusCode).toBe(429);
+    clock.now += 61_000;
+    expect((await login(PASSWORD, 53)).statusCode).toBe(200);
+    const row = await app!.db.kysely.selectFrom("users").select(["failed_logins", "login_locked_until"]).executeTakeFirstOrThrow();
+    expect(row).toEqual({ failed_logins: 0, login_locked_until: null });
+  });
+
+  it("signs out other devices when two-factor is turned on or off, and lists and ends sessions (D-110)", async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 12) };
+    app = await createTestApp(backend, {}, clock);
+    const here = await setUp();
+    const phone = sessionCookie(await inject({ method: "POST", url: "/api/auth/login", payload: { username: "alex", password: PASSWORD }, headers: { ...CSRF, "user-agent": "Mozilla/5.0 (Linux; Android 15) Chrome/141.0" } }))!;
+    const list = async (cookie: string) => (await inject({ method: "GET", url: "/api/auth/sessions", headers: { cookie } })).json();
+    let sessions = await list(here);
+    expect(sessions).toHaveLength(2);
+    expect(sessions.filter((s: { current: boolean }) => s.current)).toHaveLength(1);
+
+    const { code } = await withTwoFactor(clock, here);
+    expect((await status(phone)).authenticated).toBe(false); // signed out when two-factor went on
+    expect((await status(here)).authenticated).toBe(true);
+
+    // A second device logs in with a code; "sign out everywhere else" ends it.
+    const laptop = sessionCookie(await post("/api/auth/login", { username: "alex", password: PASSWORD, totpCode: code() }))!;
+    expect((await list(here))).toHaveLength(2);
+    const others = await inject({ method: "POST", url: "/api/auth/sessions/sign-out-others", headers: { ...CSRF, cookie: here } });
+    expect(others.json()).toEqual({ ok: true, signedOut: 1 });
+    expect((await status(laptop)).authenticated).toBe(false);
+
+    // Ending one session by its id; an unknown id is a 404.
+    clock.now += 30_000;
+    const tablet = sessionCookie(await post("/api/auth/login", { username: "alex", password: PASSWORD, totpCode: code() }))!;
+    sessions = await list(here);
+    const tabletId = sessions.find((s: { current: boolean }) => !s.current).id;
+    expect((await inject({ method: "DELETE", url: `/api/auth/sessions/${tabletId}`, headers: { ...CSRF, cookie: here } })).statusCode).toBe(200);
+    expect((await status(tablet)).authenticated).toBe(false);
+    expect((await inject({ method: "DELETE", url: `/api/auth/sessions/${"0".repeat(64)}`, headers: { ...CSRF, cookie: here } })).statusCode).toBe(404);
+    // Ending a session needs the CSRF header like any change.
+    expect((await inject({ method: "DELETE", url: `/api/auth/sessions/${tabletId}`, headers: { cookie: here } })).statusCode).toBe(403);
+  });
+
+  it("ends a session after SESSION_MAX_DAYS even if it's used every day (D-110)", async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 12) };
+    app = await createTestApp(backend, { SESSION_TTL_DAYS: "30", SESSION_MAX_DAYS: "90" }, clock);
+    const cookie = await setUp();
+    for (let day = 1; day < 90; day++) {
+      clock.now += 24 * 3_600_000;
+      if (day % 10 === 0) expect((await status(cookie)).authenticated).toBe(true);
+    }
+    clock.now += 24 * 3_600_000;
+    expect((await status(cookie)).authenticated).toBe(false);
+  });
+
+  it("reports what it sees of the connection, to check the reverse proxy (D-110)", async () => {
+    app = await createTestApp(backend);
+    const cookie = await setUp();
+    const direct = await status(cookie);
+    expect(direct.connection).toEqual({ ip: "127.0.0.1", https: false, secureCookie: false, proxy: "direct" });
+    const viaProxy = (await inject({ method: "GET", url: "/api/auth/status", headers: { cookie, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https" } })).json();
+    expect(viaProxy.connection).toEqual({ ip: "203.0.113.7", https: true, secureCookie: true, proxy: "through-trusted-proxy" });
+  });
+
   describe("proxy (SSO) auth", () => {
     const proxyEnv = { AUTH_MODE: "both", AUTH_PROXY_TRUSTED: "127.0.0.1", LOGIN_RATE_LIMIT: "false" };
 
@@ -213,6 +339,13 @@ describe("misc endpoints", () => {
     expect(res.headers["content-security-policy"]).not.toMatch(/upgrade-insecure-requests/);
     expect(res.headers["strict-transport-security"]).toBeUndefined();
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("says when a proxy's headers come from an address TRUST_PROXY doesn't trust (D-110)", async () => {
+    app = await createTestApp("sqlite", { LOGIN_RATE_LIMIT: "false", TRUST_PROXY: "10.9.9.9" });
+    const setup = await app.fastify.inject({ method: "POST", url: "/api/auth/setup", payload: { setupCode: SETUP_CODE, username: "alex", password: PASSWORD }, headers: CSRF });
+    const res = await app.fastify.inject({ method: "GET", url: "/api/auth/status", headers: { cookie: sessionCookie(setup)!, "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https" } });
+    expect(res.json().connection).toEqual({ ip: "127.0.0.1", https: false, secureCookie: false, proxy: "untrusted-proxy" });
   });
 
   it("marks the cookie Secure when a trusted proxy reports HTTPS", async () => {

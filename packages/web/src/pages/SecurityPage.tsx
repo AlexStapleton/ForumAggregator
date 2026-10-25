@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { AuthStatus, CheckingSettings, CheckingValues, FlareSolverrStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
+import type { AuthStatus, CheckingSettings, CheckingValues, ConnectionInfo, FlareSolverrStatus, SessionView, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
+import { fullDate, relativeTime } from "../time";
 import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout, type Theme } from "../prefs";
 
 export function SecurityPage({ status, onChange }: { status: AuthStatus; onChange: () => void }) {
@@ -18,6 +19,7 @@ export function SecurityPage({ status, onChange }: { status: AuthStatus; onChang
       <FlareSolverrSettings />
       {status.via === "session" && <ChangePassword />}
       <TwoFactor enabled={!!status.totpEnabled} onChange={onChange} />
+      {status.via === "session" && <Devices connection={status.connection} />}
     </>
   );
 }
@@ -379,15 +381,108 @@ function ChangePassword() {
   );
 }
 
+/** "Chrome on Android", "Firefox on Windows", … from a User-Agent; good enough to recognise a device. */
+function deviceName(ua: string | null): string {
+  if (!ua) return "Unknown device";
+  const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /SamsungBrowser/.test(ua) ? "Samsung Internet" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /curl|node|python/i.test(ua) ? "Script" : "Browser";
+  const os = /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : null;
+  return os ? `${browser} on ${os}` : browser;
+}
+
+const PROXY_TEXT: Record<ConnectionInfo["proxy"], string> = {
+  "through-trusted-proxy": "through your reverse proxy",
+  direct: "directly (no reverse proxy)",
+  "untrusted-proxy": "through a proxy the app doesn't trust",
+};
+
+/** Signed-in devices, and what the app sees of this connection (D-110). */
+function Devices({ connection }: { connection?: ConnectionInfo }) {
+  const [sessions, setSessions] = useState<SessionView[]>();
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
+  const load = () => api<SessionView[]>("GET", "/api/auth/sessions").then(setSessions, (err) => setMessage({ kind: "error", text: errorMessage(err) }));
+  useEffect(() => {
+    void load();
+  }, []);
+  const end = async (s: SessionView) => {
+    try {
+      await api("DELETE", `/api/auth/sessions/${s.id}`);
+      if (s.current) location.reload();
+      else await load();
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+    }
+  };
+  const others = sessions?.filter((s) => !s.current).length ?? 0;
+
+  return (
+    <section className="card">
+      <h2>Signed-in devices</h2>
+      {connection && (
+        <p className="muted small">
+          This connection: {connection.https ? "HTTPS" : "plain HTTP"}, from <code>{connection.ip}</code>, {PROXY_TEXT[connection.proxy]}
+          {connection.https && connection.secureCookie ? "; login cookie marked Secure." : "."}
+          {connection.proxy === "untrusted-proxy" && (
+            <> The proxy's own address isn't in <code>TRUST_PROXY</code>, so the app can't see your real address or that you're on HTTPS. See DEPLOY.md §3.</>
+          )}
+        </p>
+      )}
+      {message && <Alert kind={message.kind}>{message.text}</Alert>}
+      {!sessions ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <ul className="sessions">
+          {sessions.map((s) => (
+            <li key={s.id}>
+              <div>
+                <strong>{deviceName(s.userAgent)}</strong>
+                {s.current && <span className="badge">This device</span>}
+                <div className="muted small">
+                  {s.ip ?? "unknown address"} · active <span title={fullDate(s.lastSeenAt)}>{relativeTime(s.lastSeenAt)}</span> · signed in{" "}
+                  <span title={fullDate(s.createdAt)}>{relativeTime(s.createdAt)}</span>
+                </div>
+              </div>
+              <button className="secondary" onClick={() => void end(s)}>
+                Sign out
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {others > 0 && (
+        <button
+          className="secondary danger-text"
+          onClick={() =>
+            void api<{ signedOut: number }>("POST", "/api/auth/sessions/sign-out-others").then(
+              (r) => {
+                setMessage({ kind: "ok", text: `Signed out ${r.signedOut} other device${r.signedOut === 1 ? "" : "s"}.` });
+                void load();
+              },
+              (err) => setMessage({ kind: "error", text: errorMessage(err) }),
+            )
+          }
+        >
+          Sign out everywhere else
+        </button>
+      )}
+      <p className="muted small">
+        By default each device stays signed in for 30 days after it was last used, and must log in again (with a code, if two-factor is on) at least every
+        90 days.
+      </p>
+    </section>
+  );
+}
+
 function TwoFactor({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
   const [enrol, setEnrol] = useState<TotpBeginResponse>();
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string>();
+  const [done, setDone] = useState<string>();
   const digits = (v: string) => v.replace(/\D/g, "").slice(0, 6);
 
   const run = async (fn: () => Promise<void>) => {
     setError(undefined);
+    setDone(undefined);
     try {
       await fn();
     } catch (err) {
@@ -399,15 +494,16 @@ function TwoFactor({ enabled, onChange }: { enabled: boolean; onChange: () => vo
     <section className="card">
       <h2>Two-factor login</h2>
       {error && <Alert>{error}</Alert>}
+      {done && <Alert kind="ok">{done}</Alert>}
       {enabled ? (
-        <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await api("POST", "/api/auth/totp/disable", { password, code }); setPassword(""); setCode(""); onChange(); }); }} noValidate>
+        <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await api("POST", "/api/auth/totp/disable", { password, code }); setPassword(""); setCode(""); setDone("Two-factor login is off. Your other devices were signed out."); onChange(); }); }} noValidate>
           <p className="muted">On. Logging in asks for a code from your authenticator app.</p>
           <Field label="Password" name="password" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
           <Field label="Current code" name="code" value={code} onChange={(v) => setCode(digits(v))} inputMode="numeric" autoComplete="one-time-code" />
           <button type="submit" className="danger">Turn off</button>
         </form>
       ) : enrol ? (
-        <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await api("POST", "/api/auth/totp/enable", { code }); setEnrol(undefined); setCode(""); onChange(); }); }} noValidate>
+        <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await api("POST", "/api/auth/totp/enable", { code }); setEnrol(undefined); setCode(""); setDone("Two-factor login is on. Your other devices were signed out: log in there again with a code."); onChange(); }); }} noValidate>
           <p className="muted">Scan this with an authenticator app (Aegis, Google Authenticator, 1Password…), then enter the code it shows.</p>
           <img className="qr" src={enrol.qrDataUrl} alt="QR code for your authenticator app" width={240} height={240} />
           <p className="muted small">Can't scan? Enter this key manually: <code className="break">{enrol.secret}</code></p>

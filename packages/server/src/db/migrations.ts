@@ -244,6 +244,21 @@ export const migrations: Record<string, Migration> = {
       // Nothing to undo.
     },
   },
+  "0013_login_throttle": {
+    async up(db: Kysely<any>) {
+      // Per-account limits on wrong passwords and wrong two-factor codes (D-110): unlike the
+      // per-IP limit, a forged X-Forwarded-For can't get around them.
+      await db.schema.alterTable("users").addColumn("failed_logins", "integer", (c) => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("users").addColumn("login_locked_until", "bigint").execute();
+      await db.schema.alterTable("users").addColumn("totp_failures", "integer", (c) => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("users").addColumn("totp_locked_until", "bigint").execute();
+    },
+    async down(db: Kysely<any>) {
+      for (const c of ["totp_locked_until", "totp_failures", "login_locked_until", "failed_logins"]) {
+        await db.schema.alterTable("users").dropColumn(c).execute();
+      }
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {
