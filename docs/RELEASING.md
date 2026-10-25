@@ -9,7 +9,7 @@ How to cut a version (e.g. 1.1.0). Images are built by CI: `latest` from `main`,
    - Bump all packages (keeps `package-lock.json` in step):
      `npm version X.Y.Z --no-git-tag-version --workspaces --include-workspace-root=false`
    - `CHANGELOG.md`: rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and add a fresh empty `[Unreleased]`.
-   - `README.md`: "current: **X.Y.Z**".
+   - `README.md`: "Current release: **X.Y.Z**".
    - Check: `npm run build && npm test`, and that
      `node -e "import('./packages/server/dist/version.js').then(m => console.log(m.VERSION))"` prints X.Y.Z.
 2. **Merge the PR** into `main`.
