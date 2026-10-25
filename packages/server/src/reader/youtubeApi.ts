@@ -4,6 +4,8 @@
 // never logged or put in error messages.
 import type { ReaderComment } from "@fa/shared";
 import type { JsonFetcher } from "../feeds/fetch.js";
+import type { ParsedFeed } from "../feeds/parse.js";
+import { htmlToText, safeHttpUrl, SUMMARY_MAX, TITLE_MAX, truncate } from "../feeds/text.js";
 import { sanitizeHtml } from "./sanitize.js";
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -75,4 +77,46 @@ export async function topComments(fetchJson: JsonFetcher, apiKey: string, videoI
     });
   }
   return out;
+}
+
+/**
+ * A channel's latest uploads, shaped like its feed (D-105): used when YouTube's channel feed
+ * doesn't answer. Its uploads playlist is the channel ID with "UU" for "UC"; one call, 1 unit.
+ * Video IDs become the feed's own guids ("yt:video:…"), so nothing is stored twice.
+ */
+export async function latestUploads(fetchJson: JsonFetcher, apiKey: string, channelId: string, max = 15): Promise<ParsedFeed> {
+  if (!/^UC[A-Za-z0-9_-]{22}$/.test(channelId)) throw new YouTubeApiError("notFound", "That isn't a YouTube channel ID.");
+  const playlist = `UU${channelId.slice(2)}`;
+  const url = `${API}/playlistItems?part=snippet,contentDetails&maxResults=${max}&playlistId=${playlist}&key=${encodeURIComponent(apiKey)}`;
+  const res = await fetchJson(url);
+  if (res.status === 404) throw new YouTubeApiError("notFound", "YouTube couldn't find this channel's uploads.");
+  if (res.status !== 200) throw errorFor(res.status, res.body);
+  const items = ((res.body as Json | null)?.items as Json[] | undefined) ?? [];
+  let channelTitle: string | null = null;
+  const out: ParsedFeed["items"] = [];
+  for (const it of items) {
+    const s = (it.snippet ?? {}) as Json;
+    const c = (it.contentDetails ?? {}) as Json;
+    const videoId = String(c.videoId ?? ((s.resourceId as Json | undefined)?.videoId ?? ""));
+    if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) continue;
+    // Private and deleted videos stay in the playlist without a picture or title.
+    if (s.title === "Private video" || s.title === "Deleted video") continue;
+    channelTitle ??= typeof s.videoOwnerChannelTitle === "string" ? s.videoOwnerChannelTitle : typeof s.channelTitle === "string" ? s.channelTitle : null;
+    const thumbs = (s.thumbnails ?? {}) as Record<string, Json | undefined>;
+    const thumb = thumbs.maxres ?? thumbs.high ?? thumbs.medium ?? thumbs.default;
+    const published = Date.parse(String(c.videoPublishedAt ?? s.publishedAt ?? ""));
+    const description = htmlToText(String(s.description ?? ""));
+    out.push({
+      guid: `yt:video:${videoId}`,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      title: truncate(String(s.title ?? "(untitled)"), TITLE_MAX),
+      author: channelTitle,
+      summary: description ? truncate(description, SUMMARY_MAX) : null,
+      imageUrl: safeHttpUrl(thumb?.url) ?? `https://i1.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      audio: null,
+      publishedAt: Number.isFinite(published) ? published : null,
+      contentHtml: null,
+    });
+  }
+  return { format: "atom", title: channelTitle, siteUrl: `https://www.youtube.com/channel/${channelId}`, items: out };
 }

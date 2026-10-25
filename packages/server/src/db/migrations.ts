@@ -234,6 +234,16 @@ export const migrations: Record<string, Migration> = {
       // Nothing to undo: those pages are read again when opened.
     },
   },
+  "0012_resume_paused_youtube": {
+    async up(db: Kysely<any>) {
+      // YouTube channels paused by YouTube's on-and-off feed failures (D-105): checked again now.
+      await sql`update sources set status = 'error', consecutive_failures = 0, next_check_at = ${Date.now()}
+        where kind = 'youtube' and status = 'paused'`.execute(db);
+    },
+    async down() {
+      // Nothing to undo.
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

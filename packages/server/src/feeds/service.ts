@@ -6,7 +6,7 @@ import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
 import { discoverFeeds } from "./discover.js";
-import { FetchError, type Fetcher, type HostLimiter } from "./fetch.js";
+import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "./fetch.js";
 import type { FlareSolverr } from "./flaresolverr.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
@@ -17,6 +17,7 @@ import { nextCheck } from "./schedule.js";
 import { isValidSelector } from "../reader/extract.js";
 import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
+import { latestUploads, YouTubeApiError } from "../reader/youtubeApi.js";
 
 type SourceRow = Selectable<SourcesTable>;
 
@@ -45,6 +46,22 @@ export interface Logger {
 
 /** Interactive actions (adding a source) still space requests out, just less. */
 const INTERACTIVE = { minDelayMs: 1000, jitterMs: 500 };
+/** Tries of a YouTube channel feed per check: it answers 404/500 at random lately (D-105). */
+const YOUTUBE_FEED_TRIES = 3;
+
+/** The user's YouTube Data API key, for reading a channel when its feed doesn't answer (D-105). */
+export interface YouTubeAccess {
+  apiKey(): Promise<string | null>;
+  fetchJson: JsonFetcher;
+}
+
+/** YouTube's channel feed failing on YouTube's side (404/5xx), as opposed to a bad address. */
+function isYouTubeHiccup(err: unknown): err is FetchError {
+  return err instanceof FetchError && (err.status === 404 || (err.status !== undefined && err.status >= 500));
+}
+
+const YOUTUBE_FEED_DOWN =
+  "YouTube's channel feed isn't answering (it fails on and off on YouTube's side lately). Add a YouTube API key in Settings → YouTube comments and the app reads the channel through the API when this happens.";
 /** On a source's first fetch, items older than this start out as read. */
 const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
 const INSERT_CHUNK = 50;
@@ -102,6 +119,7 @@ export class FeedService {
     private readonly now: () => number = Date.now,
     private readonly log?: Logger,
     private readonly flare?: FlareSolverr,
+    private readonly youtube?: YouTubeAccess,
   ) {
     this.polling = { ...config.polling };
   }
@@ -520,20 +538,20 @@ export class FeedService {
       } else {
         ({ feedUrl, siteUrl } = yt);
       }
-      let res;
+      let read;
       try {
-        res = await this.fetchInteractive(feedUrl, "feed", via);
+        read = await this.readYouTube(feedUrl, null, true);
       } catch (err) {
-        if (err instanceof SourceError) {
-          throw new SourceError(
-            "youtube_feed_failed",
-            `Found the channel, but YouTube didn't return its video feed (${err.message}). YouTube's feeds are sometimes briefly unavailable, so try again in a few minutes. Feed address: ${feedUrl}`,
-            err.status,
-          );
+        if (err instanceof FetchError || err instanceof YouTubeApiError) {
+          const reason = err instanceof FetchError ? friendlyFetchError(err, feedUrl, false) : err.message;
+          const hint = isYouTubeHiccup(err) && !(await this.youtube?.apiKey()) ? ` ${YOUTUBE_FEED_DOWN}` : " YouTube's feeds are sometimes briefly unavailable, so try again in a few minutes.";
+          throw new SourceError("youtube_feed_failed", `Found the channel, but YouTube didn't return its video feed (${reason}).${hint} Feed address: ${feedUrl}`, 422);
         }
+        if (err instanceof FeedParseError) throw new SourceError("not_a_feed", `That address isn't a readable feed: ${err.message}`, 422);
         throw err;
       }
-      return { kind: "youtube", feedUrl, siteUrl, parsed: this.parse(res.body, feedUrl) };
+      if (read.kind !== "ok") throw new SourceError("unexpected", "The site answered without content.");
+      return { kind: "youtube", feedUrl, siteUrl, parsed: read.parsed };
     }
 
     const reddit = planReddit(url);
@@ -645,6 +663,36 @@ export class FeedService {
     }
   }
 
+  /**
+   * A YouTube channel's videos (D-105): its feed, tried up to three times, since YouTube's feed
+   * answers 404/500 at random lately; then, with the user's API key, the channel's uploads through
+   * the Data API (1 quota unit). Throws the feed's error when there's no key.
+   */
+  private async readYouTube(
+    feedUrl: string,
+    cached: { etag: string | null; lastModified: string | null } | null,
+    interactive: boolean,
+  ): Promise<{ kind: "not_modified" } | { kind: "ok"; parsed: ParsedFeed; etag: string | null; lastModified: string | null; via: "feed" | "api" }> {
+    let lastError: FetchError | null = null;
+    for (let attempt = 0; attempt < YOUTUBE_FEED_TRIES; attempt++) {
+      if (attempt || interactive) await this.limiter.wait(feedUrl, interactive ? INTERACTIVE : undefined);
+      try {
+        const res = await this.fetcher(feedUrl, { expect: "feed", etag: cached?.etag, lastModified: cached?.lastModified });
+        if (res.kind === "not_modified") return res;
+        return { kind: "ok", parsed: parseFeed(res.body, feedUrl), etag: res.etag, lastModified: res.lastModified, via: "feed" };
+      } catch (err) {
+        if (!isYouTubeHiccup(err)) throw err;
+        lastError = err;
+      }
+    }
+    const channelId = new URL(feedUrl).searchParams.get("channel_id");
+    const key = channelId ? await this.youtube?.apiKey() : null;
+    if (!key || !channelId || !this.youtube) throw lastError!;
+    const parsed = await latestUploads(this.youtube.fetchJson, key, channelId);
+    this.log?.info({ feedUrl, videos: parsed.items.length }, "YouTube feed not answering; read the channel through the API");
+    return { kind: "ok", parsed, etag: null, lastModified: null, via: "api" };
+  }
+
   private async fetchInteractive(url: string, expect: "feed" | "html", via = false) {
     await this.limiter.wait(url, INTERACTIVE);
     try {
@@ -684,6 +732,7 @@ export class FeedService {
 
     await this.limiter.wait(row.feed_url);
     const startedAt = this.now();
+    if (row.kind === "youtube") return this.checkYouTube(row, startedAt);
     try {
       const res = await this.fetcherFor(row.via_flaresolverr === 1)(row.feed_url, { expect: "feed", etag: row.etag, lastModified: row.last_modified });
       if (res.kind === "not_modified") {
@@ -702,6 +751,33 @@ export class FeedService {
         : "Unexpected error while checking this source";
       if (!(err instanceof FetchError || err instanceof FeedParseError)) this.log?.warn({ err, sourceId: id }, "check failed");
       await this.recordFailure(row, startedAt, message, err instanceof FetchError ? err : undefined);
+      return { ok: false, newItems: 0, error: message };
+    }
+  }
+
+  /** A YouTube channel's check (D-105): feed with retries, else the API; YouTube's hiccups never pause it. */
+  private async checkYouTube(row: SourceRow, startedAt: number): Promise<CheckResult> {
+    try {
+      const read = await this.readYouTube(row.feed_url, { etag: row.etag, lastModified: row.last_modified }, false);
+      if (read.kind === "not_modified") {
+        await this.recordSuccess(row.id, startedAt, row.etag, row.last_modified, row);
+        return { ok: true, newItems: 0, notModified: true };
+      }
+      const newItems = await this.ingest(row.id, read.parsed, row.last_success_at === null);
+      // Through the API there are no validators: the next check reads the feed afresh.
+      await this.recordSuccess(row.id, startedAt, read.via === "feed" ? read.etag : null, read.via === "feed" ? read.lastModified : null, row);
+      if (newItems) this.log?.info({ sourceId: row.id, newItems, via: read.via }, "new items");
+      return { ok: true, newItems };
+    } catch (err) {
+      const hiccup = isYouTubeHiccup(err);
+      const message =
+        hiccup && !(await this.youtube?.apiKey()) ? `${YOUTUBE_FEED_DOWN} [HTTP ${err.status}]`
+        : err instanceof YouTubeApiError ? `YouTube's feed isn't answering, and reading the channel through the API failed: ${err.message}`
+        : err instanceof FetchError ? friendlyFetchError(err, row.feed_url, false)
+        : err instanceof FeedParseError ? `The feed couldn't be read: ${err.message}`
+        : "Unexpected error while checking this source";
+      if (!(err instanceof FetchError || err instanceof FeedParseError || err instanceof YouTubeApiError)) this.log?.warn({ err, sourceId: row.id }, "check failed");
+      await this.recordFailure(row, startedAt, message, err instanceof FetchError ? err : undefined, !hiccup && !(err instanceof YouTubeApiError));
       return { ok: false, newItems: 0, error: message };
     }
   }
@@ -729,13 +805,14 @@ export class FeedService {
       .execute();
   }
 
-  private async recordFailure(row: SourceRow, at: number, message: string, err?: FetchError) {
+  /** `pausable` false: failures back off as usual but never pause the source (YouTube's hiccups, D-105). */
+  private async recordFailure(row: SourceRow, at: number, message: string, err?: FetchError, pausable = true) {
     const failures = row.consecutive_failures + 1;
     const next = nextCheck({
       now: at,
       intervalMinutes: this.intervalMinutes(row),
       failures,
-      polling: this.polling,
+      polling: pausable ? this.polling : { ...this.polling, circuitBreakerFailures: Number.POSITIVE_INFINITY },
       retryAfterMs: err?.retryAfterMs,
     });
     const status = next.paused ? "paused" : err?.isChallenge ? "challenged" : "error";
