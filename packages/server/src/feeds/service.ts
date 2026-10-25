@@ -51,6 +51,9 @@ const INSERT_CHUNK = 50;
 /** Posts kept per followed thread (D-084). */
 const THREAD_POSTS_KEPT = 300;
 
+/** What an address resolves to: the feed to follow and its first fetch. */
+type ResolvedSource = { kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed };
+
 /** A thread page without posts we can read. */
 class ThreadParseError extends Error {}
 
@@ -477,7 +480,7 @@ export class FeedService {
   }
 
   /** Works out the feed URL for whatever the user pasted, fetching as little as possible. */
-  private async resolve(raw: string, via = false): Promise<{ kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed }> {
+  private async resolve(raw: string, via = false): Promise<ResolvedSource> {
     let input = normaliseYouTubeInput(raw);
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = `https://${input}`;
     let url: URL;
@@ -578,8 +581,39 @@ export class FeedService {
         "No RSS or Atom feed found at this address. If the site has one, paste the feed's own address (often ending in /feed, /rss or .xml).",
       );
     }
+    const section = await this.wordpressSectionFeed(new URL(res.url), res.body, feeds.map((f) => f.url), via);
+    if (section) return section;
     const feedRes = await this.fetchInteractive(first.url, "feed", via);
     return { kind: "feed", feedUrl: first.url, siteUrl: res.url, parsed: this.parse(feedRes.body, first.url) };
+  }
+
+  /**
+   * A section of a WordPress site (D-103), e.g. science.nasa.gov/earth/: the page advertises only
+   * the whole site's feed, but WordPress serves the section's own at …/earth/feed/,
+   * /category/earth/feed/ or /tag/earth/feed/. Tried in that order (at most three requests, only
+   * when adding); the first with items wins. null to use the advertised feed.
+   */
+  private async wordpressSectionFeed(page: URL, html: string, advertised: string[], via: boolean): Promise<ResolvedSource | null> {
+    const segments = page.pathname.split("/").filter(Boolean);
+    const last = segments.at(-1);
+    if (!last || !/wp-content\/|wp-json|content="WordPress/i.test(html.slice(0, 500_000))) return null;
+    const path = `/${segments.join("/")}/`;
+    // A feed advertised for this section already (its address is under the page's) is used as is.
+    if (advertised.some((f) => new URL(f).pathname.startsWith(path))) return null;
+    const candidates = [...new Set([`${path}feed/`, `/category/${last}/feed/`, `/tag/${last}/feed/`])].map((p) => new URL(p, page.origin).href);
+    for (const feedUrl of candidates) {
+      try {
+        const res = await this.fetchInteractive(feedUrl, "feed", via);
+        if (!looksLikeFeed(res.body)) continue;
+        const parsed = this.parse(res.body, feedUrl);
+        // WordPress answers …/<page>/feed/ with the page's comments ("Comments on: Earth"): not articles.
+        if (/^comments (on|for)\b/i.test(parsed.title ?? "")) continue;
+        if (parsed.items.length) return { kind: "feed", feedUrl, siteUrl: page.href, parsed };
+      } catch (err) {
+        if (!(err instanceof SourceError)) throw err;
+      }
+    }
+    return null;
   }
 
   /**

@@ -138,6 +138,29 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     expect(page.headers["content-security-policy"]).toMatch(/media-src 'self' https: http:/);
   });
 
+  it("finds a WordPress section's own feed when the page advertises only the site's (D-103)", async () => {
+    await start();
+    // Shaped like science.nasa.gov/earth/: a WordPress page advertising only /feed/ (everything).
+    const page = '<html><head><meta name="generator" content="WordPress 7.0.7"><link rel="alternate" type="application/rss+xml" title="Site &raquo; Feed" href="https://wp.example/feed/"></head><body><img src="/wp-content/x.jpg"></body></html>';
+    web.set("https://wp.example/earth/", { body: page, contentType: "text/html" });
+    web.set("https://wp.example/feed/", { body: rss("Everything", [{ guid: "s1", title: "Seminar", date: iso(-3_600_000) }]) });
+    // …/earth/feed/ is the page's comments; /category/earth/feed/ the section's articles.
+    web.set("https://wp.example/earth/feed/", { body: rss("Comments on: Earth", [{ guid: "c1", title: "By: someone", date: iso(-3_600_000) }]) });
+    web.set("https://wp.example/category/earth/feed/", { body: rss("Earth", [{ guid: "e1", title: "El Niño Then and Now", date: iso(-3_600_000) }]) });
+    const res = await addFeed("https://wp.example/earth/");
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ feedUrl: "https://wp.example/category/earth/feed/", siteUrl: "https://wp.example/earth/", title: "Earth" });
+
+    // No section feed: the advertised one, as before. Not WordPress: nothing extra is tried.
+    web.set("https://wp.example/mars/", { body: page, contentType: "text/html" });
+    expect((await addFeed("https://wp.example/mars/")).json()).toMatchObject({ feedUrl: "https://wp.example/feed/" });
+    web.set("https://other.example/news/", { body: '<link rel="alternate" type="application/rss+xml" href="/feed/">', contentType: "text/html" });
+    web.set("https://other.example/feed/", { body: rss("Other", [{ guid: "o1", title: "Story", date: iso(-3_600_000) }]) });
+    const before = web.requests.length;
+    expect((await addFeed("https://other.example/news/")).json()).toMatchObject({ feedUrl: "https://other.example/feed/" });
+    expect(web.requests.slice(before).map((r) => r.url)).toEqual(["https://other.example/news/", "https://other.example/feed/"]);
+  });
+
   it("adds a YouTube channel from an @handle", async () => {
     await start();
     web.set("https://www.youtube.com/@ExampleCreator", {

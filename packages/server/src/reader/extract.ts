@@ -369,6 +369,46 @@ export function youtubeVideoId(url: string | null): string | null {
 
 // ---- polishing extracted/feed HTML before it's shown ----------------------------------------
 
+/**
+ * Page furniture some feeds put around the article (D-103): NASA Science's feed carries the whole
+ * rendered page (its menus, "You may also be interested in", "Keep Exploring"). Matched by
+ * markup, so it runs on the feed's raw HTML, before sanitising removes classes.
+ */
+const FEED_FURNITURE = [
+  "nav",
+  '[role="navigation"]',
+  '[class*="breadcrumb"]',
+  '[class*="secondary-navigation"]',
+  // WordPress: related posts, share buttons (Jetpack and others), NASA's content and topic cards.
+  ".jp-relatedposts, .sharedaddy, .share-buttons, .social-share, .wp-block-social-links",
+  '[class*="related-posts"], [class*="related-articles"], [class*="content-lists"], [class*="topic-cards"], [class*="credits-and-details"]',
+].join(", ");
+/** WordPress's feed footer: "The post X appeared first on Site." */
+const FEED_FOOTER = /^\s*The post .+ appeared first on .+\.\s*$/;
+
+/** Feed HTML without page furniture; unchanged (same string) when there is none. Untrusted in, untrusted out. */
+export function cleanFeedHtml(html: string): string {
+  if (!/<nav\b|navigation|breadcrumb|related|share|content-lists|topic-cards|credits-and-details|appeared first on/i.test(html)) return html;
+  const dom = new JSDOM(`<!doctype html><body>${html.slice(0, 1_000_000)}</body>`);
+  try {
+    const doc = dom.window.document;
+    let changed = false;
+    for (const el of Array.from(doc.body.querySelectorAll(FEED_FURNITURE))) {
+      if (!el.isConnected) continue;
+      el.remove();
+      changed = true;
+    }
+    const last = Array.from(doc.body.querySelectorAll("p")).at(-1);
+    if (last && FEED_FOOTER.test(last.textContent ?? "")) {
+      last.remove();
+      changed = true;
+    }
+    return changed ? doc.body.innerHTML : html;
+  } finally {
+    dom.window.close();
+  }
+}
+
 /** Typical media/share toolbar entries: "Download", "Transcript", "Embed", "Share on X", … */
 const TOOLBAR_ITEM = /^(download|transcript|embed|share|listen|play|pause|email|e-mail|facebook|twitter|x|threads|bluesky|linkedin|reddit|whatsapp|print|copy link|save|subscribe)\b/i;
 const EMBED_SNIPPET = /^\s*<(iframe|script|embed|object|video|audio)\b[\s\S]*>\s*$/i;

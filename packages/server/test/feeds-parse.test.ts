@@ -137,6 +137,20 @@ describe("parseFeed", () => {
     expect([parseDuration("45:07"), parseDuration("0"), parseDuration("about an hour"), parseDuration(undefined)]).toEqual([2707, null, null, null]);
   });
 
+  it("uses the first real image in the item as the card's picture when the feed names none (D-103)", () => {
+    const xml = `<?xml version="1.0"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>T</title>
+      <item><guid>1</guid><title>A</title><link>https://site.example/a</link><content:encoded><![CDATA[<img src="https://site.example/pixel.gif" width="1" height="1"><img src="/wp-content/logo.svg"><p>x</p><img src="/img/frame.jpg?w=600&amp;h=400"><img src="https://site.example/b.jpg">]]></content:encoded></item>
+      <item><guid>2</guid><title>B</title><link>http://plain.example/b</link><description><![CDATA[<img src="/only-http.jpg">]]></description></item>
+      <item><guid>3</guid><title>C</title><media:thumbnail xmlns:media="http://search.yahoo.com/mrss/" url="https://img.example/thumb.jpg"/><content:encoded><![CDATA[<img src="https://site.example/c.jpg">]]></content:encoded></item></channel></rss>`;
+    const [a, b, c] = parseFeed(xml, "https://site.example/feed").items;
+    expect(a!.imageUrl).toBe("https://site.example/img/frame.jpg?w=600&h=400");
+    expect(b!.imageUrl).toBeNull(); // http only: the CSP wouldn't show it
+    expect(c!.imageUrl).toBe("https://img.example/thumb.jpg"); // the feed's own picture wins
+    const wp = parseFeed(`<?xml version="1.0"?><rss><channel><title>T</title><item><guid>1</guid><title>El Niño</title>
+      <description><![CDATA[A 35-year record. <p>The post <a href="https://x.example/">El Niño Then and Now</a> appeared first on <a href="https://x.example/">NASA Science</a>.</p>]]></description></item></channel></rss>`).items[0]!;
+    expect(wp.summary).toBe("A 35-year record.");
+  });
+
   it("rejects non-feeds and entity bombs", () => {
     expect(() => parseFeed("<html><body>hi</body></html>")).toThrow(FeedParseError);
     expect(() => parseFeed('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">]><rss><channel/></rss>')).toThrow(/entity/i);

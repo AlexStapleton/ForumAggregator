@@ -14,7 +14,7 @@ import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { cleanFeedHtml, extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -229,7 +229,8 @@ export class ReaderService {
         );
         return { ...base, kind: "feed", html, videoId: null, notice: null };
       }
-      const html = sanitizeHtml(rawHtml, item.url ?? "https://invalid.invalid/");
+      // Menus and "related" blocks some feeds include are dropped first (D-103).
+      const html = sanitizeHtml(cleanFeedHtml(rawHtml), item.url ?? "https://invalid.invalid/");
       if (!preferPage && htmlToText(html).length >= FEED_FULL_TEXT_MIN) {
         await this.store(item.id, "feed", "ok", html, null);
         return { ...base, kind: "feed", html: polishArticle(html, item.title), videoId: null, notice: null };
