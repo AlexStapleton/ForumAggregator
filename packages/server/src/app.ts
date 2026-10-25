@@ -85,8 +85,10 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
         imgSrc: ["'self'", "data:", "https:"],
         // Podcast audio straight from the podcast's host (D-093). http: too, for older feeds;
         // browsers upgrade it to https on an https page.
-        mediaSrc: ["'self'", "https:", "http:"],
-        connectSrc: ["'self'"],
+        // blob: for Reddit videos played through hls.js (D-117), which feeds the player from memory.
+        mediaSrc: ["'self'", "https:", "http:", "blob:"],
+        // hls.js loads Reddit's video stream itself, so the page connects to v.redd.it.
+        connectSrc: ["'self'", "https://v.redd.it"],
         // The reader embeds YouTube videos from the privacy-enhanced domain only.
         frameSrc: ["https://www.youtube-nocookie.com"],
         objectSrc: ["'none'"],

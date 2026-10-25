@@ -6,6 +6,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- **Reddit videos and galleries play in the reader** (D-117). Opening such a post asks Reddit for that post's details once; videos play with sound, with speed buttons and fullscreen, and galleries show every picture, swipeable, with captions. If Reddit doesn't answer, a video still tries its usual stream, and a gallery shows its first picture and says why.
+
 ## [1.11.0] - 2026-10-25
 
 Accounts for other people, and a podcast player that shows in dark mode. Upgrade with

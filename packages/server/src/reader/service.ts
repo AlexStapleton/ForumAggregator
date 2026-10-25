@@ -6,7 +6,7 @@
 // A source with CSS selectors set (D-074) always reads the original page (step 3) with them.
 // Fetching the page happens only when the user opens the item, like a browser would.
 import crypto from "node:crypto";
-import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
+import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest, RedditMedia } from "@fa/shared";
 import type { Viewer } from "../auth/service.js";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
@@ -18,6 +18,7 @@ import { htmlToText } from "../feeds/text.js";
 import { pageParser } from "./pageParser.js";
 import { cleanFeedHtml, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
+import { fallbackMedia, parseRedditPost, redditMediaPlan, redditPostJsonUrl } from "./redditMedia.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
 import { topComments, YouTubeApiError } from "./youtubeApi.js";
@@ -46,6 +47,10 @@ const THREAD_CARD_MAX_POSTS = 100;
 const HTML_CACHE_ENTRIES = 200;
 const HTML_CACHE_CHARS = 8_000_000;
 const MAX_COMMENTS = 30;
+/** A Reddit post's video or gallery (D-117), kept in memory; a failed ask is retried after 15 minutes. */
+const MEDIA_TTL_MS = 6 * 3_600_000;
+const MEDIA_RETRY_MS = 15 * 60_000;
+const MEDIA_KEPT = 300;
 
 class SelectorMiss extends Error {
   constructor(
@@ -80,6 +85,7 @@ export class ReaderService {
   /** "itemId|page" → a thread page as shown, and when it was read (D-088). LRU by Map order. */
   private threadPages = new Map<string, { at: number; content: ReaderContent }>();
   private commentsCache = new Map<string, { at: number; value: ReaderComments }>();
+  private mediaCache = new Map<string, { until: number; value: RedditMedia }>();
 
   constructor(
     private readonly db: Db,
@@ -155,6 +161,7 @@ export class ReaderService {
         "items.audio_url",
         "items.audio_duration",
         "items.source_id",
+        "items.guid",
         "s.thread_batch_from",
         "s.title as source_title",
         "sources.kind as source_kind",
@@ -229,11 +236,13 @@ export class ReaderService {
       const rawHtml = item.html;
       // Reddit posts are often short but complete; elsewhere a short body is just a teaser.
       if (isReddit) {
+        // A video or gallery is shown by the reader itself (D-117), instead of the thumbnail.
+        const media = redditMediaPlan(rawHtml, item.url, item.guid);
         // Laid out from the raw body (once per process), so layout fixes reach old posts too.
-        const html = this.finished(["reddit", item.title, item.url ?? "", rawHtml], () =>
-          polishArticle(layoutRedditPost(sanitizeHtml(cleanRedditHtml(rawHtml), item.url ?? "https://invalid.invalid/"), redditPostLink(rawHtml), item.title), item.title),
+        const html = this.finished(["reddit", String(!!media), item.title, item.url ?? "", rawHtml], () =>
+          polishArticle(layoutRedditPost(sanitizeHtml(cleanRedditHtml(rawHtml), item.url ?? "https://invalid.invalid/"), redditPostLink(rawHtml), item.title, !!media), item.title),
         );
-        return { ...base, kind: "feed", html, videoId: null, notice: null };
+        return { ...base, kind: "feed", html, videoId: null, notice: null, redditMedia: media && { kind: media.kind, poster: media.poster } };
       }
       // Menus and "related" blocks some feeds include are dropped first (D-103).
       const html = sanitizeHtml(cleanFeedHtml(rawHtml), item.url ?? "https://invalid.invalid/");
@@ -468,6 +477,49 @@ export class ReaderService {
       const partial = err instanceof SelectorMiss ? err.result : null;
       return { ...out, matched: partial?.matched ?? null, removed: partial?.removed ?? null, notice: pageErrorMessage(err) };
     }
+  }
+
+  /**
+   * A Reddit post's video or gallery (D-117), asked for when the reader shows it: one request for
+   * the post's details, kept 6 hours. null if the viewer can't see the item or it has neither.
+   */
+  async media(viewer: Viewer, itemId: string): Promise<RedditMedia | null> {
+    const item = await this.db.kysely
+      .selectFrom("items")
+      .innerJoin("subscriptions as s", (j) => j.onRef("s.source_id", "=", "items.source_id").on("s.user_id", "=", viewer.id))
+      .innerJoin("sources", "sources.id", "items.source_id")
+      .leftJoin("item_content", "item_content.item_id", "items.id")
+      .select(["items.id", "items.url", "items.guid", "sources.kind", "item_content.html", "item_content.status"])
+      .where("items.id", "=", itemId)
+      .executeTakeFirst();
+    if (!item || item.kind !== "reddit" || item.status !== "raw" || !item.html) return null;
+    const plan = redditMediaPlan(item.html, item.url, item.guid);
+    if (!plan) return null;
+
+    const cached = this.mediaCache.get(itemId);
+    if (cached && cached.until > this.now()) return cached.value;
+    let value: RedditMedia;
+    let ok = false;
+    const url = redditPostJsonUrl(plan.postId);
+    try {
+      if (!this.fetchJson) throw new Error("no JSON client");
+      await this.limiter.wait(url, INTERACTIVE);
+      const res = await this.fetchJson(url);
+      const parsed = res.status === 200 ? parseRedditPost(res.body, plan) : null;
+      ok = !!parsed;
+      value =
+        parsed ??
+        fallbackMedia(
+          plan,
+          res.status === 429 ? "Reddit is limiting requests right now." : res.status !== 200 ? `Reddit refused the request (${res.status}).` : "Reddit's answer didn't include the pictures.",
+        );
+    } catch (err) {
+      value = fallbackMedia(plan, err instanceof FetchError ? `Couldn't reach Reddit (${err.message}).` : "Couldn't reach Reddit.");
+    }
+    this.mediaCache.delete(itemId);
+    this.mediaCache.set(itemId, { until: this.now() + (ok ? MEDIA_TTL_MS : MEDIA_RETRY_MS), value });
+    while (this.mediaCache.size > MEDIA_KEPT) this.mediaCache.delete(this.mediaCache.keys().next().value!);
+    return value;
   }
 
   /**

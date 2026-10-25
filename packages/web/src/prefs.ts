@@ -15,6 +15,8 @@ export interface DevicePrefs {
   threadStart: "first" | "last";
   /** Podcast playback speed (D-093). */
   playbackRate: number;
+  /** Reddit video playback speed (D-117), separate: a clip and a podcast want different speeds. */
+  videoRate: number;
   /** Light or dark, or the device's own setting (D-106). */
   theme: Theme;
 }
@@ -31,7 +33,7 @@ export function applyTheme(theme: Theme) {
 export const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
 const KEY = "fa.prefs";
-const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first", playbackRate: 1, theme: "auto" };
+const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first", playbackRate: 1, videoRate: 1, theme: "auto" };
 const EVENT = "fa-prefs";
 
 /** Width at which "auto" switches to side by side, and the narrowest width "split" is used at. */
@@ -47,6 +49,7 @@ export function readPrefs(): DevicePrefs {
       hiddenSources: Array.isArray(raw.hiddenSources) ? raw.hiddenSources.filter((id): id is string => typeof id === "string") : [],
       threadStart: raw.threadStart === "last" ? "last" : "first",
       playbackRate: PLAYBACK_RATES.includes(raw.playbackRate as number) ? (raw.playbackRate as number) : DEFAULTS.playbackRate,
+      videoRate: PLAYBACK_RATES.includes(raw.videoRate as number) ? (raw.videoRate as number) : DEFAULTS.videoRate,
       theme: raw.theme === "light" || raw.theme === "dark" ? raw.theme : "auto",
     };
   } catch {

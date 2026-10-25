@@ -220,7 +220,51 @@ export interface ReaderContent {
   pagination?: ReaderPagination | null;
   /** The story's audio: from the feed (D-093) or found on its page (D-096). */
   audio?: ItemAudio | null;
+  /**
+   * A Reddit video or gallery post (D-117): the reader shows a player or the pictures, loaded
+   * from /api/items/:id/media. Absent for everything else.
+   */
+  redditMedia?: RedditMediaHint | null;
 }
+
+export interface RedditMediaHint {
+  kind: "video" | "gallery";
+  /** The feed's preview picture: the video's poster, or a small crop of the gallery's first picture. */
+  poster: string | null;
+}
+
+/** One picture of a Reddit gallery; animated ones are also an mp4 that loops. */
+export interface RedditGalleryImage {
+  url: string;
+  width: number | null;
+  height: number | null;
+  caption: string | null;
+  /** Animated pictures: the same as a silent looping video. */
+  mp4: string | null;
+}
+
+export type RedditMedia =
+  | {
+      kind: "video";
+      /** HLS stream (with sound): Safari and Android play it themselves, other browsers through hls.js. */
+      hlsUrl: string;
+      /** A single mp4 without sound, if the stream doesn't load. */
+      mp4Url: string | null;
+      poster: string | null;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+      /** Read from the post (true), or only guessed from its address because Reddit didn't answer. */
+      fromPost: boolean;
+      notice: string | null;
+    }
+  | {
+      kind: "gallery";
+      images: RedditGalleryImage[];
+      /** False when only the first picture is known (Reddit didn't answer). */
+      complete: boolean;
+      notice: string | null;
+    };
 
 export interface ReaderPagination {
   page: number;
