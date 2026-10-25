@@ -6,8 +6,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
-Several accounts. Database migration 0015 runs by itself on start: your account becomes the admin
-and keeps its sources, tags, and read and saved items.
+## [1.11.0] - 2026-10-25
+
+Accounts for other people, and a podcast player that shows in dark mode. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.11.0`.
+Database migration 0015 runs by itself on start: your account becomes the admin and keeps its
+sources, tags, and read and saved items.
 
 ### Added
 - **Accounts** (D-114): invite people from Settings → Accounts with a one-time link (7 days); they choose their own username and password. Each account has its own sources, tags, and read and saved items. As the admin you can make a password reset link, turn off someone's two-factor login (lost phone), turn an account off, or delete it. You see each account's name, how many sources it follows and when it was last active, not what it follows or reads.
