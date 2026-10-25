@@ -15,5 +15,8 @@
     "typecheck": "npm run build -w @fa/shared && npm run typecheck -w @fa/server && npm run typecheck -w @fa/web",
     "test": "npm run build -w @fa/shared && npm test -w @fa/server",
     "start": "npm start -w @fa/server"
+  },
+  "overrides": {
+    "ip-address": "10.7.4"
   }
 }
