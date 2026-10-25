@@ -1,7 +1,7 @@
 // Following one forum thread (D-084): its newest page is read on each check, posts the app hasn't
 // seen are kept, and the thread has a single card that says how many new replies there are.
 import { JSDOM } from "jsdom";
-import { parseForumThread, type ForumThreadPage } from "../reader/extract.js";
+import { leanPageHtml, parseForumThread, type ForumThreadPage } from "../reader/extract.js";
 
 const THREAD_PATH = /^(\/threads\/[^/]+\.\d+)(?:\/|$)/;
 
@@ -74,7 +74,7 @@ export function threadPagerFor(url: string | null, feedUrl: string | null): Thre
 
 /** A fetched thread page, parsed; null when the page has no posts we can read. */
 export function parseThreadPage(html: string, pageUrl: string): ForumThreadPage | null {
-  const dom = new JSDOM(html.slice(0, 3_000_000), { url: pageUrl });
+  const dom = new JSDOM(leanPageHtml(html), { url: pageUrl });
   try {
     return parseForumThread(dom.window.document, pageUrl);
   } finally {

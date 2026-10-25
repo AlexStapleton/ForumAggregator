@@ -10,6 +10,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 - YouTube channels stopped updating: YouTube's channel feeds have been answering "not found" or "error" on and off. The app now retries within a check, reads the channel through the YouTube API when you have a key (Settings → YouTube comments), and no longer pauses channels over it; channels already paused are resumed (database migration 0012) (D-105).
 - Edit source no longer runs off the side of a phone screen (D-106).
 
+### Changed
+- Faster: big pages (forum threads, articles) are read on a separate thread, so the app keeps answering while a page is read, and are read about a third faster; card pictures from NASA and similar sites download at card size (about 20 × smaller); followed-thread checks and cards load less from the database. See `docs/PERFORMANCE.md` (D-107).
+
 ### Added
 - Settings → This device → Appearance: Automatic, Dark or Light, so the app can stay dark whatever the phone's setting (D-106).
 

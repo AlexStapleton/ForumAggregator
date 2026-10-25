@@ -53,3 +53,44 @@ Cards are memoised (only changed cards re-render) and off-screen cards skip layo
 - The reader's HTML cache holds at most 200 articles or ~16 MB of text.
 - Nginx Proxy Manager doesn't need its own compression for this app; responses arrive already
   compressed (`Vary: Accept-Encoding` is set).
+
+## Second pass (2026-10-25, D-107)
+
+The list and article calls above were re-measured on the same data and are unchanged
+(items 1.6–2.1 ms, sources 9 ms, tags 1.7 ms, a stored article 1.5 ms). This pass looked at what
+was added since: forum threads, followed threads, page reading and card pictures. Page timings use
+the user's saved pages (Overclock.net 820 kB, Bike Forums 790 kB, NPR 250 kB), read locally.
+
+### Reading forum pages
+
+| What | Before | After | Why |
+|---|---|---|---|
+| Reading an Overclock.net thread page (build machine) | 466 ms | **316 ms** | Scripts, styles, inline SVG and comments (40 % of that page) are dropped before the page is built; extraction never used them |
+| Slowest answer to any other request while a thread page is read | 413 ms | **69 ms** | Pages are read on a worker thread, so the server keeps answering (on a Pi the "before" is seconds) |
+
+The worker reads one page at a time, gives up on a page after 30 s, and is replaced every 500
+pages. `FA_PAGE_WORKER=0` reads pages in-process instead (an escape hatch). Tests run in-process.
+
+**Memory:** a first benchmark looked like a leak (memory grew ~45 MB per page read). It was the
+benchmark: it read pages back-to-back without letting Node's event loop turn, and jsdom frees a
+closed page only after it does. With the loop turning, as in the server, ten Overclock reads leave
+memory flat (44 → 52 MB).
+
+### Followed threads
+
+- Each check loaded the text of every stored post (up to 300) to compare with the page just read;
+  now only the posts on that page.
+- The card's "Earlier in the thread" loaded every earlier post's text to show three; now IDs
+  first, then those three.
+
+### Card pictures
+
+Pictures taken from an article's first image can be full-size: NASA's were 0.1–0.9 MB each,
+shown at 128 × 72. Where the image server can resize (the address already asks for a width,
+or NASA's `/dynamicimage/`), cards ask for 400 px: **17–44 kB** each, about 20 × less. Ten NASA
+cards: ~5 MB → ~0.3 MB.
+
+### Checked, no change needed
+
+- Web app: 72.6 kB compressed (70 kB at the first pass); React is most of it.
+- Feeds: NASA's 530 kB Earth feed parses in 6 ms and answers "not modified" (ETag) when unchanged.

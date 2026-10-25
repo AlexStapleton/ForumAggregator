@@ -67,9 +67,18 @@ export function pageAudio(doc: Document, pageUrl: string): ItemAudio | null {
   return { url, durationSeconds: /(^|\.)npr\.org$/.test(new URL(url).hostname) && Number.isInteger(d) && d > 0 ? d : null };
 }
 
+/**
+ * A page without what extraction never uses (D-107): scripts, styles, inline SVG icons and
+ * comments, often 20–40 % of a forum page, so it's quicker to build. <noscript> stays: reader mode
+ * uses the images in it.
+ */
+export function leanPageHtml(html: string): string {
+  return html.slice(0, 3_000_000).replace(/<script\b[\s\S]*?<\/script\s*>|<style\b[\s\S]*?<\/style\s*>|<svg\b[\s\S]*?<\/svg\s*>|<!--[\s\S]*?-->/gi, "");
+}
+
 export function extractWithSelectors(pageHtml: string, pageUrl: string, selectors: ReaderSelectors): SelectorExtraction {
   // Scripts never run (jsdom's default) and no subresources are loaded.
-  const dom = new JSDOM(pageHtml.slice(0, 3_000_000), { url: pageUrl });
+  const dom = new JSDOM(leanPageHtml(pageHtml), { url: pageUrl });
   try {
     const doc = dom.window.document;
     // Many sites lazy-load images with data-src; make them real before extraction.

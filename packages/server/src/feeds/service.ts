@@ -10,7 +10,8 @@ import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "./
 import type { FlareSolverr } from "./flaresolverr.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
-import { latestPageUrl, parseThreadPage, postNumber, threadAddress, threadPageUrl, threadSummary } from "./thread.js";
+import { pageParser } from "../reader/pageParser.js";
+import { latestPageUrl, postNumber, threadAddress, threadPageUrl, threadSummary } from "./thread.js";
 import type { ForumThreadPage } from "../reader/extract.js";
 import { htmlToText } from "./text.js";
 import { nextCheck } from "./schedule.js";
@@ -299,7 +300,7 @@ export class FeedService {
     };
     const latest = await get(latestPageUrl(address));
     const lastUrl = latest.url.replace(/#.*$/, "");
-    const page = parseThreadPage(latest.body, lastUrl);
+    const page = await pageParser.thread(latest.body, lastUrl);
     if (!page) {
       const message = "Couldn't find any posts on that page. It may not be a XenForo thread, or the forum shows it only to members.";
       if (interactive) throw new SourceError("not_a_thread", message, 422);
@@ -312,7 +313,7 @@ export class FeedService {
       const oldest = Math.min(...current.posts.map((p) => (p.id ? postNumber(p.id) : Infinity)));
       if (oldest <= knownMax) break; // this page already reaches posts we have
       const previous = await get(threadPageUrl(address, current.page - 1));
-      const parsed = parseThreadPage(previous.body, previous.url);
+      const parsed = await pageParser.thread(previous.body, previous.url);
       if (!parsed) break;
       pages.unshift(parsed);
       current = parsed;
@@ -323,11 +324,16 @@ export class FeedService {
   /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
   private async ingestThread(sourceId: string, pages: ForumThreadPage[], lastUrl: string, firstFetch: boolean): Promise<number> {
     const now = this.now();
-    const known = await this.db.kysely.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).execute();
+    const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
     const knownIds = new Set(known.map((k) => k.post_id));
+    // Full rows only for the stored posts on the pages just read (D-107): not all 300 bodies each check.
+    const onPages = pages.flatMap((p) => p.posts.map((post) => post.id)).filter((id): id is string => !!id && knownIds.has(id));
+    const storedRows = onPages.length
+      ? await this.db.kysely.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).where("post_id", "in", onPages).execute()
+      : [];
     // Posts already stored that are on the pages read: keep them as the forum shows them now (edits,
     // and dates misread before D-102 from Overclock.net's member box).
-    const stored = new Map(known.map((k) => [k.post_id, k]));
+    const stored = new Map(storedRows.map((k) => [k.post_id, k]));
     let repaired = false;
     for (const post of pages.flatMap((p) => p.posts)) {
       const was = post.id ? stored.get(post.id) : undefined;
