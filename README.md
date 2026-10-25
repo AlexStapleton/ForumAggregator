@@ -21,6 +21,11 @@ Current release: **1.10.0** ([changelog](CHANGELOG.md)).
 - **Sites behind a Cloudflare check**, through your own
   [FlareSolverr](docs/DEPLOY.md#forums-behind-a-cloudflare-check-flaresolverr-optional) if you run one.
 
+**Share it**
+- **Accounts for family and friends:** invite someone with a one-time link; they get their own
+  sources, tags, and read and saved items. A site several of you follow is checked once.
+  [More](docs/DEPLOY.md#accounts-for-other-people).
+
 **Reading**
 - A built-in reader shows the full article, not just the feed's teaser, without the site's menus
   and sidebars.

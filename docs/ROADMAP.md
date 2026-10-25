@@ -12,6 +12,7 @@ _Last updated: 2026-10-25 (v1.10.0; the milestone sections below are the history
 |---|---|
 | **Usable?** | **Yes**, daily: RSS/Atom feeds and websites (incl. WordPress sections), podcasts, YouTube (with an API-key fallback when YouTube's feeds fail), Reddit (public feeds, rate-limited), XenForo and vBulletin forums (boards, followed threads, paging), sites behind Cloudflare via FlareSolverr |
 | **Current release** | **v1.10.0** (2026-10-25), images `alexstapo/forumaggregator:1.10.0`. What each release added: [CHANGELOG](../CHANGELOG.md) |
+| **Unreleased** | Accounts for other people (an admin and invited accounts; a site several follow is fetched once, D-114/D-115) and the podcast player's own controls (D-113) |
 | **Next** | Driven by use: new sites as they come up. Ideas noted: following vBulletin threads with a reply card, a Reddit minimum interval and a requests-per-hour note in Settings → Checking |
 | **Blocked on** | Nothing |
 

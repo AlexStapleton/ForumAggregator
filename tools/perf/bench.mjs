@@ -5,7 +5,8 @@ const label = process.argv[2] ?? "";
 const h = { "x-fa-request": "1", "content-type": "application/json" };
 let r = await fetch(`${base}/api/auth/setup`, { method: "POST", headers: h, body: JSON.stringify({ setupCode: "TESTCODE-1234", username: "alex", password: "correct horse battery" }) });
 if (r.status !== 200 && r.status !== 201) r = await fetch(`${base}/api/auth/login`, { method: "POST", headers: h, body: JSON.stringify({ username: "alex", password: "correct horse battery" }) });
-const cookie = r.headers.get("set-cookie").split(";")[0];
+// The session cookie (login also sets the known-device cookie, D-111).
+const cookie = r.headers.getSetCookie().find((c) => c.startsWith("fa_session=")).split(";")[0];
 const enc = process.env.ENC ?? "identity";
 const get = (p) => fetch(base + p, { headers: { cookie, "accept-encoding": enc } });
 const sources = await (await get("/api/sources")).json();

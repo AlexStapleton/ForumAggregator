@@ -3,6 +3,7 @@ import type { AuthStatus } from "@fa/shared";
 import { api, errorMessage } from "./api";
 import { Alert } from "./components";
 import { FeedPage } from "./pages/FeedPage";
+import { LinkPage, linkFromHash } from "./pages/LinkPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SecurityPage } from "./pages/SecurityPage";
 import { SetupPage } from "./pages/SetupPage";
@@ -20,6 +21,8 @@ export function App() {
   const [status, setStatus] = useState<AuthStatus>();
   const [loadError, setLoadError] = useState<string>();
   const [route, setRoute] = useState<Route>(routeFromHash);
+  // An invitation or password-reset link (D-114), shown whether or not someone is logged in here.
+  const [link, setLink] = useState(() => linkFromHash(location.hash));
 
   const refresh = useCallback(async () => {
     try {
@@ -32,7 +35,10 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    const onHash = () => setRoute(routeFromHash());
+    const onHash = () => {
+      setRoute(routeFromHash());
+      setLink(linkFromHash(location.hash));
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, [refresh]);
@@ -43,6 +49,18 @@ export function App() {
         <Alert>{loadError}</Alert>
         <button onClick={() => void refresh()}>Retry</button>
       </main>
+    );
+  }
+  if (link) {
+    return (
+      <LinkPage
+        token={link.token}
+        onDone={() => {
+          setLink(null);
+          setRoute("feed");
+          void refresh();
+        }}
+      />
     );
   }
   if (!status) return <main className="auth-page" aria-busy="true" />;

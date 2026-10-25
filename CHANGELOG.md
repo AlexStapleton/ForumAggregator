@@ -6,6 +6,18 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+Several accounts. Database migration 0015 runs by itself on start: your account becomes the admin
+and keeps its sources, tags, and read and saved items.
+
+### Added
+- **Accounts** (D-114): invite people from Settings → Accounts with a one-time link (7 days); they choose their own username and password. Each account has its own sources, tags, and read and saved items. As the admin you can make a password reset link, turn off someone's two-factor login (lost phone), turn an account off, or delete it. You see each account's name, how many sources it follows and when it was last active, not what it follows or reads.
+- A site several accounts follow is fetched once for all of them (D-115). Each follower keeps their own name for it, tags, pause switch and, for a followed thread, their own "new replies". How it's checked (interval, keep items, reader selectors, FlareSolverr) is shared: only the admin, or its only follower, can change it.
+
+### Changed
+- Settings → Checking, FlareSolverr and YouTube comments are the admin's; every account's sources use them.
+- Retention never deletes an item someone has saved.
+- Performance tools: the benchmark logs in with the session cookie (it broke when 1.10 added a second cookie); the seed data has an account.
+
 ### Fixed
 - The podcast player's buttons were invisible in dark mode on some phone browsers, which draw their built-in audio controls with dark icons on no background. The player now has its own controls in the app's colours: play/pause, back 15 s, forward 30 s, a position slider and the time, plus a link to the audio file when it won't play (D-113).
 

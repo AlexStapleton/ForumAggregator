@@ -28,6 +28,8 @@ export interface AuthStatus {
   authenticated: boolean;
   authMode: AuthMode;
   username?: string;
+  /** admin: manages accounts and the server-wide settings (D-114). */
+  role?: "admin" | "user";
   totpEnabled?: boolean;
   /** How the current request was authenticated. */
   via?: "session" | "proxy";
@@ -116,6 +118,11 @@ export interface Source {
   removeSelector: string | null;
   /** Fetched through the user's FlareSolverr, for sites behind a Cloudflare check (D-080). */
   viaFlareSolverr: boolean;
+  /**
+   * Whether this account may change how the source is checked and read (interval, keep items,
+   * selectors, FlareSolverr): the admin, or its only follower (D-115). Name, tags, pause: always.
+   */
+  canEditShared: boolean;
   tags: string[];
   unreadCount: number;
   itemCount: number;
@@ -284,4 +291,44 @@ export interface ReaderComments {
   notice: string | null;
   /** Where to read the full discussion. */
   discussionUrl: string | null;
+}
+
+/** An account, as the admin sees it in Settings → Accounts (D-114): nothing it follows or reads. */
+export interface AccountView {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+  disabled: boolean;
+  totpEnabled: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+  /** Last request from any of its signed-in devices. */
+  lastSeenAt: number | null;
+  sourceCount: number;
+  /** The admin's own account. */
+  you: boolean;
+}
+
+/** A one-time link not used yet: an invitation, or a password reset. */
+export interface InviteView {
+  id: string;
+  kind: "invite" | "reset";
+  /** Reset: whose password. */
+  username: string | null;
+  note: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** A link just made. The token is shown once; only its hash is kept. */
+export interface InviteCreated {
+  token: string;
+  invite: InviteView;
+}
+
+/** What an invitation or reset link opens (before logging in). */
+export interface InviteLinkInfo {
+  kind: "invite" | "reset";
+  username: string | null;
+  expiresAt: number;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { FlareSolverrStatus, OpmlImportResult, ReaderPreview, Source } from "@fa/shared";
+import type { OpmlImportResult, ReaderPreview, Source } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { KIND_LABEL } from "../kinds";
 import { Alert, Field } from "../components";
@@ -34,11 +34,11 @@ export function SourcesPage() {
 
   useEffect(() => {
     void load();
-    api<{ polling: { intervalMinutes: number; threadIntervalMinutes: number }; retention: { keepDays: number } }>("GET", "/api/config")
-      .then((c) => setDefaults({ intervalMinutes: c.polling.intervalMinutes, threadIntervalMinutes: c.polling.threadIntervalMinutes, keepDays: c.retention.keepDays }))
-      .catch(() => undefined);
-    api<FlareSolverrStatus>("GET", "/api/settings/flaresolverr")
-      .then((f) => setFlareOn(!!f.url))
+    api<{ polling: { intervalMinutes: number; threadIntervalMinutes: number }; retention: { keepDays: number }; flaresolverr: boolean }>("GET", "/api/config")
+      .then((c) => {
+        setDefaults({ intervalMinutes: c.polling.intervalMinutes, threadIntervalMinutes: c.polling.threadIntervalMinutes, keepDays: c.retention.keepDays });
+        setFlareOn(c.flaresolverr);
+      })
       .catch(() => undefined);
   }, [load]);
 
@@ -388,11 +388,18 @@ function EditSource({
         hint={
           source.kind === "thread"
             ? "A followed thread keeps its address. To follow another thread, add it as a new source."
-            : "Changing it re-checks the new address before saving. Existing items are kept."
+            : source.canEditShared
+              ? "Changing it re-checks the new address before saving. Existing items are kept."
+              : "Changing it re-checks the new address, then you follow that instead; the others keep this one."
         }
         autoComplete="url"
       />
       <Field label="Tags" name="tags" value={tags} onChange={setTags} hint="Comma-separated. Changes apply to existing items too." autoComplete="off" />
+      {/* How it's checked and read is shared by everyone following it (D-115). */}
+      <fieldset className="plain" disabled={!source.canEditShared}>
+      {!source.canEditShared && (
+        <p className="muted small">Other accounts follow this source too, so only the admin can change how it's checked and read. Its name, tags and pausing it are yours.</p>
+      )}
       <div className="field">
         <label htmlFor="f-interval">Check for new items</label>
         <select id="f-interval" value={pollInterval ?? ""} onChange={(e) => setPollInterval(e.target.value === "" ? null : Number(e.target.value))}>
@@ -435,6 +442,7 @@ function EditSource({
           fields={fields}
         />
       )}
+      </fieldset>
       <div className="row">
         <button type="submit" disabled={saving}>
           {saving ? "Saving…" : "Save"}

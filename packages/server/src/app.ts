@@ -9,6 +9,7 @@ import compress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
 import zlib from "node:zlib";
 import { CSRF_HEADER, type VersionInfo } from "@fa/shared";
+import { registerAdminRoutes } from "./admin.js";
 import { registerAuth } from "./auth/routes.js";
 import { AuthService } from "./auth/service.js";
 import type { AppConfig } from "./config.js";
@@ -131,6 +132,7 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const items = new ItemService(db, now);
   const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson, flare);
   const poller = new Poller(feeds, fastify.log);
+  registerAdminRoutes(fastify, auth, feeds);
   registerFeedRoutes(fastify, feeds, items, reader);
   registerSettingsRoutes(fastify, settings, sharedJson, flare, feeds);
   // Settings → Checking overrides config.yaml's intervals (D-095).
@@ -152,10 +154,15 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
     database: db.kind,
   }));
 
-  // Read-only view of the effective config: config.yaml with Settings → Checking applied.
+  // Read-only view of the effective config: config.yaml with Settings → Checking applied, and
+  // whether the admin has set up FlareSolverr (every account may use it, D-114).
   fastify.get("/api/config", async () => {
     const c = feeds.checking();
-    return { ...config, polling: { ...config.polling, intervalMinutes: c.intervalMinutes, threadIntervalMinutes: c.threadIntervalMinutes, maxPagesPerPoll: c.threadPagesPerCheck } };
+    return {
+      ...config,
+      polling: { ...config.polling, intervalMinutes: c.intervalMinutes, threadIntervalMinutes: c.threadIntervalMinutes, maxPagesPerPoll: c.threadPagesPerCheck },
+      flaresolverr: !!(await settings.flaresolverrUrl()),
+    };
   });
 
   await registerWebUi(fastify, env);
