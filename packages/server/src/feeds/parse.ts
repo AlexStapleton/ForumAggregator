@@ -203,7 +203,30 @@ function atomLink(links: unknown, base: string | undefined): string | null {
 function finish(item: Omit<ParsedItem, "guid"> & { guid: string | null }): ParsedItem | null {
   const guid = item.guid ?? item.url ?? (item.title ? `${item.title}|${item.publishedAt ?? ""}` : null);
   if (!guid) return null;
-  return { ...item, guid: guid.slice(0, 1000), title: item.title || "(untitled)" };
+  return { ...item, guid: guid.slice(0, 1000), title: item.title || "(untitled)", imageUrl: item.imageUrl && cardSized(item.imageUrl) };
+}
+
+/** Card pictures are shown at most ~260 px wide (on 2× screens); 400 is plenty. */
+const CARD_IMAGE_WIDTH = 400;
+
+/**
+ * A card picture at card size where the image server can resize (D-107): an address that already
+ * asks for a width ("?w=2048", NASA's and WordPress.com's image servers) asks for 400 instead, and
+ * NASA's /dynamicimage/ gets one. NASA's 0.1–0.9 MB pictures become 17–44 kB. Others unchanged.
+ */
+export function cardSized(url: string): string {
+  try {
+    const u = new URL(url);
+    const w = Number(u.searchParams.get("w"));
+    if (w > CARD_IMAGE_WIDTH || (!u.searchParams.has("w") && u.pathname.includes("/dynamicimage/"))) {
+      u.searchParams.set("w", String(CARD_IMAGE_WIDTH));
+      u.searchParams.delete("h");
+      return u.href;
+    }
+  } catch {
+    // not a URL: unchanged
+  }
+  return url;
 }
 
 /** Parses feed XML. `feedUrl` resolves relative links. Throws FeedParseError if it isn't a feed. */

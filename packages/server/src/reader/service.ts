@@ -14,7 +14,8 @@ import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
 import { htmlToText } from "../feeds/text.js";
-import { cleanFeedHtml, extractWithSelectors, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
+import { pageParser } from "./pageParser.js";
+import { cleanFeedHtml, pageNote, polishArticle, renderForumPosts, youtubeVideoId, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { layoutRedditPost } from "./redditLayout.js";
 import { sanitizeHtml } from "./sanitize.js";
 import type { SettingsService } from "../settings.js";
@@ -367,9 +368,15 @@ export class ReaderService {
     // The posts just before the new ones, for context (D-102): what the new replies answer or quote.
     let context = "";
     if (batchFrom !== null && shown.length === rows.length) {
-      const earlier = (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId).where("fetched_at", "<", batchFrom).execute())
-        .sort((a, b) => Number(a.post_id) - Number(b.post_id))
+      // IDs first, then the bodies of just those few (D-107).
+      const ids = (await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).where("fetched_at", "<", batchFrom).execute())
+        .map((r) => r.post_id)
+        .sort((a, b) => Number(a) - Number(b))
         .slice(-THREAD_CARD_CONTEXT_POSTS);
+      const earlier = ids.length
+        ? (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId).where("post_id", "in", ids).execute())
+            .sort((a, b) => Number(a.post_id) - Number(b.post_id))
+        : [];
       if (earlier.length) context = `<div class="thread-context"><p class="thread-context-label">Earlier in the thread</p>${renderForumPosts(earlier.map(asPost))}</div><p class="thread-new-label">New replies</p>`;
     }
     const html = context + renderForumPosts(shown.map(asPost));
@@ -412,7 +419,8 @@ export class ReaderService {
     const res = await this.fetcherFor(viaFlareSolverr)(url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
     if (res.kind !== "ok") throw new Error("The site answered without content.");
     if (!/html/i.test(res.contentType)) throw new Error("The link isn't a web page (it may be a file or video).");
-    const result = extractWithSelectors(res.body, res.url, selectors);
+    // On the page worker: a big page takes long enough to stall the server otherwise (D-107).
+    const result = await pageParser.extract(res.body, res.url, selectors);
     if (!result.article) {
       if (selectors.article) {
         throw new SelectorMiss(

@@ -20,8 +20,9 @@
   line-height: 1.5;
 }
 
+/* Dark: the device's setting, unless Settings → This device → Appearance says otherwise (D-106). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0d1117;
     --surface: #161b22;
     --text: #e6edf3;
@@ -38,6 +39,24 @@
     --info-text: #a5d6ff;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --text: #e6edf3;
+  --muted: #9198a1;
+  --border: #30363d;
+  --accent: #4493f8;
+  --accent-text: #0d1117;
+  --danger: #f85149;
+  --ok-bg: #12261e;
+  --ok-text: #56d364;
+  --err-bg: #2d1214;
+  --err-text: #ff9492;
+  --info-bg: #0c2d6b;
+  --info-text: #a5d6ff;
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); }
@@ -82,6 +101,9 @@ code { font-size: 0.9em; }
 
 form { display: grid; gap: 0.9rem; }
 .field { display: grid; gap: 0.3rem; }
+/* Grid items are as wide as their content by default: a select with a long option ("Default (every
+   30 minutes, Settings → Checking)") widened the whole Edit source form past a phone's screen. */
+form > *, .field > * { min-width: 0; }
 label { font-weight: 500; font-size: 0.95rem; }
 input {
   font: inherit; color: var(--text); background: var(--bg);
@@ -215,6 +237,7 @@ a.button.secondary { background: transparent; color: var(--text); border: 1px so
 .field select {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 0.55rem 0.6rem; min-height: 44px;
+  width: 100%; max-width: 100%; text-overflow: ellipsis;
 }
 .edit-source h2 { margin-bottom: 0; }
 

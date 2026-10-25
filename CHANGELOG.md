@@ -6,6 +6,22 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-25
+
+YouTube channels keep updating when YouTube's feeds fail, an Appearance setting, Edit source fits
+phones, and a second optimisation pass. Upgrade with `docker compose pull && docker compose up -d`,
+or pin `alexstapo/forumaggregator:1.9.0`. Database migration 0012 (data only) runs by itself on start.
+
+### Fixed
+- YouTube channels stopped updating: YouTube's channel feeds have been answering "not found" or "error" on and off. The app now retries within a check, reads the channel through the YouTube API when you have a key (Settings → YouTube comments), and no longer pauses channels over it; channels already paused are resumed (database migration 0012) (D-105).
+- Edit source no longer runs off the side of a phone screen (D-106).
+
+### Changed
+- Faster: big pages (forum threads, articles) are read on a separate thread, so the app keeps answering while a page is read, and are read about a third faster; card pictures from NASA and similar sites download at card size (about 20 × smaller); followed-thread checks and cards load less from the database. See `docs/PERFORMANCE.md` (D-107).
+
+### Added
+- Settings → This device → Appearance: Automatic, Dark or Light, so the app can stay dark whatever the phone's setting (D-106).
+
 ## [1.8.0] - 2026-10-25
 
 Overclock.net threads fixed, context on followed-thread cards, WordPress sections (e.g. NASA Earth),

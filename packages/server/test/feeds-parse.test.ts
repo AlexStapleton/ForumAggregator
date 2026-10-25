@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { discoverFeeds } from "../src/feeds/discover.js";
-import { FeedParseError, looksLikeFeed, parseDuration, parseFeed } from "../src/feeds/parse.js";
+import { cardSized, FeedParseError, looksLikeFeed, parseDuration, parseFeed } from "../src/feeds/parse.js";
 import { htmlToText, safeHttpUrl, truncate } from "../src/feeds/text.js";
 import { planReddit } from "../src/feeds/reddit.js";
 import { channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "../src/feeds/youtube.js";
@@ -143,12 +143,24 @@ describe("parseFeed", () => {
       <item><guid>2</guid><title>B</title><link>http://plain.example/b</link><description><![CDATA[<img src="/only-http.jpg">]]></description></item>
       <item><guid>3</guid><title>C</title><media:thumbnail xmlns:media="http://search.yahoo.com/mrss/" url="https://img.example/thumb.jpg"/><content:encoded><![CDATA[<img src="https://site.example/c.jpg">]]></content:encoded></item></channel></rss>`;
     const [a, b, c] = parseFeed(xml, "https://site.example/feed").items;
-    expect(a!.imageUrl).toBe("https://site.example/img/frame.jpg?w=600&h=400");
+    expect(a!.imageUrl).toBe("https://site.example/img/frame.jpg?w=400"); // card-sized (D-107)
     expect(b!.imageUrl).toBeNull(); // http only: the CSP wouldn't show it
     expect(c!.imageUrl).toBe("https://img.example/thumb.jpg"); // the feed's own picture wins
     const wp = parseFeed(`<?xml version="1.0"?><rss><channel><title>T</title><item><guid>1</guid><title>El Niño</title>
       <description><![CDATA[A 35-year record. <p>The post <a href="https://x.example/">El Niño Then and Now</a> appeared first on <a href="https://x.example/">NASA Science</a>.</p>]]></description></item></channel></rss>`).items[0]!;
     expect(wp.summary).toBe("A 35-year record.");
+  });
+
+  it("asks resizing image servers for card-sized pictures (D-107)", () => {
+    expect(cardSized("https://assets.science.nasa.gov/dynamicimage/a/b.jpg?w=2048&h=1460&fit=clip&crop=faces%2Cfocalpoint")).toBe(
+      "https://assets.science.nasa.gov/dynamicimage/a/b.jpg?w=400&fit=clip&crop=faces%2Cfocalpoint",
+    );
+    expect(cardSized("https://assets.science.nasa.gov/dynamicimage/a/el-ni%C3%B1o.jpg")).toBe("https://assets.science.nasa.gov/dynamicimage/a/el-ni%C3%B1o.jpg?w=400");
+    expect(cardSized("https://i0.wp.com/site.example/x.jpg?w=1200&ssl=1")).toBe("https://i0.wp.com/site.example/x.jpg?w=400&ssl=1");
+    // Already small, or no resizer: unchanged.
+    expect(cardSized("https://img.example/x.jpg?w=300")).toBe("https://img.example/x.jpg?w=300");
+    expect(cardSized("https://cdn.factorio.com/assets/blog-sync/fff-449.png")).toBe("https://cdn.factorio.com/assets/blog-sync/fff-449.png");
+    expect(cardSized("https://i1.ytimg.com/vi/abc/hqdefault.jpg")).toBe("https://i1.ytimg.com/vi/abc/hqdefault.jpg");
   });
 
   it("rejects non-feeds and entity bombs", () => {

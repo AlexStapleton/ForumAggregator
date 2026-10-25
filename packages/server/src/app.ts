@@ -124,7 +124,10 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const settings = new SettingsService(db, box, fastify.log);
   const sharedJson = fetchJson ?? httpJson;
   const flare = new FlareSolverr(() => settings.flaresolverrUrl(), postJson ?? httpPostJson, sharedJson, now);
-  const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log, flare);
+  const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log, flare, {
+    apiKey: () => settings.youtubeApiKey(),
+    fetchJson: sharedJson,
+  });
   const items = new ItemService(db, now);
   const reader = new ReaderService(db, sharedFetcher, sharedLimiter, now, settings, sharedJson, flare);
   const poller = new Poller(feeds, fastify.log);

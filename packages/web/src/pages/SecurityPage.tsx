@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { AuthStatus, CheckingSettings, CheckingValues, FlareSolverrStatus, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
-import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout } from "../prefs";
+import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout, type Theme } from "../prefs";
 
 export function SecurityPage({ status, onChange }: { status: AuthStatus; onChange: () => void }) {
   return (
@@ -29,6 +29,12 @@ const LAYOUTS: Array<{ value: ReaderLayout; label: string; hint: string }> = [
 ];
 
 /** Layout preferences stored in this browser only, so phone and desktop can differ. */
+const THEMES: Array<{ value: Theme; label: string; hint: string }> = [
+  { value: "auto", label: "Automatic", hint: "Follows this device's light or dark setting." },
+  { value: "dark", label: "Dark", hint: "Always dark on this device." },
+  { value: "light", label: "Light", hint: "Always light on this device." },
+];
+
 function ThisDevice() {
   const [prefs, setPrefs] = usePrefs();
   return (
@@ -43,6 +49,18 @@ function ThisDevice() {
             <span>
               <strong>{l.label}</strong>
               <span className="muted small block">{l.hint}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <fieldset className="choices">
+        <legend>Appearance</legend>
+        {THEMES.map((t) => (
+          <label key={t.value} className="choice">
+            <input type="radio" name="theme" value={t.value} checked={prefs.theme === t.value} onChange={() => setPrefs({ theme: t.value })} />
+            <span>
+              <strong>{t.label}</strong>
+              <span className="muted small block">{t.hint}</span>
             </span>
           </label>
         ))}

@@ -15,13 +15,23 @@ export interface DevicePrefs {
   threadStart: "first" | "last";
   /** Podcast playback speed (D-093). */
   playbackRate: number;
+  /** Light or dark, or the device's own setting (D-106). */
+  theme: Theme;
+}
+
+export type Theme = "auto" | "light" | "dark";
+
+/** Sets the page's theme: data-theme on <html>, read by styles.css. */
+export function applyTheme(theme: Theme) {
+  if (theme === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", theme);
 }
 
 /** Speeds offered by the podcast player. */
 export const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
 const KEY = "fa.prefs";
-const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first", playbackRate: 1 };
+const DEFAULTS: DevicePrefs = { layout: "auto", order: "newest", hiddenSources: [], threadStart: "first", playbackRate: 1, theme: "auto" };
 const EVENT = "fa-prefs";
 
 /** Width at which "auto" switches to side by side, and the narrowest width "split" is used at. */
@@ -37,6 +47,7 @@ export function readPrefs(): DevicePrefs {
       hiddenSources: Array.isArray(raw.hiddenSources) ? raw.hiddenSources.filter((id): id is string => typeof id === "string") : [],
       threadStart: raw.threadStart === "last" ? "last" : "first",
       playbackRate: PLAYBACK_RATES.includes(raw.playbackRate as number) ? (raw.playbackRate as number) : DEFAULTS.playbackRate,
+      theme: raw.theme === "light" || raw.theme === "dark" ? raw.theme : "auto",
     };
   } catch {
     // Private mode or blocked storage: fall back to defaults.
@@ -63,6 +74,7 @@ export function usePrefs(): [DevicePrefs, (patch: Partial<DevicePrefs>) => void]
       // Not saved, but still applied for this visit.
     }
     setPrefs(next);
+    if (patch.theme) applyTheme(next.theme);
     window.dispatchEvent(new Event(EVENT));
   }, []);
   return [prefs, update];
