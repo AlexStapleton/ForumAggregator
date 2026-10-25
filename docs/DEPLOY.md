@@ -194,8 +194,13 @@ How login is protected (D-110):
 - **Wrong two-factor codes:** after 5 in a row, codes are refused for 15 minutes (then 30, 60…,
   at most a day), whatever address they come from. A code can only be used once.
 - **Wrong passwords:** after 10 in a row, each try has to wait (1 minute, doubling, at most an
-  hour). Devices that are already logged in aren't affected. There is also a limit of 10 tries
-  per 15 minutes per client address.
+  hour). There is also a limit of 10 tries per 15 minutes per client address.
+- **Someone else's wrong guesses don't lock you out** (D-111). A browser that has logged in
+  before is a *known device* (a cookie that grants nothing by itself) and its tries are counted
+  on their own. A stranger hammering the login locks only browsers the app hasn't seen, so your
+  phone and computer still log in straight away. The one case it can't cover: logging in from
+  a brand-new browser while an attack is going on. Changing your password forgets every other
+  known device.
 - **Turning two-factor on or off signs out every other device**, so a session from before can't
   outlive it.
 - **Settings → Signed-in devices** lists every logged-in device (browser, address, last use),

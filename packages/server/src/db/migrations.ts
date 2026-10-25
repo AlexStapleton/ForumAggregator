@@ -259,6 +259,27 @@ export const migrations: Record<string, Migration> = {
       }
     },
   },
+  "0014_known_devices": {
+    async up(db: Kysely<any>) {
+      // Browsers that have logged in before (D-111): their login attempts are counted on their own,
+      // so someone spamming wrong passwords or codes can't lock the owner out.
+      await db.schema
+        .createTable("known_devices")
+        .addColumn("id", "text", (c) => c.primaryKey()) // sha256 of the device cookie
+        .addColumn("user_id", "text", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("created_at", "bigint", (c) => c.notNull())
+        .addColumn("last_used_at", "bigint", (c) => c.notNull())
+        .addColumn("failed_logins", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("login_locked_until", "bigint")
+        .addColumn("totp_failures", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("totp_locked_until", "bigint")
+        .execute();
+      await db.schema.createIndex("known_devices_user_id").on("known_devices").column("user_id").execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.dropTable("known_devices").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

@@ -33,13 +33,27 @@ export interface AuthUser {
 }
 
 export type LoginResult =
-  | { ok: true; user: AuthUser }
+  /** deviceToken: set when this browser wasn't a known device yet; the route gives it the cookie. */
+  | { ok: true; user: AuthUser; deviceToken?: string }
   | { ok: false; reason: "invalid_credentials" | "totp_required" | "invalid_totp" }
   /** Too many wrong passwords or codes in a row: refused until `retryAfterMs` has passed. */
   | { ok: false; reason: "locked" | "totp_locked"; retryAfterMs: number };
 
 /** Outcome of a password- or code-protected account change. */
 export type CheckResult = { ok: true } | { ok: false; reason: "invalid_credentials" | "invalid_totp" } | { ok: false; reason: "locked" | "totp_locked"; retryAfterMs: number };
+
+/**
+ * Where wrong passwords and codes are counted (D-111): a known device (one that has logged in
+ * before) counts its own; every other browser shares the account's counters.
+ */
+interface Counters {
+  table: "users" | "known_devices";
+  id: string;
+  failed_logins: number;
+  login_locked_until: number | null;
+  totp_failures: number;
+  totp_locked_until: number | null;
+}
 
 export interface SessionInfo {
   /** The session's id (a hash of its cookie, never the cookie itself). */
@@ -81,54 +95,70 @@ export class AuthService {
     return next;
   }
 
-  /** Counts a wrong password; after FREE_PASSWORD_FAILURES, each one makes the next try wait. */
-  private async passwordFailed(row: UserRow): Promise<void> {
-    const failures = row.failed_logins + 1;
-    const lockedUntil = failures >= FREE_PASSWORD_FAILURES ? this.now() + passwordLock(failures) : null;
-    await this.db.kysely.updateTable("users").set({ failed_logins: failures, login_locked_until: lockedUntil }).where("id", "=", row.id).execute();
+  private async updateCounters(c: Counters, set: Partial<Omit<Counters, "table" | "id">>): Promise<void> {
+    Object.assign(c, set);
+    if (c.table === "users") await this.db.kysely.updateTable("users").set(set).where("id", "=", c.id).execute();
+    else await this.db.kysely.updateTable("known_devices").set(set).where("id", "=", c.id).execute();
   }
 
-  /** Counts a wrong code; every TOTP_FAILURES_PER_LOCK-th locks codes for a while. Returns the lock, if any. */
-  private async totpFailed(row: UserRow): Promise<number | null> {
-    const failures = row.totp_failures + 1;
-    const lockMs = failures % TOTP_FAILURES_PER_LOCK === 0 ? totpLock(failures) : null;
-    await this.db.kysely
-      .updateTable("users")
-      .set({ totp_failures: failures, totp_locked_until: lockMs === null ? row.totp_locked_until : this.now() + lockMs })
-      .where("id", "=", row.id)
-      .execute();
-    return lockMs;
+  /**
+   * The counters for this attempt (D-111): the known device's own if the browser presents a valid
+   * device cookie for this account, else the account's (shared by every unknown browser).
+   */
+  private async countersFor(row: UserRow, deviceToken?: string): Promise<Counters> {
+    if (deviceToken) {
+      const device = await this.db.kysely.selectFrom("known_devices").selectAll().where("id", "=", sha256(deviceToken)).where("user_id", "=", row.id).executeTakeFirst();
+      if (device) return { table: "known_devices", ...pickCounters(device) };
+    }
+    return { table: "users", ...pickCounters(row) };
   }
 
-  private async clearFailures(row: UserRow, which: { password?: boolean; totp?: boolean }): Promise<void> {
-    const set: Partial<{ failed_logins: number; login_locked_until: null; totp_failures: number; totp_locked_until: null }> = {};
-    if (which.password && (row.failed_logins || row.login_locked_until)) Object.assign(set, { failed_logins: 0, login_locked_until: null });
-    if (which.totp && (row.totp_failures || row.totp_locked_until)) Object.assign(set, { totp_failures: 0, totp_locked_until: null });
-    if (Object.keys(set).length) await this.db.kysely.updateTable("users").set(set).where("id", "=", row.id).execute();
-  }
-
-  /** Password check with the per-account limit. */
-  private async checkPassword(row: UserRow, password: string): Promise<CheckResult> {
+  /** Password check with the limit for wherever it's counted. */
+  private async checkPassword(row: UserRow, password: string, c: Counters): Promise<CheckResult> {
     const now = this.now();
-    if (row.login_locked_until && row.login_locked_until > now) return { ok: false, reason: "locked", retryAfterMs: row.login_locked_until - now };
+    if (c.login_locked_until && c.login_locked_until > now) return { ok: false, reason: "locked", retryAfterMs: c.login_locked_until - now };
     if (!(await verifyPassword(row.password_hash, password))) {
-      await this.passwordFailed(row);
+      // After FREE_PASSWORD_FAILURES in a row, each one makes the next try wait.
+      const failures = c.failed_logins + 1;
+      await this.updateCounters(c, { failed_logins: failures, login_locked_until: failures >= FREE_PASSWORD_FAILURES ? now + passwordLock(failures) : null });
       return { ok: false, reason: "invalid_credentials" };
     }
-    await this.clearFailures(row, { password: true });
+    if (c.failed_logins || c.login_locked_until) await this.updateCounters(c, { failed_logins: 0, login_locked_until: null });
     return { ok: true };
   }
 
-  /** Two-factor code check with the per-account limit; a good code is used up. */
-  private async checkCode(row: UserRow, code: string): Promise<CheckResult> {
+  /** Two-factor code check with the limit for wherever it's counted; a good code is used up. */
+  private async checkCode(row: UserRow, code: string, c: Counters): Promise<CheckResult> {
     const now = this.now();
-    if (row.totp_locked_until && row.totp_locked_until > now) return { ok: false, reason: "totp_locked", retryAfterMs: row.totp_locked_until - now };
+    if (c.totp_locked_until && c.totp_locked_until > now) return { ok: false, reason: "totp_locked", retryAfterMs: c.totp_locked_until - now };
     if (!(await this.consumeTotp(row, code))) {
-      const lockMs = await this.totpFailed(row);
+      // Every TOTP_FAILURES_PER_LOCK-th wrong code in a row locks codes for a while.
+      const failures = c.totp_failures + 1;
+      const lockMs = failures % TOTP_FAILURES_PER_LOCK === 0 ? totpLock(failures) : null;
+      await this.updateCounters(c, { totp_failures: failures, totp_locked_until: lockMs === null ? c.totp_locked_until : now + lockMs });
       return lockMs === null ? { ok: false, reason: "invalid_totp" } : { ok: false, reason: "totp_locked", retryAfterMs: lockMs };
     }
-    await this.clearFailures(row, { totp: true });
+    if (c.totp_failures || c.totp_locked_until) await this.updateCounters(c, { totp_failures: 0, totp_locked_until: null });
     return { ok: true };
+  }
+
+  /** Makes this browser a known device of the account (D-111); returns the cookie value. */
+  async rememberDevice(userId: string): Promise<string> {
+    const token = randomToken();
+    const now = this.now();
+    await this.db.kysely.insertInto("known_devices").values({ id: sha256(token), user_id: userId, created_at: now, last_used_at: now }).execute();
+    // Keep the 20 most recently used: enough for anyone's phones and computers.
+    const all = await this.db.kysely.selectFrom("known_devices").select("id").where("user_id", "=", userId).orderBy("last_used_at", "desc").execute();
+    const drop = all.slice(KNOWN_DEVICES_KEPT).map((d) => d.id);
+    if (drop.length) await this.db.kysely.deleteFrom("known_devices").where("id", "in", drop).execute();
+    return token;
+  }
+
+  /** Forgets every known device but this browser's (after a password change: maybe it leaked). */
+  async forgetOtherDevices(userId: string, keepDeviceToken?: string): Promise<void> {
+    let q = this.db.kysely.deleteFrom("known_devices").where("user_id", "=", userId);
+    if (keepDeviceToken) q = q.where("id", "!=", sha256(keepDeviceToken));
+    await q.execute();
   }
 
   // ---- first-run setup -------------------------------------------------------------
@@ -179,21 +209,26 @@ export class AuthService {
 
   // ---- login -----------------------------------------------------------------------
 
-  login(username: string, password: string, totpCode?: string): Promise<LoginResult> {
+  login(username: string, password: string, totpCode?: string, deviceToken?: string): Promise<LoginResult> {
     return this.serial(ACCOUNT_CHECKS, async () => {
       const row = await this.db.kysely.selectFrom("users").selectAll().where("username", "=", username).executeTakeFirst();
       if (!row) {
         await verifyPassword(await getDummyHash(), password);
         return { ok: false, reason: "invalid_credentials" };
       }
-      const pw = await this.checkPassword(row, password);
+      const counters = await this.countersFor(row, deviceToken);
+      const pw = await this.checkPassword(row, password, counters);
       if (!pw.ok) return pw;
       if (row.totp_enabled === 1) {
         if (!totpCode) return { ok: false, reason: "totp_required" };
-        const code = await this.checkCode(row, totpCode);
+        const code = await this.checkCode(row, totpCode, counters);
         if (!code.ok) return code;
       }
-      return { ok: true, user: toAuthUser(row) };
+      if (counters.table === "known_devices") {
+        await this.db.kysely.updateTable("known_devices").set({ last_used_at: this.now() }).where("id", "=", counters.id).execute();
+        return { ok: true, user: toAuthUser(row) };
+      }
+      return { ok: true, user: toAuthUser(row), deviceToken: await this.rememberDevice(row.id) };
     });
   }
 
@@ -206,14 +241,14 @@ export class AuthService {
     return row && toAuthUser(row);
   }
 
-  changePassword(userId: string, current: string, next: string, keepSessionId?: string): Promise<CheckResult> {
-    return this.serial(ACCOUNT_CHECKS, () => this.doChangePassword(userId, current, next, keepSessionId));
+  changePassword(userId: string, current: string, next: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
+    return this.serial(ACCOUNT_CHECKS, () => this.doChangePassword(userId, current, next, keepSessionId, deviceToken));
   }
 
-  private async doChangePassword(userId: string, current: string, next: string, keepSessionId?: string): Promise<CheckResult> {
+  private async doChangePassword(userId: string, current: string, next: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
     const row = await this.db.kysely.selectFrom("users").selectAll().where("id", "=", userId).executeTakeFirst();
     if (!row) return { ok: false, reason: "invalid_credentials" };
-    const pw = await this.checkPassword(row, current);
+    const pw = await this.checkPassword(row, current, await this.countersFor(row, deviceToken));
     if (!pw.ok) return pw;
     await this.db.kysely
       .updateTable("users")
@@ -221,6 +256,7 @@ export class AuthService {
       .where("id", "=", userId)
       .execute();
     await this.signOutOthers(userId, keepSessionId);
+    await this.forgetOtherDevices(userId, deviceToken);
     return { ok: true };
   }
 
@@ -338,11 +374,11 @@ export class AuthService {
    * Activates TOTP once the user proves their authenticator produces valid codes. Every other
    * device is signed out: a session that existed before two-factor was on shouldn't outlive it.
    */
-  enableTotp(userId: string, code: string, keepSessionId?: string): Promise<CheckResult> {
+  enableTotp(userId: string, code: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
     return this.serial(ACCOUNT_CHECKS, async () => {
       const user = await this.db.kysely.selectFrom("users").selectAll().where("id", "=", userId).executeTakeFirstOrThrow();
       if (user.totp_enabled === 1 || !user.totp_secret) return { ok: false, reason: "invalid_totp" };
-      const checked = await this.checkCode(user, code);
+      const checked = await this.checkCode(user, code, await this.countersFor(user, deviceToken));
       if (!checked.ok) return checked;
       await this.db.kysely.updateTable("users").set({ totp_enabled: 1, updated_at: this.now() }).where("id", "=", userId).execute();
       await this.signOutOthers(userId, keepSessionId);
@@ -351,13 +387,14 @@ export class AuthService {
   }
 
   /** Turns TOTP off (password and a current code required); signs out every other device. */
-  disableTotp(userId: string, password: string, code: string, keepSessionId?: string): Promise<CheckResult> {
+  disableTotp(userId: string, password: string, code: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
     return this.serial(ACCOUNT_CHECKS, async () => {
       const user = await this.db.kysely.selectFrom("users").selectAll().where("id", "=", userId).executeTakeFirstOrThrow();
       if (user.totp_enabled !== 1) return { ok: false, reason: "invalid_totp" };
-      const pw = await this.checkPassword(user, password);
+      const counters = await this.countersFor(user, deviceToken);
+      const pw = await this.checkPassword(user, password, counters);
       if (!pw.ok) return pw;
-      const checked = await this.checkCode(user, code);
+      const checked = await this.checkCode(user, code, counters);
       if (!checked.ok) return checked;
       await this.db.kysely
         .updateTable("users")
@@ -398,6 +435,13 @@ export class AuthService {
       .executeTakeFirst();
     return Number(res.numUpdatedRows) === 1;
   }
+}
+
+/** Known devices kept per account (D-111). */
+const KNOWN_DEVICES_KEPT = 20;
+
+function pickCounters(r: { id: string; failed_logins: number; login_locked_until: number | null; totp_failures: number; totp_locked_until: number | null }) {
+  return { id: r.id, failed_logins: r.failed_logins, login_locked_until: r.login_locked_until, totp_failures: r.totp_failures, totp_locked_until: r.totp_locked_until };
 }
 
 const SETUP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";

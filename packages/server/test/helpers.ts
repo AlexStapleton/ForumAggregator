@@ -82,4 +82,11 @@ export function sessionCookie(res: { headers: Record<string, unknown> }): string
   return c?.split(";")[0];
 }
 
+/** The known-device cookie (D-111), with its attributes, from a response. */
+export function deviceCookieHeader(res: { headers: Record<string, unknown> }): string | undefined {
+  const raw = res.headers["set-cookie"];
+  const list = Array.isArray(raw) ? raw : raw ? [String(raw)] : [];
+  return list.find((s: string) => s.startsWith("fa_device="));
+}
+
 export const CSRF = { "x-fa-request": "1" };

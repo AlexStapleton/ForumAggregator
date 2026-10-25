@@ -21,6 +21,18 @@ export interface UsersTable {
   updated_at: number;
 }
 
+/** A browser that has logged in before (D-111); its cookie's sha256 is the id. */
+export interface KnownDevicesTable {
+  id: string;
+  user_id: string;
+  created_at: number;
+  last_used_at: number;
+  failed_logins: Generated<number>;
+  login_locked_until: number | null;
+  totp_failures: Generated<number>;
+  totp_locked_until: number | null;
+}
+
 export interface SessionsTable {
   /** sha256 of the cookie token; the token itself is never stored. */
   id: string;
@@ -130,6 +142,7 @@ export interface ItemTombstonesTable {
 export interface Database {
   users: UsersTable;
   sessions: SessionsTable;
+  known_devices: KnownDevicesTable;
   settings: SettingsTable;
   sources: SourcesTable;
   thread_posts: ThreadPostsTable;

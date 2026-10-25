@@ -15,6 +15,9 @@ import { parseBody, sendError } from "../http.js";
 import type { AuthService, AuthUser, CheckResult, LoginResult } from "./service.js";
 
 export const SESSION_COOKIE = "fa_session";
+/** Marks a browser that has logged in before (D-111). Grants nothing by itself; only sent to /api/auth. */
+export const DEVICE_COOKIE = "fa_device";
+const DEVICE_COOKIE_DAYS = 365;
 
 export interface RequestAuth {
   user: AuthUser;
@@ -71,6 +74,12 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     secure: env.COOKIE_SECURE === "auto" ? request.protocol === "https" : env.COOKIE_SECURE === "true",
     expires: new Date(expiresAt),
   });
+
+  /** Gives this browser its known-device cookie (D-111). */
+  function rememberDevice(request: FastifyRequest, reply: FastifyReply, token: string) {
+    reply.setCookie(DEVICE_COOKIE, token, { ...cookieOptions(request, Date.now() + DEVICE_COOKIE_DAYS * 86_400_000), path: "/api/auth" });
+  }
+  const deviceToken = (request: FastifyRequest) => request.cookies[DEVICE_COOKIE] || undefined;
 
   async function startSession(request: FastifyRequest, reply: FastifyReply, user: AuthUser) {
     const { token, expiresAt } = await auth.createSession(user.id, {
@@ -150,6 +159,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     }
     const user = await auth.createInitialUser(body.username, body.password);
     request.log.info({ username: user.username }, "account created");
+    rememberDevice(request, reply, await auth.rememberDevice(user.id));
     if (localAllowed) await startSession(request, reply, user);
     return { ok: true };
   });
@@ -158,11 +168,12 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     if (!localAllowed) return sendError(reply, 403, "local_login_disabled", "Log in through your SSO proxy");
     const body = parseBody(LoginRequest, request, reply);
     if (!body) return;
-    const result = await auth.login(body.username, body.password, body.totpCode);
+    const result = await auth.login(body.username, body.password, body.totpCode, deviceToken(request));
     if (!result.ok) {
       request.log.warn({ username: body.username, reason: result.reason, ip: request.ip, peer: request.socket.remoteAddress }, "login failed");
       return failed(reply, result);
     }
+    if (result.deviceToken) rememberDevice(request, reply, result.deviceToken);
     await startSession(request, reply, result.user);
     return { ok: true };
   });
@@ -177,7 +188,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
   app.post("/api/auth/password", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(ChangePasswordRequest, request, reply);
     if (!body) return;
-    const result = await auth.changePassword(request.auth!.user.id, body.currentPassword, body.newPassword, request.auth!.sessionId);
+    const result = await auth.changePassword(request.auth!.user.id, body.currentPassword, body.newPassword, request.auth!.sessionId, deviceToken(request));
     if (!result.ok) return result.reason === "invalid_credentials" ? sendError(reply, 403, "invalid_credentials", "Current password is wrong") : failed(reply, result);
     return { ok: true };
   });
@@ -193,7 +204,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
   app.post("/api/auth/totp/enable", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(TotpEnableRequest, request, reply);
     if (!body) return;
-    const result = await auth.enableTotp(request.auth!.user.id, body.code, request.auth!.sessionId);
+    const result = await auth.enableTotp(request.auth!.user.id, body.code, request.auth!.sessionId, deviceToken(request));
     if (!result.ok) {
       return result.reason === "invalid_totp"
         ? sendError(reply, 400, "invalid_totp", "That code didn't match. Check the time on your phone and try again.")
@@ -206,7 +217,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
   app.post("/api/auth/totp/disable", { config: rateLimit }, async (request, reply) => {
     const body = parseBody(TotpDisableRequest, request, reply);
     if (!body) return;
-    const result = await auth.disableTotp(request.auth!.user.id, body.password, body.code, request.auth!.sessionId);
+    const result = await auth.disableTotp(request.auth!.user.id, body.password, body.code, request.auth!.sessionId, deviceToken(request));
     if (!result.ok) {
       return result.reason === "invalid_credentials" || result.reason === "invalid_totp"
         ? sendError(reply, 403, "invalid_credentials", "Password or code is wrong")

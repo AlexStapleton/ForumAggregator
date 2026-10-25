@@ -9,6 +9,7 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ### Security
 - Two-factor codes and passwords are now limited per account, not only per client address: after 5 wrong codes in a row, codes are refused for 15 minutes (longer if it continues); after 10 wrong passwords, each try has to wait. A device on the LAN could get around the old per-address limit by faking `X-Forwarded-For`. Checks run one at a time so parallel guesses can't slip through (database migration 0013) (D-110).
 - Turning two-factor login on or off signs out your other devices; a device must log in again at least every 90 days (`SESSION_MAX_DAYS`).
+- Someone spamming wrong passwords or codes can't lock you out: browsers that have logged in before count their own attempts, so only browsers the app hasn't seen have to wait. Changing your password forgets your other known devices (database migration 0014) (D-111).
 
 ### Added
 - Settings → Signed-in devices: every logged-in device, with Sign out and Sign out everywhere else, and what the app sees of your connection (HTTPS, your address, whether your reverse proxy is trusted) (D-110).

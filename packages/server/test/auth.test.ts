@@ -1,6 +1,6 @@
 import * as OTPAuth from "otpauth";
 import { afterEach, describe, expect, it } from "vitest";
-import { backends, createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
+import { backends, createTestApp, CSRF, deviceCookieHeader, SETUP_CODE, sessionCookie } from "./helpers.js";
 
 type TestApp = Awaited<ReturnType<typeof createTestApp>>;
 
@@ -40,8 +40,13 @@ describe.each(backends)("auth (%s)", (backend) => {
     const res = await post("/api/auth/setup", { setupCode: "testcode 1234", username: "Alex", password: PASSWORD });
     expect(res.statusCode).toBe(200);
     const cookie = sessionCookie(res)!;
-    expect(res.headers["set-cookie"]).toMatch(/HttpOnly/);
-    expect(res.headers["set-cookie"]).toMatch(/SameSite=Lax/);
+    // Both cookies (session, and known device since D-111) carry the flags.
+    const cookies = ([] as string[]).concat(res.headers["set-cookie"] as string | string[]);
+    expect(cookies.map((c) => c.split("=")[0])).toEqual(["fa_device", "fa_session"]);
+    for (const c of cookies) {
+      expect(c).toMatch(/HttpOnly/);
+      expect(c).toMatch(/SameSite=Lax/);
+    }
     expect(await status(cookie)).toMatchObject({ setupRequired: false, authenticated: true, username: "alex", via: "session" });
 
     const again = await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "other", password: PASSWORD });
@@ -234,6 +239,78 @@ describe.each(backends)("auth (%s)", (backend) => {
     expect(row).toEqual({ failed_logins: 0, login_locked_until: null });
   });
 
+  describe("known devices (D-111)", () => {
+    const loginFrom = (device: string | undefined, password: string, totpCode?: string, ip = "198.51.100.9") =>
+      inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { username: "alex", password, ...(totpCode ? { totpCode } : {}) },
+        headers: { ...CSRF, "x-forwarded-for": ip, ...(device ? { cookie: device } : {}) },
+      });
+
+    it("a browser gets a device cookie on setup and on its first login, sent only to /api/auth", async () => {
+      app = await createTestApp(backend);
+      const setup = await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "Alex", password: PASSWORD });
+      expect(deviceCookieHeader(setup)).toMatch(/^fa_device=[\w-]{43}; Path=\/api\/auth; Expires=.*; HttpOnly; SameSite=Lax/);
+      const fresh = await loginFrom(undefined, PASSWORD);
+      expect(deviceCookieHeader(fresh)).toBeDefined();
+      // A known device doesn't get a new one; a made-up cookie is just an unknown browser.
+      const known = deviceCookieHeader(fresh)!.split(";")[0]!;
+      expect(deviceCookieHeader(await loginFrom(known, PASSWORD))).toBeUndefined();
+      expect(deviceCookieHeader(await loginFrom("fa_device=made-up-value", PASSWORD))).toBeDefined();
+    });
+
+    it("a stranger spamming wrong passwords locks unknown browsers, not your known devices", async () => {
+      const clock = { now: Date.UTC(2026, 0, 1, 12) };
+      app = await createTestApp(backend, {}, clock);
+      const mine = deviceCookieHeader(await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "Alex", password: PASSWORD }))!.split(";")[0]!;
+      for (let i = 0; i < 15; i++) await loginFrom(undefined, "guess " + i, undefined, `203.0.113.${i}`);
+      expect((await loginFrom(undefined, PASSWORD, undefined, "203.0.113.99")).statusCode).toBe(429); // unknown browsers wait
+      expect((await loginFrom(mine, PASSWORD)).statusCode).toBe(200); // you don't
+    });
+
+    it("a stranger who has your password can lock codes for unknown browsers, not your known devices", async () => {
+      const clock = { now: Date.UTC(2026, 0, 1, 12) };
+      app = await createTestApp(backend, {}, clock);
+      const setup = await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "Alex", password: PASSWORD });
+      const mine = deviceCookieHeader(setup)!.split(";")[0]!;
+      const { code, wrong } = await withTwoFactor(clock, sessionCookie(setup)!);
+      for (let i = 0; i < 5; i++) await loginFrom(undefined, PASSWORD, wrong(i), `203.0.113.${i}`);
+      expect((await loginFrom(undefined, PASSWORD, code(), "203.0.113.99")).json().error).toBe("totp_locked");
+      expect((await loginFrom(mine, PASSWORD, code())).statusCode).toBe(200);
+    });
+
+    it("a known device's own wrong tries lock only that device", async () => {
+      const clock = { now: Date.UTC(2026, 0, 1, 12) };
+      app = await createTestApp(backend, {}, clock);
+      const mine = deviceCookieHeader(await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "Alex", password: PASSWORD }))!.split(";")[0]!;
+      for (let i = 0; i < 10; i++) await loginFrom(mine, "typo " + i);
+      expect((await loginFrom(mine, PASSWORD)).statusCode).toBe(429);
+      expect((await loginFrom(undefined, PASSWORD)).statusCode).toBe(200);
+      const account = await app!.db.kysely.selectFrom("users").select("failed_logins").executeTakeFirstOrThrow();
+      expect(account.failed_logins).toBe(0);
+    });
+
+    it("changing the password forgets your other known devices", async () => {
+      const clock = { now: Date.UTC(2026, 0, 1, 12) };
+      app = await createTestApp(backend, {}, clock);
+      const setup = await post("/api/auth/setup", { setupCode: SETUP_CODE, username: "Alex", password: PASSWORD });
+      const here = deviceCookieHeader(setup)!.split(";")[0]!;
+      const other = deviceCookieHeader(await loginFrom(undefined, PASSWORD))!.split(";")[0]!;
+      expect(await app!.db.kysely.selectFrom("known_devices").select("id").execute()).toHaveLength(2);
+      const changed = await inject({
+        method: "POST",
+        url: "/api/auth/password",
+        payload: { currentPassword: PASSWORD, newPassword: "an even longer passphrase" },
+        headers: { ...CSRF, cookie: `${sessionCookie(setup)}; ${here}` },
+      });
+      expect(changed.statusCode).toBe(200);
+      expect(await app!.db.kysely.selectFrom("known_devices").select("id").execute()).toHaveLength(1);
+      // The other browser is unknown again: it gets a new device cookie at its next login.
+      expect(deviceCookieHeader(await loginFrom(other, "an even longer passphrase"))).toBeDefined();
+    });
+  });
+
   it("signs out other devices when two-factor is turned on or off, and lists and ends sessions (D-110)", async () => {
     const clock = { now: Date.UTC(2026, 0, 1, 12) };
     app = await createTestApp(backend, {}, clock);
@@ -356,7 +433,9 @@ describe("misc endpoints", () => {
       payload: { setupCode: SETUP_CODE, username: "alex", password: PASSWORD },
       headers: { ...CSRF, "x-forwarded-proto": "https" },
     });
-    expect(res.headers["set-cookie"]).toMatch(/Secure/);
+    const cookies = ([] as string[]).concat(res.headers["set-cookie"] as string | string[]);
+    expect(cookies).toHaveLength(2);
+    for (const c of cookies) expect(c).toMatch(/; Secure/);
   });
 
   it("returns JSON 404 for unknown API routes", async () => {
