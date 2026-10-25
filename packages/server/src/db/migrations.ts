@@ -280,6 +280,110 @@ export const migrations: Record<string, Migration> = {
       await db.schema.dropTable("known_devices").execute();
     },
   },
+  "0015_multi_user": {
+    async up(db: Kysely<any>) {
+      // Several accounts (D-114). The account that exists becomes the admin.
+      await db.schema.alterTable("users").addColumn("role", "text", (c) => c.notNull().defaultTo("user")).execute();
+      await db.schema.alterTable("users").addColumn("disabled", "integer", (c) => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("users").addColumn("last_login_at", "bigint").execute();
+      await sql`update users set role = 'admin'`.execute(db);
+
+      // One-time links: an invitation to create an account, or a password reset.
+      await db.schema
+        .createTable("invites")
+        .addColumn("id", "text", (c) => c.primaryKey()) // sha256 of the link's token
+        .addColumn("kind", "text", (c) => c.notNull()) // invite | reset
+        .addColumn("user_id", "text", (c) => c.references("users.id").onDelete("cascade")) // reset: whose
+        .addColumn("note", "text")
+        .addColumn("created_at", "bigint", (c) => c.notNull())
+        .addColumn("expires_at", "bigint", (c) => c.notNull())
+        .addColumn("used_at", "bigint")
+        .execute();
+
+      // A source is fetched once however many accounts follow it; each follower has their own
+      // name for it, tags, pause switch, and thread batch (D-115).
+      await db.schema
+        .createTable("subscriptions")
+        .addColumn("user_id", "text", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("title", "text", (c) => c.notNull())
+        .addColumn("enabled", "integer", (c) => c.notNull().defaultTo(1))
+        .addColumn("thread_batch_from", "bigint")
+        .addColumn("created_at", "bigint", (c) => c.notNull())
+        .addColumn("updated_at", "bigint", (c) => c.notNull())
+        .addPrimaryKeyConstraint("subscriptions_pk", ["user_id", "source_id"])
+        .execute();
+      await db.schema.createIndex("subscriptions_source").on("subscriptions").column("source_id").execute();
+      await sql`insert into subscriptions (user_id, source_id, title, enabled, thread_batch_from, created_at, updated_at)
+        select u.id, s.id, s.title, s.enabled, s.thread_batch_from, s.created_at, s.updated_at
+        from sources s cross join users u where u.role = 'admin'`.execute(db);
+
+      // Read and saved, per account: a row for each item of each source the account follows (like
+      // Tiny Tiny RSS's user entries), so unread counts read an index, as items(source_id, read) did.
+      await db.schema
+        .createTable("item_states")
+        .addColumn("user_id", "text", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("item_id", "text", (c) => c.notNull().references("items.id").onDelete("cascade"))
+        .addColumn("source_id", "text", (c) => c.notNull())
+        .addColumn("read", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("saved", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("read_at", "bigint")
+        .addPrimaryKeyConstraint("item_states_pk", ["user_id", "item_id"])
+        .execute();
+      await db.schema.createIndex("item_states_item").on("item_states").column("item_id").execute();
+      await db.schema.createIndex("item_states_counts").on("item_states").columns(["user_id", "source_id", "read"]).execute();
+      await db.schema.createIndex("item_states_saved").on("item_states").columns(["user_id", "saved"]).execute();
+      await sql`insert into item_states (user_id, item_id, source_id, read, saved, read_at)
+        select u.id, i.id, i.source_id, i.read, i.saved, i.read_at
+        from items i cross join users u where u.role = 'admin'`.execute(db);
+
+      await db.schema
+        .createTable("subscription_tags")
+        .addColumn("user_id", "text", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("tag", "text", (c) => c.notNull())
+        .addPrimaryKeyConstraint("subscription_tags_pk", ["user_id", "source_id", "tag"])
+        .execute();
+      await db.schema.createIndex("subscription_tags_tag").on("subscription_tags").columns(["user_id", "tag"]).execute();
+      await sql`insert into subscription_tags (user_id, source_id, tag)
+        select u.id, t.source_id, t.tag from source_tags t cross join users u where u.role = 'admin'`.execute(db);
+      await db.schema.dropTable("source_tags").execute();
+
+      // Moved to item_states and subscriptions.
+      for (const index of ["items_read_published", "items_source_read", "items_saved_published"]) await db.schema.dropIndex(index).execute();
+      for (const column of ["read", "saved", "read_at"]) await db.schema.alterTable("items").dropColumn(column).execute();
+      await db.schema.alterTable("sources").dropColumn("thread_batch_from").execute();
+      await sql`analyze`.execute(db);
+    },
+    async down(db: Kysely<any>) {
+      // Back to one account's view: the admin's.
+      await db.schema.alterTable("sources").addColumn("thread_batch_from", "bigint").execute();
+      await db.schema.alterTable("items").addColumn("read", "integer", (c) => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("items").addColumn("saved", "integer", (c) => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("items").addColumn("read_at", "bigint").execute();
+      const admin = sql`(select id from users where role = 'admin' limit 1)`;
+      await sql`update items set
+        read = coalesce((select st.read from item_states st where st.item_id = items.id and st.user_id = ${admin}), 0),
+        saved = coalesce((select st.saved from item_states st where st.item_id = items.id and st.user_id = ${admin}), 0),
+        read_at = (select st.read_at from item_states st where st.item_id = items.id and st.user_id = ${admin})`.execute(db);
+      await db.schema.createIndex("items_read_published").on("items").columns(["read", "published_at"]).execute();
+      await db.schema.createIndex("items_source_read").on("items").columns(["source_id", "read"]).execute();
+      await db.schema.createIndex("items_saved_published").on("items").columns(["saved", "published_at"]).execute();
+      await db.schema
+        .createTable("source_tags")
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("tag", "text", (c) => c.notNull())
+        .addPrimaryKeyConstraint("source_tags_pk", ["source_id", "tag"])
+        .execute();
+      await db.schema.createIndex("source_tags_tag").on("source_tags").column("tag").execute();
+      await sql`insert into source_tags (source_id, tag) select source_id, tag from subscription_tags where user_id = ${admin}`.execute(db);
+      await db.schema.dropTable("subscription_tags").execute();
+      await db.schema.dropTable("item_states").execute();
+      await db.schema.dropTable("subscriptions").execute();
+      await db.schema.dropTable("invites").execute();
+      for (const column of ["last_login_at", "disabled", "role"]) await db.schema.alterTable("users").dropColumn(column).execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

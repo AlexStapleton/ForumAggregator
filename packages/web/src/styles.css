@@ -284,7 +284,13 @@ body.reader-open { overflow: hidden; }
 .load-next { margin: 1rem 0 0.5rem; display: grid; gap: 0.5rem; justify-items: center; }
 .load-next button { width: 100%; max-width: 22rem; }
 .audio { margin: 0.75rem 0; display: grid; gap: 0.5rem; }
-.audio audio { width: 100%; }
+.audio-main { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.audio-play { width: 48px; height: 48px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.audio-skip { padding: 0.3rem 0.6rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.audio-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The base input style (padding, border, background) would turn the slider into a text box. */
+.audio input.audio-seek { padding: 0; border: none; background: none; accent-color: var(--accent); min-height: 32px; }
+.audio-error { color: var(--danger); margin: 0; }
 .audio-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
 .audio-speeds { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .audio-speeds button { padding: 0.2rem 0.5rem; font-size: 0.8rem; min-width: 3rem; }
@@ -325,6 +331,12 @@ kbd { font: 0.8rem ui-monospace, monospace; border: 1px solid var(--border); bor
 
 /* ---- Radio choices (Settings) ---- */
 .choices { border: 0; padding: 0; margin: 0; }
+/* A group of form fields that can be turned off together (a shared source's settings, D-115). */
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 0.9rem; }
+.accounts .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+.accounts .actions button { min-height: 36px; padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+.link-box { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0 1rem; }
+.link-box input { font-family: ui-monospace, monospace; font-size: 0.8rem; }
 .choices legend { font-weight: 600; margin-bottom: 0.5rem; padding: 0; }
 .choice { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.5rem 0; cursor: pointer; }
 .choice input { margin-top: 0.25rem; width: 1.1rem; height: 1.1rem; flex: 0 0 auto; }

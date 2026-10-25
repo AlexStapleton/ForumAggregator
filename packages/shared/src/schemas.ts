@@ -144,3 +144,29 @@ export const CheckingRequest = z
   })
   .strict();
 export type CheckingRequest = z.infer<typeof CheckingRequest>;
+
+/** Settings → Accounts: a new invitation link, with a note to remember who it's for. */
+export const InviteRequest = z.object({
+  note: z.string().trim().max(100).nullable().optional(),
+});
+export type InviteRequest = z.infer<typeof InviteRequest>;
+
+const linkToken = z.string().regex(/^[A-Za-z0-9_-]{20,100}$/, "Not a valid link");
+
+export const AcceptInviteRequest = z.object({
+  token: linkToken,
+  username,
+  password: newPassword,
+});
+export type AcceptInviteRequest = z.infer<typeof AcceptInviteRequest>;
+
+export const ResetPasswordRequest = z.object({
+  token: linkToken,
+  password: newPassword,
+});
+export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequest>;
+
+export const AccountUpdateRequest = z.object({
+  disabled: z.boolean(),
+});
+export type AccountUpdateRequest = z.infer<typeof AccountUpdateRequest>;

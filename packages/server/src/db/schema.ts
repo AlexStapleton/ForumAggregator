@@ -17,8 +17,58 @@ export interface UsersTable {
   /** Wrong two-factor codes in a row, and until when codes are refused (D-110). */
   totp_failures: Generated<number>;
   totp_locked_until: number | null;
+  /** admin: manages accounts and the server-wide settings (D-114). */
+  role: Generated<"admin" | "user">;
+  disabled: Generated<number>;
+  last_login_at: Generated<number | null>;
   created_at: number;
   updated_at: number;
+}
+
+/** A one-time link (D-114): an invitation to create an account, or a password reset. */
+export interface InvitesTable {
+  /** sha256 of the link's token; the token itself is never stored. */
+  id: string;
+  kind: "invite" | "reset";
+  /** Reset: the account it resets. */
+  user_id: string | null;
+  note: string | null;
+  created_at: number;
+  expires_at: number;
+  used_at: number | null;
+}
+
+/** An account following a source (D-115). The source is fetched once for all its followers. */
+export interface SubscriptionsTable {
+  user_id: string;
+  source_id: string;
+  /** This follower's name for it. */
+  title: string;
+  enabled: Generated<number>;
+  /** Thread sources: posts fetched at or after this time are "new" on this follower's card (D-084). */
+  thread_batch_from: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Read and saved, per account (D-115): one row per item of each source the account follows,
+ * made when the item arrives or the account starts following. A missing row reads as unread.
+ */
+export interface ItemStatesTable {
+  user_id: string;
+  item_id: string;
+  /** The item's source, so per-source counts read only this table's index. */
+  source_id: string;
+  read: number;
+  saved: number;
+  read_at: number | null;
+}
+
+export interface SubscriptionTagsTable {
+  user_id: string;
+  source_id: string;
+  tag: string;
 }
 
 /** A browser that has logged in before (D-111); its cookie's sha256 is the id. */
@@ -52,9 +102,11 @@ export interface SettingsTable {
 export interface SourcesTable {
   id: string;
   kind: "feed" | "youtube" | "reddit" | "thread";
+  /** The feed's own name; each follower's name for it is subscriptions.title. */
   title: string;
   site_url: string | null;
   feed_url: string;
+  /** 1 while any follower has it on (kept in step with subscriptions.enabled). */
   enabled: Generated<number>;
   status: Generated<"ok" | "error" | "paused" | "challenged" | "pending">;
   last_error: string | null;
@@ -70,8 +122,6 @@ export interface SourcesTable {
   remove_selector: Generated<string | null>;
   /** 1 = fetched through the user's FlareSolverr (D-080). */
   via_flaresolverr: Generated<number>;
-  /** Thread sources: posts fetched at or after this time are "new" on the thread's card (D-084). */
-  thread_batch_from: Generated<number | null>;
   /** HTTP validators for conditional requests (304 Not Modified). */
   etag: string | null;
   last_modified: string | null;
@@ -110,14 +160,6 @@ export interface ItemsTable {
   audio_duration: number | null;
   published_at: number;
   fetched_at: number;
-  read: Generated<number>;
-  saved: Generated<number>;
-  read_at: number | null;
-}
-
-export interface SourceTagsTable {
-  source_id: string;
-  tag: string;
 }
 
 /** Full text for the reader: from the feed (raw until first shown) or extracted from the page. */
@@ -147,7 +189,10 @@ export interface Database {
   sources: SourcesTable;
   thread_posts: ThreadPostsTable;
   items: ItemsTable;
-  source_tags: SourceTagsTable;
+  invites: InvitesTable;
+  subscriptions: SubscriptionsTable;
+  item_states: ItemStatesTable;
+  subscription_tags: SubscriptionTagsTable;
   item_content: ItemContentTable;
   item_tombstones: ItemTombstonesTable;
 }

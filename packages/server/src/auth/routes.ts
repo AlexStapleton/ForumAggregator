@@ -2,17 +2,20 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import proxyaddr from "proxy-addr";
 import QRCode from "qrcode";
 import {
+  AcceptInviteRequest,
   ChangePasswordRequest,
   LoginRequest,
+  ResetPasswordRequest,
   SetupRequest,
   TotpDisableRequest,
   TotpEnableRequest,
 } from "@fa/shared/schemas";
-import type { AuthStatus, ConnectionInfo, SessionView, TotpBeginResponse } from "@fa/shared";
+import { z } from "zod";
+import type { AuthStatus, ConnectionInfo, InviteLinkInfo, SessionView, TotpBeginResponse } from "@fa/shared";
 import type { Env } from "../env.js";
 import { splitList } from "../env.js";
 import { parseBody, sendError } from "../http.js";
-import type { AuthService, AuthUser, CheckResult, LoginResult } from "./service.js";
+import { AccountError, type AuthService, type AuthUser, type CheckResult, type LoginResult } from "./service.js";
 
 export const SESSION_COOKIE = "fa_session";
 /** Marks a browser that has logged in before (D-111). Grants nothing by itself; only sent to /api/auth. */
@@ -32,7 +35,7 @@ declare module "fastify" {
 }
 
 /** Routes reachable without being logged in. */
-const PUBLIC_API = new Set(["/api/auth/status", "/api/auth/setup", "/api/auth/login"]);
+const PUBLIC_API = new Set(["/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/link", "/api/auth/invite/accept", "/api/auth/reset"]);
 
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "15 minutes" };
 
@@ -52,6 +55,7 @@ function failed(reply: FastifyReply, result: Exclude<LoginResult | CheckResult, 
         : `Too many wrong codes. Two-factor login is locked for ${wait} minute${wait === 1 ? "" : "s"}.`,
     );
   }
+  if (result.reason === "disabled") return sendError(reply, 403, "disabled", "This account is turned off. Ask the person who runs this app.");
   const messages = {
     invalid_credentials: "Wrong username or password",
     totp_required: "Enter the 6-digit code from your authenticator app",
@@ -143,6 +147,7 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     };
     if (request.auth) {
       status.username = request.auth.user.username;
+      status.role = request.auth.user.role;
       status.totpEnabled = request.auth.user.totpEnabled;
       status.via = request.auth.via;
       status.connection = connectionInfo(request);
@@ -176,6 +181,49 @@ export function registerAuth(app: FastifyInstance, env: Env, auth: AuthService):
     if (result.deviceToken) rememberDevice(request, reply, result.deviceToken);
     await startSession(request, reply, result.user);
     return { ok: true };
+  });
+
+  // ---- invitation and password-reset links (D-114) ----
+  // POST, not GET with the token in the address: it stays out of logs. The link itself carries the
+  // token after "#", which browsers never send to a server.
+  const accountError = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof AccountError) return sendError(reply, err.status, err.code, err.message, err.fields);
+    throw err;
+  };
+
+  app.post("/api/auth/link", { config: rateLimit }, async (request, reply): Promise<InviteLinkInfo | void> => {
+    const body = parseBody(z.object({ token: z.string().max(200) }), request, reply);
+    if (!body) return;
+    const invite = await auth.inviteFor(body.token);
+    if (!invite) return sendError(reply, 410, "invalid_link", "This link has expired or was already used. Ask for a new one.");
+    return { kind: invite.kind, username: invite.username, expiresAt: invite.expiresAt };
+  });
+
+  app.post("/api/auth/invite/accept", { config: rateLimit }, async (request, reply) => {
+    const body = parseBody(AcceptInviteRequest, request, reply);
+    if (!body) return;
+    try {
+      const user = await auth.acceptInvite(body.token, body.username, body.password);
+      request.log.info({ username: user.username }, "account created from an invitation");
+      rememberDevice(request, reply, await auth.rememberDevice(user.id));
+      // SSO only (AUTH_MODE=proxy): the proxy logs them in, by the same username.
+      if (localAllowed) await startSession(request, reply, user);
+      return { ok: true };
+    } catch (err) {
+      return accountError(reply, err);
+    }
+  });
+
+  app.post("/api/auth/reset", { config: rateLimit }, async (request, reply) => {
+    const body = parseBody(ResetPasswordRequest, request, reply);
+    if (!body) return;
+    try {
+      const user = await auth.useResetLink(body.token, body.password);
+      request.log.info({ username: user.username }, "password reset from a link; other devices signed out");
+      return { ok: true, username: user.username };
+    } catch (err) {
+      return accountError(reply, err);
+    }
   });
 
   app.post("/api/auth/logout", async (request, reply) => {

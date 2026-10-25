@@ -7,6 +7,7 @@
 // Fetching the page happens only when the user opens the item, like a browser would.
 import crypto from "node:crypto";
 import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPreviewRequest } from "@fa/shared";
+import type { Viewer } from "../auth/service.js";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
 import { threadPagerFor, xenforoPager, type ThreadPager } from "../feeds/thread.js";
@@ -125,19 +126,23 @@ export class ReaderService {
     return this.flareFetcher;
   }
 
-  /** null if the item doesn't exist. Concurrent opens of the same item share the work. */
-  get(itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
-    const key = `${itemId}|${page ?? ""}`;
+  /**
+   * null if the item doesn't exist or the viewer doesn't follow its source. Concurrent opens of the
+   * same item share the work (per account: a thread's card depends on its follower, D-115).
+   */
+  get(viewer: Viewer, itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
+    const key = `${viewer.id}|${itemId}|${page ?? ""}`;
     const running = this.inFlight.get(key);
     if (running) return running;
-    const p = this.load(itemId, page).finally(() => this.inFlight.delete(key));
+    const p = this.load(viewer, itemId, page).finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, p);
     return p;
   }
 
-  private async load(itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
+  private async load(viewer: Viewer, itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
     const item = await this.db.kysely
       .selectFrom("items")
+      .innerJoin("subscriptions as s", (j) => j.onRef("s.source_id", "=", "items.source_id").on("s.user_id", "=", viewer.id))
       .innerJoin("sources", "sources.id", "items.source_id")
       .leftJoin("item_content", "item_content.item_id", "items.id")
       .select([
@@ -150,8 +155,8 @@ export class ReaderService {
         "items.audio_url",
         "items.audio_duration",
         "items.source_id",
-        "sources.thread_batch_from",
-        "sources.title as source_title",
+        "s.thread_batch_from",
+        "s.title as source_title",
         "sources.kind as source_kind",
         "sources.article_selector",
         "sources.remove_selector",
@@ -437,8 +442,13 @@ export class ReaderService {
    * What the reader would show for one of the source's items with these selectors.
    * Nothing is stored. null if the source doesn't exist.
    */
-  async preview(sourceId: string, req: ReaderPreviewRequest): Promise<ReaderPreview | { error: string } | null> {
-    const source = await this.db.kysely.selectFrom("sources").select(["id", "kind", "via_flaresolverr"]).where("id", "=", sourceId).executeTakeFirst();
+  async preview(viewer: Viewer, sourceId: string, req: ReaderPreviewRequest): Promise<ReaderPreview | { error: string } | null> {
+    const source = await this.db.kysely
+      .selectFrom("sources")
+      .innerJoin("subscriptions as s", (j) => j.onRef("s.source_id", "=", "sources.id").on("s.user_id", "=", viewer.id))
+      .select(["sources.id", "sources.kind", "sources.via_flaresolverr"])
+      .where("sources.id", "=", sourceId)
+      .executeTakeFirst();
     if (!source) return null;
     if (source.kind !== "feed") return { error: "Reader selectors are for feed sources; YouTube and Reddit items aren't read from their pages." };
     let q = this.db.kysely
@@ -465,9 +475,10 @@ export class ReaderService {
    * public comments feed; YouTube videos need the user's API key (D-075); other sources have
    * none the app can read yet.
    */
-  async comments(itemId: string): Promise<ReaderComments | null> {
+  async comments(viewer: Viewer, itemId: string): Promise<ReaderComments | null> {
     const item = await this.db.kysely
       .selectFrom("items")
+      .innerJoin("subscriptions as s", (j) => j.onRef("s.source_id", "=", "items.source_id").on("s.user_id", "=", viewer.id))
       .innerJoin("sources", "sources.id", "items.source_id")
       .select(["items.id", "items.url", "sources.kind"])
       .where("items.id", "=", itemId)

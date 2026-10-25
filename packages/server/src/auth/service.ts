@@ -1,4 +1,4 @@
-// Single-user account, sessions and TOTP. Pure logic; HTTP lives in routes.ts.
+// Accounts (an admin and the people they invite, D-114), sessions and TOTP. Pure logic; HTTP lives in routes.ts.
 import crypto from "node:crypto";
 import * as OTPAuth from "otpauth";
 import type { Db } from "../db/index.js";
@@ -12,8 +12,9 @@ import { getDummyHash, hashPassword, verifyPassword } from "./passwords.js";
 const TOTP_PERIOD = 30;
 const TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 const MINUTE = 60_000;
-/** All password/code checks share one queue: a single-user app, so one at a time is plenty. */
-const ACCOUNT_CHECKS = "account";
+/** Invitation links last a week; password-reset links a day (D-114). */
+const INVITE_TTL_MS = 7 * 24 * 60 * MINUTE;
+const RESET_TTL_MS = 24 * 60 * MINUTE;
 
 // Per-account limits (D-110). The login route's per-IP limit can be dodged by anyone the app
 // trusts to send X-Forwarded-For (e.g. a device on the LAN); these can't.
@@ -26,16 +27,56 @@ const TOTP_FAILURES_PER_LOCK = 5;
 /** 15 min after the 5th, doubling at every 5th after that, at most a day. */
 const totpLock = (failures: number) => Math.min(24 * 60 * MINUTE, 15 * MINUTE * 2 ** (failures / TOTP_FAILURES_PER_LOCK - 1));
 
+export type Role = "admin" | "user";
+
 export interface AuthUser {
   id: string;
   username: string;
   totpEnabled: boolean;
+  role: Role;
+}
+
+/** Who is asking, for everything that's per account (D-115). */
+export type Viewer = Pick<AuthUser, "id" | "role">;
+
+/** An account as the admin sees it (D-114): no sources, nothing read. */
+export interface AccountInfo {
+  id: string;
+  username: string;
+  role: Role;
+  disabled: boolean;
+  totpEnabled: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+  lastSeenAt: number | null;
+  sourceCount: number;
+}
+
+export interface InviteInfo {
+  id: string;
+  kind: "invite" | "reset";
+  /** Reset: whose password. */
+  username: string | null;
+  note: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export class AccountError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status = 400,
+    readonly fields?: Record<string, string>,
+  ) {
+    super(message);
+  }
 }
 
 export type LoginResult =
   /** deviceToken: set when this browser wasn't a known device yet; the route gives it the cookie. */
   | { ok: true; user: AuthUser; deviceToken?: string }
-  | { ok: false; reason: "invalid_credentials" | "totp_required" | "invalid_totp" }
+  | { ok: false; reason: "invalid_credentials" | "totp_required" | "invalid_totp" | "disabled" }
   /** Too many wrong passwords or codes in a row: refused until `retryAfterMs` has passed. */
   | { ok: false; reason: "locked" | "totp_locked"; retryAfterMs: number };
 
@@ -65,15 +106,15 @@ export interface SessionInfo {
   userAgent: string | null;
 }
 
-function toAuthUser(row: Pick<UserRow, "id" | "username" | "totp_enabled">): AuthUser {
-  return { id: row.id, username: row.username, totpEnabled: row.totp_enabled === 1 };
+function toAuthUser(row: Pick<UserRow, "id" | "username" | "totp_enabled" | "role">): AuthUser {
+  return { id: row.id, username: row.username, totpEnabled: row.totp_enabled === 1, role: row.role === "admin" ? "admin" : "user" };
 }
 
 export class AuthService {
   /** Present only while no account exists. */
   private setupCode: string | undefined;
 
-  /** One password/code check at a time per account, so parallel guesses can't outrun the limits. */
+  /** One password/code check at a time per account (by user id), so parallel guesses can't outrun the limits. */
   private checking = new Map<string, Promise<unknown>>();
 
   constructor(
@@ -185,6 +226,7 @@ export class AuthService {
     return safeEqual(norm(code), norm(this.setupCode));
   }
 
+  /** The first account: the admin (D-114). */
   async createInitialUser(username: string, password: string): Promise<AuthUser> {
     const now = this.now();
     const row = {
@@ -194,6 +236,7 @@ export class AuthService {
       totp_secret: null,
       totp_enabled: 0,
       totp_last_step: null,
+      role: "admin" as const,
       created_at: now,
       updated_at: now,
     };
@@ -209,8 +252,9 @@ export class AuthService {
 
   // ---- login -----------------------------------------------------------------------
 
-  login(username: string, password: string, totpCode?: string, deviceToken?: string): Promise<LoginResult> {
-    return this.serial(ACCOUNT_CHECKS, async () => {
+  async login(username: string, password: string, totpCode?: string, deviceToken?: string): Promise<LoginResult> {
+    const known = await this.db.kysely.selectFrom("users").select("id").where("username", "=", username).executeTakeFirst();
+    return this.serial(known?.id ?? `unknown:${username}`, async () => {
       const row = await this.db.kysely.selectFrom("users").selectAll().where("username", "=", username).executeTakeFirst();
       if (!row) {
         await verifyPassword(await getDummyHash(), password);
@@ -224,6 +268,9 @@ export class AuthService {
         const code = await this.checkCode(row, totpCode, counters);
         if (!code.ok) return code;
       }
+      // Said only after the right password (and code), so it tells a guesser nothing.
+      if (row.disabled === 1) return { ok: false, reason: "disabled" };
+      await this.db.kysely.updateTable("users").set({ last_login_at: this.now() }).where("id", "=", row.id).execute();
       if (counters.table === "known_devices") {
         await this.db.kysely.updateTable("known_devices").set({ last_used_at: this.now() }).where("id", "=", counters.id).execute();
         return { ok: true, user: toAuthUser(row) };
@@ -235,14 +282,15 @@ export class AuthService {
   async getUserByUsername(username: string): Promise<AuthUser | undefined> {
     const row = await this.db.kysely
       .selectFrom("users")
-      .select(["id", "username", "totp_enabled"])
+      .select(["id", "username", "totp_enabled", "role"])
       .where("username", "=", username)
+      .where("disabled", "=", 0)
       .executeTakeFirst();
     return row && toAuthUser(row);
   }
 
   changePassword(userId: string, current: string, next: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
-    return this.serial(ACCOUNT_CHECKS, () => this.doChangePassword(userId, current, next, keepSessionId, deviceToken));
+    return this.serial(userId, () => this.doChangePassword(userId, current, next, keepSessionId, deviceToken));
   }
 
   private async doChangePassword(userId: string, current: string, next: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
@@ -324,12 +372,14 @@ export class AuthService {
         "users.id",
         "users.username",
         "users.totp_enabled",
+        "users.role",
+        "users.disabled",
       ])
       .where("sessions.id", "=", id)
       .executeTakeFirst();
     if (!row) return undefined;
     const hardEnd = row.created_at + this.sessionMaxMs;
-    if (row.expires_at <= now || hardEnd <= now) {
+    if (row.expires_at <= now || hardEnd <= now || row.disabled === 1) {
       await this.db.kysely.deleteFrom("sessions").where("id", "=", id).execute();
       return undefined;
     }
@@ -355,6 +405,183 @@ export class AuthService {
     return Number(res.numDeletedRows);
   }
 
+  // ---- accounts, for the admin (D-114) ------------------------------------------------
+
+  async listAccounts(): Promise<AccountInfo[]> {
+    const rows = await this.db.kysely
+      .selectFrom("users")
+      .select((eb) => [
+        "users.id",
+        "users.username",
+        "users.role",
+        "users.disabled",
+        "users.totp_enabled",
+        "users.created_at",
+        "users.last_login_at",
+        eb.selectFrom("sessions").select((s) => s.fn.max("sessions.last_seen_at").as("x")).whereRef("sessions.user_id", "=", "users.id").as("last_seen_at"),
+        eb.selectFrom("subscriptions").select((s) => s.fn.countAll<number>().as("n")).whereRef("subscriptions.user_id", "=", "users.id").as("sources"),
+      ])
+      .orderBy("users.created_at")
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      username: r.username,
+      role: r.role === "admin" ? "admin" : "user",
+      disabled: r.disabled === 1,
+      totpEnabled: r.totp_enabled === 1,
+      createdAt: r.created_at,
+      lastLoginAt: r.last_login_at,
+      lastSeenAt: r.last_seen_at === null ? null : Number(r.last_seen_at),
+      sourceCount: Number(r.sources ?? 0),
+    }));
+  }
+
+  /** A one-time link: an invitation, or a reset of `userId`'s password. Returns the token (only its hash is stored). */
+  async createInvite(kind: "invite" | "reset", opts: { userId?: string; note?: string | null } = {}): Promise<{ token: string; invite: InviteInfo }> {
+    const now = this.now();
+    let username: string | null = null;
+    if (kind === "reset") {
+      const user = opts.userId ? await this.db.kysely.selectFrom("users").select(["id", "username"]).where("id", "=", opts.userId).executeTakeFirst() : undefined;
+      if (!user) throw new AccountError("not_found", "No such account", 404);
+      username = user.username;
+      // One reset link at a time per account.
+      await this.db.kysely.deleteFrom("invites").where("kind", "=", "reset").where("user_id", "=", user.id).execute();
+    }
+    const token = randomToken();
+    const row = {
+      id: sha256(token),
+      kind,
+      user_id: kind === "reset" ? opts.userId! : null,
+      note: opts.note?.trim() || null,
+      created_at: now,
+      expires_at: now + (kind === "invite" ? INVITE_TTL_MS : RESET_TTL_MS),
+      used_at: null,
+    };
+    await this.db.kysely.insertInto("invites").values(row).execute();
+    return { token, invite: { id: row.id, kind, username, note: row.note, createdAt: now, expiresAt: row.expires_at } };
+  }
+
+  /** Links not yet used or expired; expired and used ones are forgotten. */
+  async listInvites(): Promise<InviteInfo[]> {
+    const now = this.now();
+    await this.db.kysely.deleteFrom("invites").where((eb) => eb.or([eb("expires_at", "<=", now), eb("used_at", "is not", null)])).execute();
+    const rows = await this.db.kysely
+      .selectFrom("invites")
+      .leftJoin("users", "users.id", "invites.user_id")
+      .select(["invites.id", "invites.kind", "invites.note", "invites.created_at", "invites.expires_at", "users.username"])
+      .orderBy("invites.created_at")
+      .execute();
+    return rows.map((r) => ({ id: r.id, kind: r.kind, username: r.username, note: r.note, createdAt: r.created_at, expiresAt: r.expires_at }));
+  }
+
+  async revokeInvite(id: string): Promise<boolean> {
+    const res = await this.db.kysely.deleteFrom("invites").where("id", "=", id).executeTakeFirst();
+    return Number(res.numDeletedRows) === 1;
+  }
+
+  /** What a link is for, if it's still good. */
+  async inviteFor(token: string): Promise<InviteInfo | undefined> {
+    const row = await this.db.kysely
+      .selectFrom("invites")
+      .leftJoin("users", "users.id", "invites.user_id")
+      .select(["invites.id", "invites.kind", "invites.note", "invites.created_at", "invites.expires_at", "invites.used_at", "users.username"])
+      .where("invites.id", "=", sha256(token))
+      .executeTakeFirst();
+    if (!row || row.used_at !== null || row.expires_at <= this.now() || (row.kind === "reset" && !row.username)) return undefined;
+    return { id: row.id, kind: row.kind, username: row.username, note: row.note, createdAt: row.created_at, expiresAt: row.expires_at };
+  }
+
+  /** Uses up a link; false if it was already used (by a request racing this one) or is gone. */
+  private async useInvite(id: string): Promise<boolean> {
+    const res = await this.db.kysely.updateTable("invites").set({ used_at: this.now() }).where("id", "=", id).where("used_at", "is", null).where("expires_at", ">", this.now()).executeTakeFirst();
+    return Number(res.numUpdatedRows) === 1;
+  }
+
+  /** Creates an account from an invitation link. */
+  async acceptInvite(token: string, username: string, password: string): Promise<AuthUser> {
+    const invite = await this.inviteFor(token);
+    if (!invite || invite.kind !== "invite") throw new AccountError("invalid_link", "This invitation link has expired or was already used. Ask for a new one.", 410);
+    if (await this.db.kysely.selectFrom("users").select("id").where("username", "=", username).executeTakeFirst()) {
+      throw new AccountError("username_taken", "That username is taken", 409, { username: "That username is taken" });
+    }
+    const passwordHash = await hashPassword(password);
+    if (!(await this.useInvite(invite.id))) throw new AccountError("invalid_link", "This invitation link has expired or was already used. Ask for a new one.", 410);
+    const now = this.now();
+    const row = { id: crypto.randomUUID(), username, password_hash: passwordHash, totp_secret: null, totp_enabled: 0, totp_last_step: null, role: "user" as const, created_at: now, updated_at: now, last_login_at: now };
+    try {
+      await this.db.kysely.insertInto("users").values(row).execute();
+    } catch (err) {
+      // The same username taken a moment ago: the link can be used again.
+      await this.db.kysely.updateTable("invites").set({ used_at: null }).where("id", "=", invite.id).execute();
+      if (await this.db.kysely.selectFrom("users").select("id").where("username", "=", username).executeTakeFirst()) {
+        throw new AccountError("username_taken", "That username is taken", 409, { username: "That username is taken" });
+      }
+      throw err;
+    }
+    return toAuthUser(row);
+  }
+
+  /**
+   * Sets a new password from a reset link. Signs the account out everywhere, forgets its known
+   * devices and clears its wrong-password counters; two-factor stays as it was.
+   */
+  async useResetLink(token: string, password: string): Promise<AuthUser> {
+    const invite = await this.inviteFor(token);
+    const bad = () => new AccountError("invalid_link", "This password reset link has expired or was already used. Ask the admin for a new one.", 410);
+    if (!invite || invite.kind !== "reset") throw bad();
+    const row = await this.db.kysely.selectFrom("invites").innerJoin("users", "users.id", "invites.user_id").selectAll("users").where("invites.id", "=", invite.id).executeTakeFirst();
+    if (!row) throw bad();
+    const passwordHash = await hashPassword(password);
+    return this.serial(row.id, async () => {
+      if (!(await this.useInvite(invite.id))) throw bad();
+      await this.db.kysely
+        .updateTable("users")
+        .set({ password_hash: passwordHash, failed_logins: 0, login_locked_until: null, updated_at: this.now() })
+        .where("id", "=", row.id)
+        .execute();
+      await this.signOutOthers(row.id);
+      await this.forgetOtherDevices(row.id);
+      return toAuthUser(row);
+    });
+  }
+
+  /** Locks an account out (and signs it out everywhere), or lets it back in. Never the admin's own. */
+  async setDisabled(adminId: string, userId: string, disabled: boolean): Promise<void> {
+    if (userId === adminId) throw new AccountError("own_account", "You can't disable your own account", 400);
+    const res = await this.db.kysely.updateTable("users").set({ disabled: disabled ? 1 : 0, updated_at: this.now() }).where("id", "=", userId).executeTakeFirst();
+    if (Number(res.numUpdatedRows) !== 1) throw new AccountError("not_found", "No such account", 404);
+    if (disabled) await this.signOutOthers(userId);
+  }
+
+  /** For a lost phone: turns the account's two-factor login off and signs it out everywhere. */
+  async adminDisableTotp(adminId: string, userId: string): Promise<void> {
+    if (userId === adminId) throw new AccountError("own_account", "Turn your own two-factor login off in your settings", 400);
+    const res = await this.db.kysely
+      .updateTable("users")
+      .set({ totp_enabled: 0, totp_secret: null, totp_last_step: null, totp_failures: 0, totp_locked_until: null, updated_at: this.now() })
+      .where("id", "=", userId)
+      .executeTakeFirst();
+    if (Number(res.numUpdatedRows) !== 1) throw new AccountError("not_found", "No such account", 404);
+    await this.db.kysely.updateTable("known_devices").set({ totp_failures: 0, totp_locked_until: null }).where("user_id", "=", userId).execute();
+    await this.signOutOthers(userId);
+  }
+
+  /** Deletes an account and everything that's only its own. The caller removes sources nobody follows any more. */
+  async deleteAccount(adminId: string, userId: string): Promise<void> {
+    if (userId === adminId) throw new AccountError("own_account", "You can't delete your own account", 400);
+    const user = await this.db.kysely.selectFrom("users").select("id").where("id", "=", userId).executeTakeFirst();
+    if (!user) throw new AccountError("not_found", "No such account", 404);
+    await this.db.kysely.transaction().execute(async (trx) => {
+      await trx.deleteFrom("item_states").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("subscription_tags").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("subscriptions").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("sessions").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("known_devices").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("invites").where("user_id", "=", userId).execute();
+      await trx.deleteFrom("users").where("id", "=", userId).execute();
+    });
+  }
+
   // ---- TOTP ------------------------------------------------------------------------
 
   /** Starts enrolment: stores a new (not yet active) secret and returns it for the QR code. */
@@ -375,7 +602,7 @@ export class AuthService {
    * device is signed out: a session that existed before two-factor was on shouldn't outlive it.
    */
   enableTotp(userId: string, code: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
-    return this.serial(ACCOUNT_CHECKS, async () => {
+    return this.serial(userId, async () => {
       const user = await this.db.kysely.selectFrom("users").selectAll().where("id", "=", userId).executeTakeFirstOrThrow();
       if (user.totp_enabled === 1 || !user.totp_secret) return { ok: false, reason: "invalid_totp" };
       const checked = await this.checkCode(user, code, await this.countersFor(user, deviceToken));
@@ -388,7 +615,7 @@ export class AuthService {
 
   /** Turns TOTP off (password and a current code required); signs out every other device. */
   disableTotp(userId: string, password: string, code: string, keepSessionId?: string, deviceToken?: string): Promise<CheckResult> {
-    return this.serial(ACCOUNT_CHECKS, async () => {
+    return this.serial(userId, async () => {
       const user = await this.db.kysely.selectFrom("users").selectAll().where("id", "=", userId).executeTakeFirstOrThrow();
       if (user.totp_enabled !== 1) return { ok: false, reason: "invalid_totp" };
       const counters = await this.countersFor(user, deviceToken);

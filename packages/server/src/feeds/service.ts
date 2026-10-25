@@ -5,6 +5,7 @@ import type { AddSourceRequest, CheckingValues, OpmlImportResult, Source, Source
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
+import type { Viewer } from "../auth/service.js";
 import { discoverFeeds } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "./fetch.js";
 import type { FlareSolverr } from "./flaresolverr.js";
@@ -63,8 +64,11 @@ function isYouTubeHiccup(err: unknown): err is FetchError {
 
 const YOUTUBE_FEED_DOWN =
   "YouTube's channel feed isn't answering (it fails on and off on YouTube's side lately). Add a YouTube API key in Settings → YouTube comments and the app reads the channel through the API when this happens.";
-/** On a source's first fetch, items older than this start out as read. */
-const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
+/** On a source's first fetch, or for a new follower, items older than this start out as read. */
+export const FIRST_FETCH_UNREAD_WINDOW_MS = 7 * 24 * 3_600_000;
+/** Shared settings of a source others follow too (D-115): only the admin changes them. */
+const SHARED_SETTINGS =
+  "Other accounts follow this source too, so only the admin can change how it's checked and read (check interval, keep items, reader selectors, FlareSolverr). Your name for it, its tags and pausing it are yours to change.";
 const INSERT_CHUNK = 50;
 /** Posts kept per followed thread (D-084). */
 const THREAD_POSTS_KEPT = 300;
@@ -178,9 +182,9 @@ export class FeedService {
 
   // ---- adding ------------------------------------------------------------------------
 
-  async addSource(input: AddSourceRequest): Promise<Source> {
+  async addSource(viewer: Viewer, input: AddSourceRequest): Promise<Source> {
     const thread = threadFromInput(input.url);
-    if (thread) return this.addThread(input, thread);
+    if (thread) return this.addThread(viewer, input, thread);
     let resolved: Awaited<ReturnType<FeedService["resolve"]>>;
     let via = false;
     try {
@@ -198,26 +202,52 @@ export class FeedService {
       if (err instanceof SourceError) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
       throw err;
     }
-    const existing = await this.db.kysely.selectFrom("sources").select("id").where("feed_url", "=", resolved.feedUrl).executeTakeFirst();
-    if (existing) throw new SourceError("duplicate", "You already follow this feed.", 409);
+    const id = await this.followResolved(viewer, resolved, via, input.title, input.tags ?? []);
+    return (await this.getSource(viewer, id))!;
+  }
 
+  /**
+   * Follows a feed just read: a new source, or (D-115) the one another account already follows,
+   * which isn't fetched again for this. Returns the source's id.
+   */
+  private async followResolved(viewer: Viewer, resolved: ResolvedSource, via: boolean, title: string | undefined, tags: string[]): Promise<string> {
+    const existing = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", resolved.feedUrl).executeTakeFirst();
+    if (existing) {
+      await this.subscribeExisting(viewer, existing, title, tags, "You already follow this feed.");
+      // Items the feed lists now that the source doesn't have yet (e.g. while it was paused).
+      await this.ingest(existing.id, resolved.parsed, false);
+      return existing.id;
+    }
+    const now = this.now();
+    const feedTitle = resolved.parsed.title || new URL(resolved.siteUrl ?? resolved.feedUrl).hostname;
+    const id = await this.insertSource({ kind: resolved.kind, title: feedTitle, site_url: resolved.siteUrl, feed_url: resolved.feedUrl, via_flaresolverr: via ? 1 : 0, next_check_at: null });
+    if (id !== null) {
+      await this.subscribe(viewer.id, id, title || feedTitle, tags);
+      // We already have the feed from resolving it, so store its items straight away.
+      const added = await this.ingest(id, resolved.parsed, true);
+      await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: resolved.kind });
+      this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
+      return id;
+    }
+    // Another account added the same feed at the same moment.
+    const raced = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", resolved.feedUrl).executeTakeFirstOrThrow();
+    await this.subscribeExisting(viewer, raced, title, tags, "You already follow this feed.");
+    return raced.id;
+  }
+
+  /** A new source row; null if its address is already a source (the unique feed_url). */
+  private async insertSource(v: Pick<SourceRow, "kind" | "title" | "site_url" | "feed_url" | "via_flaresolverr" | "next_check_at">): Promise<string | null> {
     const now = this.now();
     const id = crypto.randomUUID();
-    const title = input.title || resolved.parsed.title || new URL(resolved.siteUrl ?? resolved.feedUrl).hostname;
-    await this.db.kysely
+    const res = await this.db.kysely
       .insertInto("sources")
       .values({
         id,
-        kind: resolved.kind,
-        title,
-        site_url: resolved.siteUrl,
-        feed_url: resolved.feedUrl,
+        ...v,
         status: "pending",
-        via_flaresolverr: via ? 1 : 0,
         last_error: null,
         last_checked_at: null,
         last_success_at: null,
-        next_check_at: null,
         poll_interval_minutes: null,
         retention_days: null,
         etag: null,
@@ -225,20 +255,99 @@ export class FeedService {
         created_at: now,
         updated_at: now,
       })
+      .onConflict((oc) => oc.column("feed_url").doNothing())
+      .executeTakeFirst();
+    return Number(res.numInsertedOrUpdatedRows ?? 0) > 0 ? id : null;
+  }
+
+  /** Follows a source another account (or nobody, any more) already follows. */
+  private async subscribeExisting(viewer: Viewer, source: { id: string; title: string }, title: string | undefined, tags: string[], duplicateMessage: string) {
+    const mine = await this.subscription(viewer.id, source.id);
+    if (mine) throw new SourceError("duplicate", duplicateMessage.replace("{title}", mine.title), 409);
+    await this.subscribe(viewer.id, source.id, title || source.title, tags);
+    this.log?.info({ sourceId: source.id, userId: viewer.id }, "followed a source another account follows");
+  }
+
+  /** Adds a follower. Of the items the source has already, those over a week old start out read for them. */
+  private async subscribe(userId: string, sourceId: string, title: string, tags: string[], enabled = true): Promise<void> {
+    const now = this.now();
+    await this.db.kysely
+      .insertInto("subscriptions")
+      .values({ user_id: userId, source_id: sourceId, title, enabled: enabled ? 1 : 0, thread_batch_from: null, created_at: now, updated_at: now })
       .execute();
-    await this.setTags(id, input.tags ?? []);
-    // We already have the feed from resolving it, so store its items straight away.
-    const added = await this.ingest(id, resolved.parsed, true);
-    await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: resolved.kind });
-    this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
-    return (await this.getSource(id))!;
+    const old = now - FIRST_FETCH_UNREAD_WINDOW_MS;
+    await this.db.kysely
+      .insertInto("item_states")
+      .columns(["user_id", "item_id", "source_id", "read", "saved", "read_at"])
+      .expression((eb) =>
+        eb
+          .selectFrom("items")
+          .select((s) => [
+            s.val(userId).as("user_id"),
+            "items.id",
+            "items.source_id",
+            s.case().when("items.published_at", "<", old).then(1).else(0).end().as("read"),
+            s.val(0).as("saved"),
+            s.case().when("items.published_at", "<", old).then(now).else(null).end().as("read_at"),
+          ])
+          .where("items.source_id", "=", sourceId),
+      )
+      .onConflict((oc) => oc.columns(["user_id", "item_id"]).doNothing())
+      .execute();
+    await this.setTags(userId, sourceId, tags);
+    await this.syncEnabled(sourceId);
+  }
+
+  private subscription(userId: string, sourceId: string) {
+    return this.db.kysely.selectFrom("subscriptions").selectAll().where("user_id", "=", userId).where("source_id", "=", sourceId).executeTakeFirst();
+  }
+
+  private async followerCount(sourceId: string): Promise<number> {
+    const row = await this.db.kysely.selectFrom("subscriptions").select((eb) => eb.fn.countAll<number>().as("n")).where("source_id", "=", sourceId).executeTakeFirst();
+    return Number(row?.n ?? 0);
+  }
+
+  /**
+   * A source is checked while any follower whose account is on has it on (D-115): turned off when
+   * the last one pauses it (or is turned off), checked again right away when someone turns it on.
+   */
+  private async syncEnabled(sourceId: string): Promise<void> {
+    const on = await this.db.kysely
+      .selectFrom("subscriptions")
+      .innerJoin("users", "users.id", "subscriptions.user_id")
+      .select("subscriptions.user_id")
+      .where("subscriptions.source_id", "=", sourceId)
+      .where("subscriptions.enabled", "=", 1)
+      .where("users.disabled", "=", 0)
+      .limit(1)
+      .executeTakeFirst();
+    const row = await this.db.kysely.selectFrom("sources").select(["enabled", "status"]).where("id", "=", sourceId).executeTakeFirst();
+    if (!row) return;
+    if (on && row.enabled !== 1) {
+      await this.db.kysely
+        .updateTable("sources")
+        .set({ enabled: 1, status: "pending", consecutive_failures: 0, next_check_at: this.now(), last_error: null, updated_at: this.now() })
+        .where("id", "=", sourceId)
+        .execute();
+    } else if (!on && row.enabled === 1) {
+      await this.db.kysely
+        .updateTable("sources")
+        .set({ enabled: 0, status: "paused", next_check_at: null, last_error: null, updated_at: this.now() })
+        .where("id", "=", sourceId)
+        .execute();
+    }
   }
 
   // ---- following a forum thread (D-084) ------------------------------------------------
 
-  private async addThread(input: AddSourceRequest, address: string): Promise<Source> {
-    const existing = await this.db.kysely.selectFrom("sources").select("title").where("feed_url", "=", address).executeTakeFirst();
-    if (existing) throw new SourceError("duplicate", `You already follow this thread as “${existing.title}”.`, 409);
+  private async addThread(viewer: Viewer, input: AddSourceRequest, address: string): Promise<Source> {
+    const duplicate = "You already follow this thread as “{title}”.";
+    const existing = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", address).executeTakeFirst();
+    if (existing) {
+      // Another account follows it: its stored posts are shared, nothing to fetch (D-115).
+      await this.subscribeExisting(viewer, existing, input.title, input.tags ?? [], duplicate);
+      return (await this.getSource(viewer, existing.id))!;
+    }
     let via = false;
     let read: Awaited<ReturnType<FeedService["readThread"]>>;
     try {
@@ -255,35 +364,19 @@ export class FeedService {
       throw err;
     }
     const now = this.now();
-    const id = crypto.randomUUID();
-    const title = input.title || read.pages.at(-1)?.title || new URL(address).hostname;
-    await this.db.kysely
-      .insertInto("sources")
-      .values({
-        id,
-        kind: "thread",
-        title,
-        site_url: address,
-        feed_url: address,
-        status: "pending",
-        via_flaresolverr: via ? 1 : 0,
-        last_error: null,
-        last_checked_at: null,
-        last_success_at: null,
-        next_check_at: null,
-        poll_interval_minutes: null,
-        retention_days: null,
-        etag: null,
-        last_modified: null,
-        created_at: now,
-        updated_at: now,
-      })
-      .execute();
-    await this.setTags(id, input.tags ?? []);
+    const threadTitle = read.pages.at(-1)?.title || new URL(address).hostname;
+    const id = await this.insertSource({ kind: "thread", title: threadTitle, site_url: address, feed_url: address, via_flaresolverr: via ? 1 : 0, next_check_at: null });
+    if (id === null) {
+      // Another account followed it at the same moment.
+      const raced = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", address).executeTakeFirstOrThrow();
+      await this.subscribeExisting(viewer, raced, input.title, input.tags ?? [], duplicate);
+      return (await this.getSource(viewer, raced.id))!;
+    }
+    await this.subscribe(viewer.id, id, input.title || threadTitle, input.tags ?? []);
     const added = await this.ingestThread(id, read.pages, read.lastUrl, true);
     await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: "thread" });
     this.log?.info({ sourceId: id, thread: address, posts: added }, "thread followed");
-    return (await this.getSource(id))!;
+    return (await this.getSource(viewer, id))!;
   }
 
   /**
@@ -376,10 +469,11 @@ export class FeedService {
     }
     // The thread's title as the page shows it; a source still named after the old (tab) title follows it.
     const title = pages.at(-1)?.title ?? null;
-    const card = await this.db.kysely.selectFrom("items").select(["id", "read", "title"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
+    const card = await this.db.kysely.selectFrom("items").select(["id", "title", "published_at"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
     if (title && card && card.title !== title) {
       await this.db.kysely.updateTable("items").set({ title }).where("id", "=", card.id).execute();
       await this.db.kysely.updateTable("sources").set({ title }).where("id", "=", sourceId).where("title", "=", card.title).execute();
+      await this.db.kysely.updateTable("subscriptions").set({ title }).where("source_id", "=", sourceId).where("title", "=", card.title).execute();
     }
     if (!fresh.size && !firstFetch) {
       // Dates corrected: the card is dated by its newest post again (read state unchanged).
@@ -391,33 +485,46 @@ export class FeedService {
       return 0;
     }
 
-    // The card: unread again, with the count since the user last read it.
-    const source = await this.db.kysely.selectFrom("sources").select(["title", "thread_batch_from"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
-    const batchFrom = !card || card.read === 1 || source.thread_batch_from === null ? now : source.thread_batch_from;
-    await this.db.kysely.updateTable("sources").set({ thread_batch_from: batchFrom }).where("id", "=", sourceId).execute();
-    const batch = await this.db.kysely
-      .selectFrom("thread_posts")
-      .select(["post_id", "author", "html", "posted_at"])
-      .where("source_id", "=", sourceId)
-      .where("fetched_at", ">=", batchFrom)
-      .execute();
-    const latest = batch.sort((a, b) => postNumber(b.post_id) - postNumber(a.post_id))[0];
-    const summary = firstFetch && !card
-      ? threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null).replace(/new (reply|replies)/, "latest $1")
-      : threadSummary(batch.length, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
+    // Each follower's batch (D-115): a follower who read the card starts a new one now; one who
+    // hasn't keeps theirs (none yet: the card shows the newest stored posts).
+    if (card) {
+      const followers = await this.db.kysely
+        .selectFrom("subscriptions as s")
+        .leftJoin("item_states as st", (j) => j.onRef("st.user_id", "=", "s.user_id").on("st.item_id", "=", card.id))
+        .select(["s.user_id", "st.read"])
+        .where("s.source_id", "=", sourceId)
+        .execute();
+      for (const f of followers) {
+        const read = f.read === 1;
+        if (read) await this.db.kysely.updateTable("subscriptions").set({ thread_batch_from: now }).where("user_id", "=", f.user_id).where("source_id", "=", sourceId).execute();
+      }
+    }
+    const source = await this.db.kysely.selectFrom("sources").select(["title"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
+    const latest = (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "html", "posted_at"]).where("source_id", "=", sourceId).where("fetched_at", "=", now).execute())
+      .sort((a, b) => postNumber(b.post_id) - postNumber(a.post_id))[0];
+    // Shown only where a follower's own count can't be worked out; the feed recounts per follower.
+    const summary = threadSummary(fresh.size, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
     const values = {
       title: title ?? source.title,
       url: lastUrl,
       author: latest?.author ?? null,
-      summary,
+      summary: firstFetch && !card ? summary.replace(/new (reply|replies)/, "latest $1") : summary,
       image_url: null,
       published_at: Math.min(latest?.posted_at ?? now, now),
       fetched_at: now,
-      read: 0,
-      read_at: null,
     };
+    const cardId = card?.id ?? crypto.randomUUID();
     if (card) await this.db.kysely.updateTable("items").set(values).where("id", "=", card.id).execute();
-    else await this.db.kysely.insertInto("items").values({ ...values, id: crypto.randomUUID(), source_id: sourceId, guid: "thread", saved: 0 }).execute();
+    else await this.db.kysely.insertInto("items").values({ ...values, id: cardId, source_id: sourceId, guid: "thread" }).execute();
+    // The card is unread again for every follower (saved stays as it was).
+    const userIds = (await this.db.kysely.selectFrom("subscriptions").select("user_id").where("source_id", "=", sourceId).execute()).map((r) => r.user_id);
+    if (userIds.length) {
+      await this.db.kysely
+        .insertInto("item_states")
+        .values(userIds.map((user_id) => ({ user_id, item_id: cardId, source_id: sourceId, read: 0, saved: 0, read_at: null })))
+        .onConflict((oc) => oc.columns(["user_id", "item_id"]).doUpdateSet({ read: 0, read_at: null }))
+        .execute();
+    }
     return fresh.size;
   }
 
@@ -449,9 +556,10 @@ export class FeedService {
    * Adds every feed in an OPML file that isn't followed yet. Nothing is fetched here: sources
    * start as "pending" and the scheduler checks them (politely spaced per site) right away.
    */
-  async importOpml(xml: string): Promise<OpmlImportResult> {
+  async importOpml(viewer: Viewer, xml: string): Promise<OpmlImportResult> {
     const entries = parseOpml(xml);
-    const existing = new Set((await this.db.kysely.selectFrom("sources").select("feed_url").execute()).map((r) => r.feed_url));
+    const sources = new Map((await this.db.kysely.selectFrom("sources").select(["id", "feed_url", "title"]).execute()).map((r) => [r.feed_url, r]));
+    const mine = new Set((await this.db.kysely.selectFrom("subscriptions").select("source_id").where("user_id", "=", viewer.id).execute()).map((r) => r.source_id));
     const result: OpmlImportResult = { added: 0, skipped: [] };
     const now = this.now();
     for (const e of entries) {
@@ -460,43 +568,27 @@ export class FeedService {
         result.skipped.push({ url: e.feedUrl, title: e.title, reason: "Not an http(s) feed address" });
         continue;
       }
-      if (existing.has(planned.feedUrl)) {
+      const existing = sources.get(planned.feedUrl);
+      if (existing && mine.has(existing.id)) {
         result.skipped.push({ url: planned.feedUrl, title: e.title, reason: "Already followed" });
         continue;
       }
-      existing.add(planned.feedUrl);
-      const id = crypto.randomUUID();
-      await this.db.kysely
-        .insertInto("sources")
-        .values({
-          id,
-          kind: planned.kind,
-          title: e.title || new URL(planned.feedUrl).hostname,
-          site_url: e.siteUrl ?? planned.siteUrl,
-          feed_url: planned.feedUrl,
-          status: "pending",
-          last_error: null,
-          last_checked_at: null,
-          last_success_at: null,
-          next_check_at: now,
-          poll_interval_minutes: null,
-          retention_days: null,
-          etag: null,
-          last_modified: null,
-          created_at: now,
-          updated_at: now,
-        })
-        .execute();
-      await this.setTags(id, e.tags);
+      const title = e.title || new URL(planned.feedUrl).hostname;
+      // Followed by another account already (D-115): just follow it too.
+      const id = existing?.id ?? (await this.insertSource({ kind: planned.kind, title, site_url: e.siteUrl ?? planned.siteUrl, feed_url: planned.feedUrl, via_flaresolverr: 0, next_check_at: now }));
+      if (!id) continue;
+      sources.set(planned.feedUrl, { id, feed_url: planned.feedUrl, title });
+      mine.add(id);
+      await this.subscribe(viewer.id, id, title, e.tags);
       result.added++;
     }
     this.log?.info({ added: result.added, skipped: result.skipped.length }, "OPML imported");
     return result;
   }
 
-  async exportOpml(): Promise<string> {
+  async exportOpml(viewer: Viewer): Promise<string> {
     // Followed threads aren't feeds other readers could use.
-    const sources = (await this.listSources()).filter((s) => s.kind !== "thread");
+    const sources = (await this.listSources(viewer)).filter((s) => s.kind !== "thread");
     return buildOpml(
       sources.map((s) => ({ title: s.title, feedUrl: s.feedUrl, siteUrl: s.siteUrl, tags: s.tags })),
       this.now(),
@@ -854,7 +946,6 @@ export class FeedService {
     const candidates = parsed.items.map((it, index) => {
       // Undated items keep feed order; dates in the future are treated as "now".
       const published = Math.min(it.publishedAt ?? now - index, now);
-      const old = firstFetch && published < now - FIRST_FETCH_UNREAD_WINDOW_MS;
       return {
         content: it.contentHtml,
         row: {
@@ -870,9 +961,6 @@ export class FeedService {
           audio_duration: it.audio?.durationSeconds ?? null,
           published_at: published,
           fetched_at: now,
-          read: old ? 1 : 0,
-          saved: 0,
-          read_at: old ? now : null,
         },
       };
     });
@@ -902,6 +990,23 @@ export class FeedService {
         (await this.db.kysely.selectFrom("items").select("id").where("id", "in", chunk.map((c) => c.row.id)).execute()).map((r) => r.id),
       );
       inserted += fresh.size;
+      // Each follower's row for each new item (D-115); on a first fetch, ones over a week old start out read.
+      const followers = fresh.size ? (await this.db.kysely.selectFrom("subscriptions").select("user_id").where("source_id", "=", sourceId).execute()).map((r) => r.user_id) : [];
+      const added = chunk.filter((c) => fresh.has(c.row.id));
+      if (followers.length && added.length) {
+        await this.db.kysely
+          .insertInto("item_states")
+          .values(
+            followers.flatMap((user_id) =>
+              added.map((c) => {
+                const old = firstFetch && c.row.published_at < now - FIRST_FETCH_UNREAD_WINDOW_MS;
+                return { user_id, item_id: c.row.id, source_id: sourceId, read: old ? 1 : 0, saved: 0, read_at: old ? now : null };
+              }),
+            ),
+          )
+          .onConflict((oc) => oc.columns(["user_id", "item_id"]).doNothing())
+          .execute();
+      }
       const contents = chunk
         .filter((c) => c.content && fresh.has(c.row.id))
         .map((c) => ({ item_id: c.row.id, origin: "feed" as const, status: "raw" as const, html: c.content, error: null, fetched_at: now }));
@@ -973,8 +1078,9 @@ export class FeedService {
         .selectFrom("items")
         .select(["id", "guid"])
         .where("source_id", "=", src.id)
-        .where("saved", "=", 0)
         .where("published_at", "<", cutoff)
+        // Kept while anyone has it saved.
+        .where(({ not, exists, selectFrom }) => not(exists(selectFrom("item_states").select("item_states.item_id").whereRef("item_states.item_id", "=", "items.id").where("item_states.saved", "=", 1))))
         .execute();
       for (let i = 0; i < doomed.length; i += 200) {
         const batch = doomed.slice(i, i + 200);
@@ -985,6 +1091,7 @@ export class FeedService {
             .onConflict((oc) => oc.columns(["source_id", "guid"]).doNothing())
             .execute();
           await trx.deleteFrom("item_content").where("item_id", "in", batch.map((d) => d.id)).execute();
+          await trx.deleteFrom("item_states").where("item_id", "in", batch.map((d) => d.id)).execute();
           await trx.deleteFrom("items").where("id", "in", batch.map((d) => d.id)).execute();
         });
       }
@@ -1012,27 +1119,101 @@ export class FeedService {
 
   // ---- reading and editing -----------------------------------------------------------
 
-  async listSources(): Promise<Source[]> {
-    const rows = await this.db.kysely.selectFrom("sources").selectAll().orderBy("title").execute();
-    const [counts, tags] = await Promise.all([this.counts(), this.tagsBySource()]);
-    return rows.map((r) => this.toSource(r, counts.get(r.id), tags.get(r.id)));
+  /** The viewer's sources: only those they follow, with their own names, tags and counts. */
+  async listSources(viewer: Viewer): Promise<Source[]> {
+    return this.sourcesFor(viewer);
   }
 
-  async getSource(id: string): Promise<Source | undefined> {
-    const row = await this.db.kysely.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirst();
-    if (!row) return undefined;
-    const [counts, tags] = await Promise.all([this.counts(id), this.tagsBySource(id)]);
-    return this.toSource(row, counts.get(id), tags.get(id));
+  /** undefined if the viewer doesn't follow it. */
+  async getSource(viewer: Viewer, id: string): Promise<Source | undefined> {
+    return (await this.sourcesFor(viewer, id))[0];
   }
 
-  async updateSource(id: string, patch: UpdateSourceRequest): Promise<Source> {
+  /** Whether the viewer follows the source: every source route checks this first. */
+  async follows(viewer: Viewer, sourceId: string): Promise<boolean> {
+    return !!(await this.subscription(viewer.id, sourceId));
+  }
+
+  private async sourcesFor(viewer: Viewer, onlyId?: string): Promise<Source[]> {
+    let q = this.db.kysely
+      .selectFrom("subscriptions as s")
+      .innerJoin("sources", "sources.id", "s.source_id")
+      .selectAll("sources")
+      .select(["s.title as sub_title", "s.enabled as sub_enabled", "s.created_at as sub_created_at"])
+      .where("s.user_id", "=", viewer.id);
+    if (onlyId) q = q.where("sources.id", "=", onlyId);
+    const rows = (await q.execute()).sort((a, b) => a.sub_title.localeCompare(b.sub_title));
+    if (!rows.length) return [];
+    const ids = rows.map((r) => r.id);
+    const [counts, tags, followers] = await Promise.all([
+      this.counts(viewer.id, onlyId),
+      this.tagsBySource(viewer.id, onlyId),
+      this.db.kysely
+        .selectFrom("subscriptions")
+        .select((eb) => ["source_id", eb.fn.countAll<number>().as("n")])
+        .where("source_id", "in", ids)
+        .groupBy("source_id")
+        .execute(),
+    ]);
+    const shared = new Map(followers.map((f) => [f.source_id, Number(f.n) > 1]));
+    return rows.map((r) =>
+      this.toSource(
+        { ...r, title: r.sub_title, created_at: r.sub_created_at },
+        r.sub_enabled === 1,
+        viewer.role === "admin" || !shared.get(r.id),
+        counts.get(r.id),
+        tags.get(r.id),
+      ),
+    );
+  }
+
+  async updateSource(viewer: Viewer, id: string, patch: UpdateSourceRequest): Promise<Source> {
     const row = await this.db.kysely.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirst();
-    if (!row) throw new SourceError("not_found", "Source not found", 404);
-    const set: Partial<SourceRow> = { updated_at: this.now() };
-    if (patch.title !== undefined) set.title = patch.title;
-    if (patch.pollIntervalMinutes !== undefined) set.poll_interval_minutes = patch.pollIntervalMinutes;
-    if (patch.retentionDays !== undefined) set.retention_days = patch.retentionDays;
+    const sub = row && (await this.subscription(viewer.id, id));
+    if (!row || !sub) throw new SourceError("not_found", "Source not found", 404);
+    const sole = (await this.followerCount(id)) === 1;
     const via = patch.viaFlareSolverr ?? row.via_flaresolverr === 1;
+
+    // A new address is checked before anything is saved; existing items are kept.
+    let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
+    if (patch.url !== undefined && patch.url !== row.feed_url && patch.url !== row.site_url) {
+      if (row.kind === "thread" || threadFromInput(patch.url)) {
+        throw new SourceError("thread_address", "A followed thread keeps its address. To follow another thread, add it as a new source.", 400, { url: "Add the other thread as a new source" });
+      }
+      try {
+        moved = await this.resolve(patch.url, via);
+      } catch (err) {
+        if (err instanceof SourceError) this.log?.warn({ input: patch.url, code: err.code, reason: err.message }, "could not change source address");
+        throw err;
+      }
+      if (moved.feedUrl !== row.feed_url) {
+        const clash = await this.db.kysely.selectFrom("sources").select(["id"]).where("feed_url", "=", moved.feedUrl).where("id", "!=", id).executeTakeFirst();
+        const clashMine = clash && (await this.subscription(viewer.id, clash.id));
+        if (clashMine) throw new SourceError("duplicate", `That feed is already followed as “${clashMine.title}”.`, 409);
+        if (clash || !sole) {
+          // The new address is another source, or others still follow this one: the viewer moves
+          // to the new feed and the others keep the old one (D-115). The rest of the edit applies
+          // to the viewer's new source.
+          const tags = patch.tags ?? (await this.tagsBySource(viewer.id, id)).get(id) ?? [];
+          const newId = await this.followResolved(viewer, moved, via, patch.title ?? sub.title, tags);
+          await this.removeSource(viewer, id);
+          const { url: _url, title: _title, tags: _tags, ...rest } = patch;
+          try {
+            return await this.updateSource(viewer, newId, rest);
+          } catch (err) {
+            // Moved to a feed others follow: its shared settings stay as they are.
+            if (err instanceof SourceError && err.code === "shared_source") {
+              return this.updateSource(viewer, newId, { enabled: rest.enabled, articleSelector: undefined, removeSelector: undefined });
+            }
+            throw err;
+          }
+        }
+      }
+    }
+
+    const set: Partial<SourceRow> = { updated_at: this.now() };
+    if (patch.pollIntervalMinutes !== undefined && patch.pollIntervalMinutes !== row.poll_interval_minutes) set.poll_interval_minutes = patch.pollIntervalMinutes;
+    if (patch.retentionDays !== undefined && patch.retentionDays !== row.retention_days) set.retention_days = patch.retentionDays;
     if (patch.viaFlareSolverr !== undefined && via !== (row.via_flaresolverr === 1)) {
       set.via_flaresolverr = via ? 1 : 0;
       // A different route: start fresh (no validators, check soon).
@@ -1048,35 +1229,22 @@ export class FeedService {
       if (patch.articleSelector !== undefined) set.article_selector = patch.articleSelector;
       if (patch.removeSelector !== undefined) set.remove_selector = patch.removeSelector;
     }
-
-    // A new address is checked before anything is saved; existing items are kept.
-    let moved: Awaited<ReturnType<FeedService["resolve"]>> | undefined;
-    if (patch.url !== undefined && patch.url !== row.feed_url && patch.url !== row.site_url) {
-      if (row.kind === "thread" || threadFromInput(patch.url)) {
-        throw new SourceError("thread_address", "A followed thread keeps its address. To follow another thread, add it as a new source.", 400, { url: "Add the other thread as a new source" });
-      }
-      try {
-        moved = await this.resolve(patch.url, via);
-      } catch (err) {
-        if (err instanceof SourceError) this.log?.warn({ input: patch.url, code: err.code, reason: err.message }, "could not change source address");
-        throw err;
-      }
-      if (moved.feedUrl !== row.feed_url) {
-        const clash = await this.db.kysely.selectFrom("sources").select("title").where("feed_url", "=", moved.feedUrl).where("id", "!=", id).executeTakeFirst();
-        if (clash) throw new SourceError("duplicate", `That feed is already followed as “${clash.title}”.`, 409);
-      }
+    if (moved && moved.feedUrl !== row.feed_url) {
       set.feed_url = moved.feedUrl;
       set.site_url = moved.siteUrl;
       set.kind = moved.kind;
       set.etag = null;
       set.last_modified = null;
     }
-    if (patch.enabled === false) {
-      set.enabled = 0;
-      set.status = "paused";
-      set.next_check_at = null;
-      set.last_error = null;
-    } else if (patch.enabled === true) {
+    // How it's checked and read is shared by its followers (D-115).
+    if (Object.keys(set).length > 1 && !sole && viewer.role !== "admin") throw new SourceError("shared_source", SHARED_SETTINGS, 403);
+
+    // The viewer's own: their name for it, tags, and whether they want it checked.
+    const own: { title?: string; enabled?: number; updated_at: number } = { updated_at: this.now() };
+    if (patch.title !== undefined) own.title = patch.title;
+    if (patch.enabled !== undefined) own.enabled = patch.enabled ? 1 : 0;
+    await this.db.kysely.updateTable("subscriptions").set(own).where("user_id", "=", viewer.id).where("source_id", "=", id).execute();
+    if (patch.enabled === true) {
       // Resume (also after the circuit breaker paused it): check again right away.
       set.enabled = 1;
       set.status = "pending";
@@ -1085,12 +1253,13 @@ export class FeedService {
       set.last_error = null;
     }
     await this.db.kysely.updateTable("sources").set(set).where("id", "=", id).execute();
-    if (patch.tags !== undefined) await this.setTags(id, patch.tags);
-    if (moved) {
+    if (patch.enabled === false) await this.syncEnabled(id);
+    if (patch.tags !== undefined) await this.setTags(viewer.id, id, patch.tags);
+    if (moved && set.feed_url) {
       await this.ingest(id, moved.parsed, true);
       await this.recordSuccess(id, this.now(), null, null, { ...row, ...set } as SourceRow);
     }
-    if (patch.retentionDays !== undefined) await this.applyRetention(id);
+    if (set.retention_days !== undefined) await this.applyRetention(id);
     // Articles already read from the page used the old selectors: read them again next time.
     if (selectorsChanged) {
       await this.db.kysely
@@ -1099,76 +1268,109 @@ export class FeedService {
         .where("item_id", "in", (eb) => eb.selectFrom("items").select("items.id").where("items.source_id", "=", id))
         .execute();
     }
-    return (await this.getSource(id))!;
+    return (await this.getSource(viewer, id))!;
   }
 
-  private async setTags(sourceId: string, tags: string[]): Promise<void> {
+  private async setTags(userId: string, sourceId: string, tags: string[]): Promise<void> {
     await this.db.kysely.transaction().execute(async (trx) => {
-      await trx.deleteFrom("source_tags").where("source_id", "=", sourceId).execute();
-      if (tags.length) await trx.insertInto("source_tags").values(tags.map((tag) => ({ source_id: sourceId, tag }))).execute();
+      await trx.deleteFrom("subscription_tags").where("user_id", "=", userId).where("source_id", "=", sourceId).execute();
+      if (tags.length) await trx.insertInto("subscription_tags").values(tags.map((tag) => ({ user_id: userId, source_id: sourceId, tag }))).execute();
     });
   }
 
-  private async tagsBySource(onlyId?: string): Promise<Map<string, string[]>> {
-    let q = this.db.kysely.selectFrom("source_tags").select(["source_id", "tag"]).orderBy("tag");
+  private async tagsBySource(userId: string, onlyId?: string): Promise<Map<string, string[]>> {
+    let q = this.db.kysely.selectFrom("subscription_tags").select(["source_id", "tag"]).where("user_id", "=", userId).orderBy("tag");
     if (onlyId) q = q.where("source_id", "=", onlyId);
     const map = new Map<string, string[]>();
     for (const r of await q.execute()) map.set(r.source_id, [...(map.get(r.source_id) ?? []), r.tag]);
     return map;
   }
 
-  /** All tags in use, with how many sources use each and how many unread items they cover. */
-  async listTags(): Promise<TagCount[]> {
+  /** The viewer's tags, with how many of their sources use each and how many unread items they cover. */
+  async listTags(viewer: Viewer): Promise<TagCount[]> {
     const rows = await this.db.kysely
-      .selectFrom("source_tags")
-      .leftJoin("items", (j) => j.onRef("items.source_id", "=", "source_tags.source_id").on("items.read", "=", 0))
-      .select((eb) => [
-        "source_tags.tag",
-        eb.fn.count<number>("source_tags.source_id").distinct().as("sources"),
-        eb.fn.count<number>("items.id").as("unread"),
-      ])
-      .groupBy("source_tags.tag")
-      .orderBy("source_tags.tag")
+      .selectFrom("subscription_tags as t")
+      .leftJoin("item_states as st", (j) => j.onRef("st.user_id", "=", "t.user_id").onRef("st.source_id", "=", "t.source_id").on("st.read", "=", 0))
+      .select((eb) => ["t.tag", eb.fn.count<number>("t.source_id").distinct().as("sources"), eb.fn.count<number>("st.item_id").as("unread")])
+      .where("t.user_id", "=", viewer.id)
+      .groupBy("t.tag")
+      .orderBy("t.tag")
       .execute();
     return rows.map((r) => ({ tag: r.tag, sources: Number(r.sources), unread: Number(r.unread) }));
   }
 
-  async removeSource(id: string): Promise<boolean> {
+  /**
+   * Stops the viewer following a source; their read/saved marks and tags for it go too. The
+   * source itself, with its items, is removed once nobody follows it (D-115).
+   */
+  async removeSource(viewer: Viewer, id: string): Promise<boolean> {
+    if (!(await this.subscription(viewer.id, id))) return false;
+    await this.db.kysely.deleteFrom("item_states").where("user_id", "=", viewer.id).where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("subscription_tags").where("user_id", "=", viewer.id).where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("subscriptions").where("user_id", "=", viewer.id).where("source_id", "=", id).execute();
+    if ((await this.followerCount(id)) > 0) {
+      await this.syncEnabled(id);
+      return true;
+    }
+    await this.deleteSource(id);
+    return true;
+  }
+
+  /** Removes sources nobody follows any more (after an account is deleted). */
+  async removeUnfollowed(): Promise<number> {
+    const orphans = await this.db.kysely
+      .selectFrom("sources")
+      .select("id")
+      .where(({ not, exists, selectFrom }) => not(exists(selectFrom("subscriptions").select("subscriptions.source_id").whereRef("subscriptions.source_id", "=", "sources.id"))))
+      .execute();
+    for (const o of orphans) await this.deleteSource(o.id);
+    return orphans.length;
+  }
+
+  /** After an account is deleted: sources it alone had on stop being checked. */
+  async resyncEnabled(): Promise<void> {
+    for (const r of await this.db.kysely.selectFrom("sources").select("id").execute()) await this.syncEnabled(r.id);
+  }
+
+  private async deleteSource(id: string): Promise<void> {
     // Everything goes with it (ON DELETE CASCADE, plus explicitly in case FKs aren't enforced).
     await this.db.kysely
       .deleteFrom("item_content")
       .where("item_id", "in", (eb) => eb.selectFrom("items").select("id").where("source_id", "=", id))
       .execute();
+    await this.db.kysely.deleteFrom("item_states").where("source_id", "=", id).execute();
     await this.db.kysely.deleteFrom("items").where("source_id", "=", id).execute();
-    await this.db.kysely.deleteFrom("source_tags").where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("subscription_tags").where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("subscriptions").where("source_id", "=", id).execute();
     await this.db.kysely.deleteFrom("item_tombstones").where("source_id", "=", id).execute();
-    const res = await this.db.kysely.deleteFrom("sources").where("id", "=", id).executeTakeFirst();
-    return Number(res.numDeletedRows) > 0;
+    await this.db.kysely.deleteFrom("thread_posts").where("source_id", "=", id).execute();
+    await this.db.kysely.deleteFrom("sources").where("id", "=", id).execute();
   }
 
-  private async counts(onlyId?: string): Promise<Map<string, { total: number; unread: number }>> {
+  /**
+   * Per source the viewer follows: items, and how many are unread for them, from the viewer's
+   * item_states rows alone (an index-only scan of item_states(user_id, source_id, read)).
+   */
+  private async counts(userId: string, onlyId?: string): Promise<Map<string, { total: number; unread: number }>> {
     let q = this.db.kysely
-      .selectFrom("items")
-      .select((eb) => [
-        "source_id",
-        eb.fn.countAll<number>().as("total"),
-        eb.fn.sum<number>(eb.case().when("read", "=", 0).then(1).else(0).end()).as("unread"),
-      ])
+      .selectFrom("item_states")
+      .select((eb) => ["source_id", eb.fn.countAll<number>().as("total"), eb.fn.sum<number>(eb.case().when("read", "=", 0).then(1).else(0).end()).as("unread")])
+      .where("user_id", "=", userId)
       .groupBy("source_id");
     if (onlyId) q = q.where("source_id", "=", onlyId);
     const rows = await q.execute();
     return new Map(rows.map((r) => [r.source_id, { total: Number(r.total), unread: Number(r.unread ?? 0) }]));
   }
 
-  private toSource(r: SourceRow, c?: { total: number; unread: number }, tags: string[] = []): Source {
+  private toSource(r: SourceRow, enabled: boolean, canEditShared: boolean, c?: { total: number; unread: number }, tags: string[] = []): Source {
     return {
       id: r.id,
       kind: r.kind,
       title: r.title,
       siteUrl: r.site_url,
       feedUrl: r.feed_url,
-      enabled: r.enabled === 1,
-      status: r.enabled === 1 ? r.status : "paused",
+      enabled,
+      status: enabled && r.enabled === 1 ? r.status : "paused",
       lastError: r.last_error,
       lastCheckedAt: r.last_checked_at,
       lastSuccessAt: r.last_success_at,
@@ -1178,6 +1380,7 @@ export class FeedService {
       articleSelector: r.article_selector,
       removeSelector: r.remove_selector,
       viaFlareSolverr: r.via_flaresolverr === 1,
+      canEditShared,
       tags,
       unreadCount: c?.unread ?? 0,
       itemCount: c?.total ?? 0,

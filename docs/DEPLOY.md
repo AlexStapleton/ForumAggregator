@@ -207,6 +207,27 @@ How login is protected (D-110):
   with **Sign out** for each and **Sign out everywhere else**. Each device must log in again at
   least every 90 days (`SESSION_MAX_DAYS`).
 
+### Accounts for other people
+
+The first account is the **admin**. To give someone their own account (D-114):
+
+1. **Settings → Accounts → Invite someone**, optionally noting who it's for, then **Create
+   invitation link**. Send them the link (by message, not posted anywhere public): it works once,
+   for 7 days. The link is shown only when it's made; if it's lost, cancel it and make another.
+2. They open it, choose a username and password, and are logged in. Recommend they turn on
+   two-factor login too.
+
+They add their own sources, tags and read/saved items; you don't see what they follow or read,
+and they don't see yours. A site you both follow is checked once for both (D-115). Its check
+interval, how long items are kept, reader selectors and FlareSolverr are then shared: only you
+can change them. Your FlareSolverr and YouTube API key work for their sources too (their YouTube
+comments count against your key's daily quota). Settings → Checking, FlareSolverr and YouTube
+comments are yours alone.
+
+Under each account: **Password reset link** (one use, 24 hours; using it signs them out
+everywhere), **Turn off two-factor** (a lost phone), **Turn off** (signed out, can't log in
+until you turn it on again) and **Delete** (with the sources only they followed).
+
 ## 5. Later: single sign-on with Authelia or Authentik
 
 The app can trust a logged-in username from your SSO proxy instead of, or as well as, its
@@ -218,7 +239,9 @@ AUTH_PROXY_HEADER=Remote-User  # header Authelia/Authentik set after login
 AUTH_PROXY_TRUSTED=172.20.0.5  # NPM's container IP, and nothing broader
 ```
 
-- The header value must match your app username. Create the account first (§2).
+- The header value must match an app username. Create the account first (§2); for other
+  people, make an invitation link in Settings → Accounts and have them pick their SSO username
+  (with `AUTH_MODE=proxy` the password they set there isn't used).
 - **Security:** whoever can reach the app *directly* from a trusted IP can claim to be
   anyone. So when SSO is on:
   - don't publish port 8080 (use the shared network from §3), and

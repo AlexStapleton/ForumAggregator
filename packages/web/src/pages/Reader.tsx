@@ -178,9 +178,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Includes the podcast player's position slider: arrow keys seek there instead of changing items.
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
-      // Arrow keys seek in a focused podcast player instead of changing items.
-      if (e.target instanceof HTMLMediaElement && e.key.startsWith("Arrow")) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === "ArrowRight" || e.key === "j") void go(1);
       else if (e.key === "ArrowLeft" || e.key === "k") void go(-1);

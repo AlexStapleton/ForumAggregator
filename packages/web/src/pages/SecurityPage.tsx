@@ -1,26 +1,234 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { AuthStatus, CheckingSettings, CheckingValues, ConnectionInfo, FlareSolverrStatus, SessionView, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
+import type { AccountView, AuthStatus, CheckingSettings, CheckingValues, ConnectionInfo, FlareSolverrStatus, InviteCreated, InviteView, SessionView, TotpBeginResponse, YouTubeKeyStatus } from "@fa/shared";
 import { api, errorMessage, fieldErrors } from "../api";
 import { Alert, Field } from "../components";
 import { fullDate, relativeTime } from "../time";
 import { AUTO_SPLIT_MIN_PX, SPLIT_MIN_PX, usePrefs, type ReaderLayout, type Theme } from "../prefs";
 
 export function SecurityPage({ status, onChange }: { status: AuthStatus; onChange: () => void }) {
+  // The server-wide settings and accounts are the admin's (D-114); everyone has their own login settings.
+  const admin = status.role === "admin";
   return (
     <>
       <h1>Settings</h1>
       <p className="muted">
         Signed in as <strong>{status.username}</strong>
+        {admin ? " (admin)" : ""}
         {status.via === "proxy" ? " through your SSO proxy" : ""}.
       </p>
       <ThisDevice />
-      <Checking />
-      <YouTubeComments />
-      <FlareSolverrSettings />
+      {admin && <Accounts proxyOnly={status.authMode === "proxy"} />}
+      {admin && <Checking />}
+      {admin && <YouTubeComments />}
+      {admin && <FlareSolverrSettings />}
       {status.via === "session" && <ChangePassword />}
       <TwoFactor enabled={!!status.totpEnabled} onChange={onChange} />
       {status.via === "session" && <Devices connection={status.connection} />}
     </>
+  );
+}
+
+/** A one-time link as a full address to send someone. */
+const linkUrl = (kind: "invite" | "reset", token: string) => `${location.origin}${location.pathname}#/${kind}/${token}`;
+
+/** Settings → Accounts (D-114): invite people, reset passwords, turn accounts off or delete them. */
+function Accounts({ proxyOnly }: { proxyOnly: boolean }) {
+  const [accounts, setAccounts] = useState<AccountView[]>();
+  const [invites, setInvites] = useState<InviteView[]>([]);
+  const [note, setNote] = useState("");
+  const [created, setCreated] = useState<{ url: string; text: string }>();
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string }>();
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const [a, i] = await Promise.all([api<AccountView[]>("GET", "/api/admin/accounts"), api<InviteView[]>("GET", "/api/admin/invites")]);
+      setAccounts(a);
+      setInvites(i);
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await fn();
+      await load();
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const invite = (e: FormEvent) => {
+    e.preventDefault();
+    void run(async () => {
+      const r = await api<InviteCreated>("POST", "/api/admin/invites", { note: note.trim() || null });
+      setNote("");
+      setCreated({ url: linkUrl("invite", r.token), text: `Invitation link${r.invite.note ? ` for ${r.invite.note}` : ""}. Send it to them; it works once, for 7 days.` });
+    });
+  };
+  const resetLink = (a: AccountView) =>
+    run(async () => {
+      const r = await api<InviteCreated>("POST", `/api/admin/accounts/${a.id}/reset-link`);
+      setCreated({ url: linkUrl("reset", r.token), text: `Password reset link for ${a.username}. Send it to them; it works once, for 24 hours. Their current password keeps working until they use it.` });
+    });
+
+  return (
+    <section className="card accounts">
+      <h2>Accounts</h2>
+      <p className="muted small">
+        Each account has its own sources, tags, and read and saved items. A site several accounts follow is checked once for all of them. You see who has an
+        account and how active it is, not what it follows or reads.
+      </p>
+      {message && <Alert kind={message.kind}>{message.text}</Alert>}
+      {created && (
+        <div>
+          <Alert kind="ok">{created.text}</Alert>
+          <CopyBox value={created.url} />
+        </div>
+      )}
+      {!accounts ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <ul className="sessions">
+          {accounts.map((a) => (
+            <li key={a.id}>
+              <div>
+                <strong>{a.username}</strong>
+                {a.you && <span className="badge">You</span>}
+                {a.role === "admin" && <span className="badge">Admin</span>}
+                {a.disabled && <span className="badge">Turned off</span>}
+                {a.totpEnabled && <span className="badge">Two-factor</span>}
+                <div className="muted small">
+                  {a.sourceCount} source{a.sourceCount === 1 ? "" : "s"} · {a.lastSeenAt ? <>active <span title={fullDate(a.lastSeenAt)}>{relativeTime(a.lastSeenAt)}</span></> : "not signed in"} · joined{" "}
+                  <span title={fullDate(a.createdAt)}>{relativeTime(a.createdAt)}</span>
+                </div>
+                {!a.you && (
+                  <div className="actions">
+                    {!proxyOnly && (
+                      <button className="secondary" disabled={busy} onClick={() => void resetLink(a)}>
+                        Password reset link
+                      </button>
+                    )}
+                    {a.totpEnabled && (
+                      <button
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          if (confirm(`Turn off two-factor login for ${a.username}? Do this if they lost their phone; they can turn it on again in their settings.`)) {
+                            void run(async () => {
+                              await api("POST", `/api/admin/accounts/${a.id}/totp-off`);
+                              setMessage({ kind: "ok", text: `Two-factor login is off for ${a.username}, and their devices were signed out.` });
+                            });
+                          }
+                        }}
+                      >
+                        Turn off two-factor
+                      </button>
+                    )}
+                    <button
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          await api("PATCH", `/api/admin/accounts/${a.id}`, { disabled: !a.disabled });
+                          setMessage({ kind: "ok", text: a.disabled ? `${a.username} can log in again.` : `${a.username} can't log in any more, and was signed out everywhere.` });
+                        })
+                      }
+                    >
+                      {a.disabled ? "Turn on" : "Turn off"}
+                    </button>
+                    <button
+                      className="secondary danger-text"
+                      disabled={busy}
+                      onClick={() => {
+                        if (confirm(`Delete the account ${a.username}? Its sources, tags and read and saved items are deleted too. This can't be undone.`)) {
+                          void run(async () => {
+                            await api("DELETE", `/api/admin/accounts/${a.id}`);
+                            setMessage({ kind: "ok", text: `Deleted ${a.username}.` });
+                          });
+                        }
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={invite} noValidate>
+        <Field
+          label="Invite someone"
+          name="note"
+          value={note}
+          onChange={setNote}
+          hint={
+            proxyOnly
+              ? "Optional: who it's for. Logins go through your SSO proxy, so they must pick the same username as their SSO login (the password they set here isn't used)."
+              : "Optional: who it's for, to tell links apart. They choose their own username."
+          }
+          autoComplete="off"
+        />
+        <div className="row">
+          <button type="submit" disabled={busy}>
+            Create invitation link
+          </button>
+        </div>
+      </form>
+      {invites.length > 0 && (
+        <>
+          <h3 className="small">Links not used yet</h3>
+          <ul className="sessions">
+            {invites.map((i) => (
+              <li key={i.id}>
+                <div>
+                  <strong>{i.kind === "invite" ? `Invitation${i.note ? ` for ${i.note}` : ""}` : `Password reset for ${i.username}`}</strong>
+                  <div className="muted small">
+                    made <span title={fullDate(i.createdAt)}>{relativeTime(i.createdAt)}</span> · expires {new Date(i.expiresAt).toLocaleString()}
+                  </div>
+                </div>
+                <button className="secondary" disabled={busy} onClick={() => void run(async () => void (await api("DELETE", `/api/admin/invites/${i.id}`)))}>
+                  Cancel
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">A link is shown only when it's made. Lost one? Cancel it and make a new one.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** A link to copy, with a Copy button (which needs HTTPS; the text can always be selected). */
+function CopyBox({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="link-box">
+      <input readOnly value={value} aria-label="Link" onFocus={(e) => e.target.select()} />
+      <button
+        type="button"
+        className="secondary"
+        onClick={() =>
+          void navigator.clipboard?.writeText(value).then(
+            () => setCopied(true),
+            () => setCopied(false),
+          )
+        }
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
   );
 }
 

@@ -54,6 +54,21 @@ Cards are memoised (only changed cards re-render) and off-screen cards skip layo
 - Nginx Proxy Manager doesn't need its own compression for this app; responses arrive already
   compressed (`Vary: Accept-Encoding` is set).
 
+## Accounts (2026-10-25, D-115)
+
+Read and saved moved from the item row to a per-account table. Same data (100k items, now in
+one account, a state row per item), p50 ms:
+
+| Call | SQLite before | SQLite now | Postgres now (after `vacuum analyze`) |
+|---|---|---|---|
+| `GET /api/items` (unread, all, saved, tag, one source) | 1.6–2.6 | 1.7–2.9 | 3.4–9 |
+| `GET /api/sources` | 9–10 | **10.5** | 10.9 |
+| `GET /api/tags` | 1.7–2.7 | **1.9** | 3.4 |
+
+The first design kept a row only for items read or saved ("no row = unread"); counting unread
+then meant visiting every item, and sources took 163 ms and tags 227 ms. With a row per item and
+the index `item_states(user_id, source_id, read)`, both read only that index.
+
 ## Second pass (2026-10-25, D-107)
 
 The list and article calls above were re-measured on the same data and are unchanged

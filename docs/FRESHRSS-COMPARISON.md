@@ -18,7 +18,7 @@ of FreshRSS's docs rather than its official site, that's noted.
 | **Extensions** | Plugin system (e.g. YouTube video embeds, Reddit image handling) | YouTube embeds and Reddit handling are built in | Fine for one user; no plugin system needed yet |
 | **Mobile apps** | Implements the Google Reader and Fever **APIs**, so existing Android/iOS feed apps can connect | Own web UI only; our API is private | **Worth considering** for "an Android app later": a Google Reader-compatible API would make existing Android apps work without us building one |
 | **Import/export** | OPML import/export | None | **Easy win:** OPML lets you move subscriptions in and out |
-| **Users** | Multi-user | Single user | Fine as designed (D-013) |
+| **Users** | Multi-user | An admin and invited accounts; a feed several follow is fetched once (D-114, D-115) | Done in v1.11 |
 
 ## Recommendations
 

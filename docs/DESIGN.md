@@ -34,7 +34,7 @@ I have already read.
 - **R7** Polling rates, request delays and limits are **configurable**.
 - **R8** Mark items read or unread, save them, and mute a thread.
 - **R9** Settings start out in a config file and move to a settings screen in the UI.
-- **R10** Single user. Because the app is reachable from the internet, it needs a proper login of its own.
+- **R10** ~~Single user~~ An admin and the people they invite (D-114), each with their own sources and read state; a site several people follow is fetched once (D-115). Because the app is reachable from the internet, it needs a proper login of its own.
 - **R11** SQLite by default. Postgres is optional for people who want a more robust database.
 - **R12** No AI in the first version. The design leaves room to add it later (see §11).
 - **R13** No notifications for now. Opening the app is enough.
@@ -104,6 +104,19 @@ Retention is configurable and defaults to keeping everything. Saved items are ne
 
 The forum-specific parts above (Site, Node, Subscription levels, Thread) arrive with M2. They'll
 sit alongside these tables rather than replace them.
+
+**Accounts (v1.11, D-114/D-115):** `sources` and `items` are shared: a site is fetched once
+however many accounts follow it. What's each account's lives beside them:
+- `users.role` (`admin` / `user`), `disabled`, `last_login_at`; `invites` (invitation and
+  password-reset links, by token hash).
+- `subscriptions` (user, source): that account's name for it, paused or not, and a followed
+  thread's batch start. A source is checked while any follower has it on.
+- `subscription_tags` (user, source, tag).
+- `item_states` (user, item, source): read, saved, read time. One row per follower per item,
+  written when the item arrives or the account starts following, so counts read the index
+  `(user_id, source_id, read)`. A missing row reads as unread.
+- Shared settings of a source (interval, retention, selectors, FlareSolverr) can be changed by
+  the admin or its only follower. Every route checks the account follows the source or item.
 
 ---
 
@@ -198,7 +211,7 @@ Nothing in the design changes. Logins go through a pluggable *login strategy* pe
 
 ### Logging in to the app itself (built in M0)
 - **First run:** the app has no account and prints a one-time **setup code** to the container log. Creating the account needs that code, so nobody else can claim a freshly started instance.
-- One user. Password at least 12 characters, hashed with Argon2id. Optional TOTP 2FA (authenticator app, QR code enrolment), and a used code can't be replayed.
+- An admin (the first account) and accounts made from the admin's invitation links (D-114). Password at least 12 characters, hashed with Argon2id. Optional TOTP 2FA (authenticator app, QR code enrolment), and a used code can't be replayed.
 - Sessions: random token in an HttpOnly, SameSite=Lax cookie, marked Secure behind HTTPS. Only a hash of the token is stored. 30-day sliding expiry. Changing the password signs out other devices.
 - Login, setup and 2FA endpoints are limited to 10 attempts per 15 minutes per client IP. Unknown usernames take as long to check as real ones.
 - CSRF: every state-changing API call needs an `x-fa-request: 1` header, which a cross-site page can't send.
