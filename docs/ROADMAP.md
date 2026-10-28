@@ -87,6 +87,7 @@ Goal: follow forum boards and threads, including members-only content.
 - ✅ **Threads in the reader show the posts** (author, time, quotes, images; re-read for new replies) (D-081). ⏳ Needs a real thread to confirm the markup
 - ✅ FlareSolverr fix: pages that passed Cloudflare's check were mistaken for the check (D-083)
 - ✅ **Follow a thread** with one updating card ("N new replies") (D-084). ⏳ Needs your test on the 5070 Ti owners' club (Overclock.net's own bot check is not Cloudflare's; FlareSolverr may or may not pass it)
+- ✅ **Follow a vBulletin thread** (Bike Forums) the same way; board and thread links follow the board's feed, not the whole forum's (D-120, D-121). ⏳ Needs your test on your server
 - ⏳ **Board activity:** older threads in a board with new replies (board RSS only announces new threads)
 - ⛔ `check-sites` output from your server/Pi (what the forums allow from your IP)
 - ⛔ Saved example pages (forum list, board, thread) from each forum, attached in chat

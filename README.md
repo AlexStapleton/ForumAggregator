@@ -13,8 +13,9 @@ Current release: **1.12.0** ([changelog](CHANGELOG.md)).
 **Follows**
 - **Blogs, news sites and any RSS/Atom feed.** Paste a website and its feed is found; for a
   section of a WordPress site (e.g. `science.nasa.gov/earth/`) the section's own feed.
-- **Forums:** XenForo and vBulletin boards (e.g. a board's RSS), and **followed threads**: one card
-  per thread that comes back with just the new replies, the posts before them for context.
+- **Forums:** XenForo and vBulletin boards (e.g. a board's RSS), and **followed threads** (paste a
+  thread's link, either kind): one card per thread that comes back with just the new replies, the
+  posts before them for context.
 - **Podcasts:** episodes play in the reader, with speed control and resume where you stopped.
 - **YouTube channels** (link or `@handle`), with top comments if you add your own free API key.
 - **Subreddits**, through Reddit's public feeds (Reddit sometimes refuses them); videos and

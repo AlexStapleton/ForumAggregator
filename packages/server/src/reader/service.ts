@@ -10,7 +10,7 @@ import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPre
 import type { Viewer } from "../auth/service.js";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
-import { threadPagerFor, xenforoPager, type ThreadPager } from "../feeds/thread.js";
+import { followedThreadPager, threadPagerFor, type ThreadPager } from "../feeds/thread.js";
 import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
@@ -194,7 +194,8 @@ export class ReaderService {
     // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
     if (item.source_kind === "thread") {
       if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from);
-      return this.forumThread(base, item, null, via, page, () => null, xenforoPager(item.url));
+      // From the thread's own address: the card links to the page read last (D-120).
+      return this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
     }
 
     const videoId = youtubeVideoId(item.url);

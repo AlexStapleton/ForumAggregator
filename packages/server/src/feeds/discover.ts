@@ -16,6 +16,20 @@ export interface DiscoveredFeed {
   type: "rss" | "atom";
 }
 
+/**
+ * The feed to follow from those a page advertises: the first, except that a vBulletin board's own
+ * feed (external.php?…&forumids=44) wins over the whole forum's (external.php?type=RSS2), which
+ * vBulletin lists first on every board and thread page (D-121).
+ */
+export function preferredFeed(feeds: DiscoveredFeed[]): DiscoveredFeed | undefined {
+  return feeds.find((f) => isVbulletinBoardFeed(f.url)) ?? feeds[0];
+}
+
+function isVbulletinBoardFeed(url: string): boolean {
+  const u = new URL(url);
+  return /\/external\.php$/i.test(u.pathname) && !!u.searchParams.get("forumids");
+}
+
 /** Feeds advertised by an HTML page, in page order. */
 export function discoverFeeds(html: string, pageUrl: string): DiscoveredFeed[] {
   const head = html.slice(0, 500_000);

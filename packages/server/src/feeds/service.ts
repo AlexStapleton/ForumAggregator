@@ -6,13 +6,13 @@ import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
 import type { SourcesTable } from "../db/schema.js";
 import type { Viewer } from "../auth/service.js";
-import { discoverFeeds } from "./discover.js";
+import { discoverFeeds, preferredFeed } from "./discover.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "./fetch.js";
 import type { FlareSolverr } from "./flaresolverr.js";
 import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./parse.js";
 import { buildOpml, parseOpml } from "./opml.js";
 import { pageParser } from "../reader/pageParser.js";
-import { latestPageUrl, postNumber, threadAddress, threadPageUrl, threadSummary } from "./thread.js";
+import { followedThreadPager, postNumber, threadAddress, threadSummary, vbulletinThreadAddress } from "./thread.js";
 import type { ForumThreadPage } from "../reader/extract.js";
 import { htmlToText } from "./text.js";
 import { nextCheck } from "./schedule.js";
@@ -185,6 +185,16 @@ export class FeedService {
   async addSource(viewer: Viewer, input: AddSourceRequest): Promise<Source> {
     const thread = threadFromInput(input.url);
     if (thread) return this.addThread(viewer, input, thread);
+    // A vBulletin-style link (D-120) is followed as a thread if its page is one; else it's added as
+    // any other page (one more request, only when adding).
+    const vbThread = vbulletinThreadFromInput(input.url);
+    if (vbThread) {
+      try {
+        return await this.addThread(viewer, input, vbThread, true);
+      } catch (err) {
+        if (!(err instanceof SourceError && err.code === "not_a_thread")) throw err;
+      }
+    }
     let resolved: Awaited<ReturnType<FeedService["resolve"]>>;
     let via = false;
     try {
@@ -340,7 +350,8 @@ export class FeedService {
 
   // ---- following a forum thread (D-084) ------------------------------------------------
 
-  private async addThread(viewer: Viewer, input: AddSourceRequest, address: string): Promise<Source> {
+  /** `tryOnly`: a link that may not be a thread (D-120), so "not a thread" isn't logged as a failure. */
+  private async addThread(viewer: Viewer, input: AddSourceRequest, address: string, tryOnly = false): Promise<Source> {
     const duplicate = "You already follow this thread as “{title}”.";
     const existing = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", address).executeTakeFirst();
     if (existing) {
@@ -360,8 +371,17 @@ export class FeedService {
         read = await this.readThread(address, true, null, true);
       }
     } catch (err) {
-      if (err instanceof SourceError) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
+      if (err instanceof SourceError && !(tryOnly && err.code === "not_a_thread")) this.log?.warn({ input: input.url, code: err.code, reason: err.message }, "could not add source");
       throw err;
+    }
+    // A vBulletin link to a later page ("…-title-2.html") is the thread's page 2, not its address.
+    if (read.address !== address) {
+      address = read.address;
+      const known = await this.db.kysely.selectFrom("sources").select(["id", "title"]).where("feed_url", "=", address).executeTakeFirst();
+      if (known) {
+        await this.subscribeExisting(viewer, known, input.title, input.tags ?? [], duplicate);
+        return (await this.getSource(viewer, known.id))!;
+      }
     }
     const now = this.now();
     const threadTitle = read.pages.at(-1)?.title || new URL(address).hostname;
@@ -382,8 +402,15 @@ export class FeedService {
   /**
    * Reads a thread's newest page; if every post on it is newer than `knownMax`, also the page(s)
    * before it, so a busy thread doesn't lose replies between checks. Pages come back oldest first.
+   * `address` comes back corrected when a vBulletin link turned out to be a later page (D-120).
    */
-  private async readThread(address: string, via: boolean, knownMax: number | null, interactive: boolean): Promise<{ pages: ForumThreadPage[]; lastUrl: string }> {
+  private async readThread(
+    address: string,
+    via: boolean,
+    knownMax: number | null,
+    interactive: boolean,
+    lastRead: string | null = null,
+  ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string }> {
     const get = async (url: string) => {
       if (interactive) return this.fetchInteractive(url, "html", via);
       await this.limiter.wait(url);
@@ -391,27 +418,71 @@ export class FeedService {
       if (res.kind !== "ok") throw new FetchError("error", "The site answered without content");
       return res;
     };
-    const latest = await get(latestPageUrl(address));
-    const lastUrl = latest.url.replace(/#.*$/, "");
-    const page = await pageParser.thread(latest.body, lastUrl);
-    if (!page) {
-      const message = "Couldn't find any posts on that page. It may not be a XenForo thread, or the forum shows it only to members.";
-      if (interactive) throw new SourceError("not_a_thread", message, 422);
-      throw new ThreadParseError(message);
+    const read = async (url: string) => {
+      const res = await get(url);
+      const pageUrl = res.url.replace(/#.*$/, "");
+      const page = await pageParser.thread(res.body, pageUrl);
+      if (!page) {
+        const message = "Couldn't find any posts on that page. It may not be a forum thread (XenForo or vBulletin), or the forum shows it only to members.";
+        if (interactive) throw new SourceError("not_a_thread", message, 422);
+        throw new ThreadParseError(message);
+      }
+      return { page, url: pageUrl };
+    };
+    let pager = followedThreadPager(address);
+    if (!pager) throw new ThreadParseError("This source's address isn't a forum thread.");
+
+    // XenForo: one request for the newest page. vBulletin has no such address (D-120): the page
+    // read last time (the first page when adding), then the newest page if the thread has grown.
+    let newest: { page: ForumThreadPage; url: string };
+    let started: ForumThreadPage | null = null;
+    let budget = this.polling.maxPagesPerPoll;
+    if (pager.latestUrl) {
+      newest = await read(pager.latestUrl);
+      budget--;
+    } else {
+      let from = lastRead && pager.pageOf(lastRead) ? lastRead : address;
+      let first;
+      try {
+        first = await read(from);
+      } catch (err) {
+        // That page is gone (posts deleted, so fewer pages): start again from the first page.
+        if (from === address || !(err instanceof FetchError && err.status === 404)) throw err;
+        from = address;
+        first = await read(from);
+      }
+      budget--;
+      // A pasted later page ("…-title-2.html", page 2 of 21): the thread's address is page 1.
+      if (from === address && first.page.page > 1 && address.endsWith(`-${first.page.page}.html`)) {
+        address = `${address.slice(0, -`-${first.page.page}.html`.length)}.html`;
+        pager = followedThreadPager(address)!;
+      }
+      started = first.page;
+      newest = first;
+      if (first.page.pages > first.page.page) {
+        newest = await read(pager.pageUrl(first.page.pages));
+        budget--;
+      }
     }
-    const pages = [page];
-    let current = page;
+    const lastUrl = newest.url;
+    const pages = [newest.page];
+    let current = newest.page;
     // Earlier pages, while a whole page of replies is new, up to the pages allowed per check (D-095).
-    for (let back = 0; back < this.polling.maxPagesPerPoll - 1 && knownMax !== null && current.page > 1; back++) {
+    while (budget > 0 && knownMax !== null && current.page > 1) {
       const oldest = Math.min(...current.posts.map((p) => (p.id ? postNumber(p.id) : Infinity)));
       if (oldest <= knownMax) break; // this page already reaches posts we have
-      const previous = await get(threadPageUrl(address, current.page - 1));
+      if (started && started.page === current.page - 1) {
+        pages.unshift(started); // read already, at the start of this check
+        break;
+      }
+      const previous = await get(pager.pageUrl(current.page - 1));
       const parsed = await pageParser.thread(previous.body, previous.url);
+      budget--;
       if (!parsed) break;
       pages.unshift(parsed);
       current = parsed;
     }
-    return { pages, lastUrl };
+    return { pages, lastUrl, address };
   }
 
   /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
@@ -534,7 +605,9 @@ export class FeedService {
     try {
       const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", row.id).execute();
       const knownMax = known.length ? Math.max(...known.map((k) => postNumber(k.post_id))) : null;
-      const read = await this.readThread(row.feed_url, via, knownMax, false);
+      // vBulletin threads start from the page read last time, which the card links to (D-120).
+      const card = await this.db.kysely.selectFrom("items").select("url").where("source_id", "=", row.id).where("guid", "=", "thread").executeTakeFirst();
+      const read = await this.readThread(row.feed_url, via, knownMax, false, card?.url ?? null);
       const newItems = await this.ingestThread(row.id, read.pages, read.lastUrl, knownMax === null);
       await this.recordSuccess(row.id, startedAt, null, null, row);
       if (newItems) this.log?.info({ sourceId: row.id, newPosts: newItems }, "new replies");
@@ -690,7 +763,7 @@ export class FeedService {
       return { kind: "feed", feedUrl: url.href, siteUrl: parsed.siteUrl ?? url.origin + "/", parsed };
     }
     const feeds = discoverFeeds(res.body, res.url);
-    const first = feeds[0];
+    const first = preferredFeed(feeds);
     if (!first) {
       throw new SourceError(
         "no_feed",
@@ -1415,12 +1488,22 @@ function planImport(raw: string): { kind: SourceKind; feedUrl: string; siteUrl: 
 
 /** A forum thread link in what the user pasted (D-084), as the thread's own address. */
 function threadFromInput(raw: string): string | null {
+  const url = pastedUrl(raw);
+  return url ? threadAddress(url) : null;
+}
+
+/** A vBulletin-style thread link in what the user pasted (D-120), as the thread's first page. */
+function vbulletinThreadFromInput(raw: string): string | null {
+  const url = pastedUrl(raw);
+  return url ? vbulletinThreadAddress(url) : null;
+}
+
+function pastedUrl(raw: string): URL | null {
   let input = raw.trim();
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = `https://${input}`;
   try {
     const url = new URL(input);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return threadAddress(url);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
   } catch {
     return null;
   }

@@ -96,7 +96,7 @@ export function SourcesPage() {
             name="url"
             value={url}
             onChange={setUrl}
-            hint="A YouTube channel (link or @handle), a website, an RSS/Atom feed, a forum board (…/forums/board-name.12/) or a forum thread to follow for new replies (…/threads/title.123/)."
+            hint="A YouTube channel (link or @handle), a website, an RSS/Atom feed, a forum board (…/forums/board-name.12/) or a forum thread to follow for new replies (…/threads/title.123/ or …/123456-title.html)."
             autoComplete="url"
           />
           <Field label="Tags (optional)" name="tags" value={newTags} onChange={setNewTags} hint="Comma-separated, e.g. news, politics" autoComplete="off" />
