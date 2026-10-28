@@ -123,8 +123,11 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
   }
 }
 
-/** Posts shown from one thread page (XenForo shows 20 by default). */
-const MAX_THREAD_POSTS = 50;
+/**
+ * Posts shown from one thread page: all of them on any usual forum setting (XenForo shows 20 by
+ * default; Bike Forums 75, whose newest were cut off at the old 50, D-123).
+ */
+const MAX_THREAD_POSTS = 100;
 
 /** True for XenForo thread links (…/threads/title.123/, any page). */
 export function isForumThreadUrl(url: string | null): boolean {
@@ -227,7 +230,7 @@ export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "dateti
     .join("\n");
 }
 
-/** A thread page for the reader: up to 50 posts, and which page of how many (D-081, D-088). */
+/** A thread page for the reader: its posts (up to 100), and which page of how many (D-081, D-088). */
 function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
   const thread = parseForumThread(doc, pageUrl);
   if (!thread) return null;
@@ -245,6 +248,8 @@ function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
 export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThreadPage | null {
   const bodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => /^post_message_\d+$/.test(el.id));
   if (!bodies.length) return null;
+  const offset = vbulletinTimeOffset(doc);
+  const now = Date.now();
   const posts: ForumPost[] = bodies.map((body) => {
     const id = body.id.slice("post_message_".length);
     const post = doc.getElementById(`post${id}`) ?? doc.getElementById(`post_${id}`) ?? body.closest("table, li");
@@ -254,7 +259,10 @@ export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThrea
     const timeLabel = dateEl?.textContent?.replace(/\s+/g, " ").replace(/#\s*\d+\s*$/, "").trim().slice(0, 60) || null;
     vbulletinQuotes(body);
     for (const junk of Array.from(body.querySelectorAll("script, noscript, img[alt='View Post']"))) junk.remove();
-    return { id, author, datetime: null, timeLabel, postedAt: null, html: sanitizeHtml(body.innerHTML, pageUrl) };
+    // A real time only when the page says which time zone its times are in (D-123).
+    const postedAt = offset !== null && timeLabel ? vbulletinTime(timeLabel, offset, now) : null;
+    const datetime = postedAt !== null ? new Date(postedAt).toISOString() : null;
+    return { id, author, datetime, timeLabel, postedAt, html: sanitizeHtml(body.innerHTML, pageUrl) };
   });
   // Bike Forums' theme: "20 / 21" (#mb_page_current, #mb_page_total). Classic: "Page 20 of 21", an
   // innermost element of the page navigation (the page links sit beside it).
@@ -271,6 +279,48 @@ export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThrea
   const pages = nav ? Math.max(page, Number(nav[2])) : 1;
   const title = doc.querySelector("h1.threadtitle, .threadtitle, h1")?.textContent?.trim() || doc.title || null;
   return { title, posts, page, pages };
+}
+
+/**
+ * The time zone of a vBulletin page's times, in minutes from UTC, from its footer ("All times are
+ * GMT -6.", "GMT +5.5.", "GMT."); null when the page doesn't say (D-123).
+ */
+export function vbulletinTimeOffset(doc: Document): number | null {
+  const m = /All times are GMT\s*(?:([+-])\s*(\d+(?:\.\d+)?))?\s*\./i.exec(doc.body?.textContent ?? "");
+  if (!m) return null;
+  return m[1] ? (m[1] === "-" ? -1 : 1) * Math.round(Number(m[2]) * 60) : 0;
+}
+
+/**
+ * A vBulletin time as shown ("03-31-15 | 09:09 AM", "08-04-26 12:49 PM", "Today, 08:00 PM",
+ * "Yesterday 21:15"), in the page's time zone → ms, or null. Dates are month-day-year, vBulletin's
+ * default (as Bike Forums shows them).
+ */
+export function vbulletinTime(label: string, offsetMinutes: number, now: number): number | null {
+  const time = /(\d{1,2}):(\d{2})\s*([AP]M)?/i.exec(label);
+  if (!time) return null;
+  let hour = Number(time[1]);
+  const minute = Number(time[2]);
+  if (time[3]) hour = (hour % 12) + (/pm/i.test(time[3]) ? 12 : 0);
+  if (hour > 23 || minute > 59) return null;
+  let year: number, month: number, day: number;
+  const date = /(\d{1,2})-(\d{1,2})-(\d{2}|\d{4})\b/.exec(label);
+  if (date) {
+    month = Number(date[1]);
+    day = Number(date[2]);
+    const y = Number(date[3]);
+    year = date[3]!.length === 4 ? y : y < 70 ? 2000 + y : 1900 + y;
+  } else if (/\b(today|yesterday)\b/i.test(label)) {
+    // The forum's own calendar day, now.
+    const local = new Date(now + offsetMinutes * 60_000 - (/yesterday/i.test(label) ? 86_400_000 : 0));
+    year = local.getUTCFullYear();
+    month = local.getUTCMonth() + 1;
+    day = local.getUTCDate();
+  } else {
+    return null;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return Date.UTC(year, month - 1, day, hour, minute) - offsetMinutes * 60_000;
 }
 
 /** vBulletin's quote boxes (vB3 "Quote:" + table, vB4 .bbcode_container) → <blockquote>. */

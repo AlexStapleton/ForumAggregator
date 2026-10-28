@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { cleanFeedHtml, extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
+import { cleanFeedHtml, extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, vbulletinTime, vbulletinTimeOffset, youtubeVideoId } from "../src/reader/extract.js";
 import { followedThreadPager, threadPagerFor, vbulletinPager } from "../src/feeds/thread.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
@@ -126,6 +126,35 @@ describe("vBulletin threads (D-098)", () => {
   it("reads Bike Forums' page counter (20 / 21)", () => {
     const themed = html.replace(/<div class="pagenav">[\s\S]*?<\/div>/, '<span id="mb_page"><span id="mb_page_current">20</span> / <span id="mb_page_total">21</span></span>');
     expect(extractWithSelectors(themed, url, {}).article!.pages).toEqual({ page: 20, pages: 21 });
+  });
+});
+
+describe("vBulletin times and long pages (D-123)", () => {
+  const doc = (footer: string) => new JSDOM(`<html><body><p>x</p><div>${footer}</div></body></html>`).window.document;
+
+  it("reads the page's time zone from its footer", () => {
+    expect(vbulletinTimeOffset(doc("All times are GMT -6. The time now is 11:39 PM."))).toBe(-360);
+    expect(vbulletinTimeOffset(doc("All times are GMT +5.5. The time now is 11:39 PM."))).toBe(330);
+    expect(vbulletinTimeOffset(doc("All times are GMT. The time now is 11:39 PM."))).toBe(0);
+    expect(vbulletinTimeOffset(doc("Powered by vBulletin"))).toBeNull();
+  });
+
+  it("turns the times vBulletin shows into real times", () => {
+    const now = Date.UTC(2026, 9, 28, 5, 30); // 27 Oct, 11:30 PM at GMT -6
+    expect(vbulletinTime("03-31-15 | 09:09 AM", -360, now)).toBe(Date.UTC(2015, 2, 31, 15, 9));
+    expect(vbulletinTime("08-04-26 12:49 PM", -360, now)).toBe(Date.UTC(2026, 7, 4, 18, 49));
+    expect(vbulletinTime("08-04-26 12:05 AM", -360, now)).toBe(Date.UTC(2026, 7, 4, 6, 5));
+    expect(vbulletinTime("12-04-1999, 21:15", 0, now)).toBe(Date.UTC(1999, 11, 4, 21, 15));
+    // The forum's "today" (27 Oct at GMT -6), not UTC's (28 Oct).
+    expect(vbulletinTime("Today, 08:00 PM", -360, now)).toBe(Date.UTC(2026, 9, 28, 2));
+    expect(vbulletinTime("Yesterday 08:00 PM", -360, now)).toBe(Date.UTC(2026, 9, 27, 2));
+    for (const bad of ["13-40-26 08:00 PM", "08-04-26", "Last week", "08-04-26 25:00"]) expect(vbulletinTime(bad, 0, now)).toBeNull();
+  });
+
+  it("shows every post of a long page (Bike Forums has 75), newest included", () => {
+    const posts = Array.from({ length: 75 }, (_, i) => `<div id="post${i + 1}"><a class="bigusername">R${i + 1}</a><div id="post_message_${i + 1}">Reply number ${i + 1}</div></div>`).join("");
+    const html = extractWithSelectors(`<html><body>${posts}</body></html>`, "https://vb.example/t/1-x.html", {}).article!.html;
+    expect(html).toContain("Reply number 75");
   });
 });
 

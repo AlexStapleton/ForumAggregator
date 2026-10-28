@@ -84,8 +84,11 @@ export interface VersionInfo {
 
 // ---- Sources and feed items (M1) -------------------------------------------------------
 
-/** "thread": one forum thread followed for new replies (D-084). */
-export type SourceKind = "feed" | "youtube" | "reddit" | "thread";
+/**
+ * "thread": one forum thread followed for new replies (D-084).
+ * "board": a vBulletin board's threads, one card each that comes back with new replies (D-123).
+ */
+export type SourceKind = "feed" | "youtube" | "reddit" | "thread" | "board";
 
 /**
  * ok          last check succeeded

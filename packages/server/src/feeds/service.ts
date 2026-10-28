@@ -13,6 +13,7 @@ import { FeedParseError, looksLikeFeed, parseFeed, type ParsedFeed } from "./par
 import { buildOpml, parseOpml } from "./opml.js";
 import { pageParser } from "../reader/pageParser.js";
 import { followedThreadPager, postNumber, threadAddress, threadSummary, vbulletinThreadAddress } from "./thread.js";
+import { boardThreadSummary, looksLikeVbulletinBoard, type BoardThread } from "./board.js";
 import type { ForumThreadPage } from "../reader/extract.js";
 import { htmlToText } from "./text.js";
 import { nextCheck } from "./schedule.js";
@@ -74,7 +75,11 @@ const INSERT_CHUNK = 50;
 const THREAD_POSTS_KEPT = 300;
 
 /** What an address resolves to: the feed to follow and its first fetch. */
-type ResolvedSource = { kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed };
+/** `board`: a vBulletin board's threads (D-123), stored instead of `parsed`'s items. */
+type ResolvedSource = { kind: SourceKind; feedUrl: string; siteUrl: string | null; parsed: ParsedFeed; board?: BoardThread[] };
+
+/** Sub-forums of a followed board read on each check (D-123), one page request each. */
+const MAX_SUBFORUMS = 5;
 
 /** A thread page without posts we can read. */
 class ThreadParseError extends Error {}
@@ -225,7 +230,8 @@ export class FeedService {
     if (existing) {
       await this.subscribeExisting(viewer, existing, title, tags, "You already follow this feed.");
       // Items the feed lists now that the source doesn't have yet (e.g. while it was paused).
-      await this.ingest(existing.id, resolved.parsed, false);
+      if (resolved.board) await this.ingestBoard(existing.id, resolved.board);
+      else await this.ingest(existing.id, resolved.parsed, false);
       return existing.id;
     }
     const now = this.now();
@@ -234,7 +240,7 @@ export class FeedService {
     if (id !== null) {
       await this.subscribe(viewer.id, id, title || feedTitle, tags);
       // We already have the feed from resolving it, so store its items straight away.
-      const added = await this.ingest(id, resolved.parsed, true);
+      const added = resolved.board ? await this.ingestBoard(id, resolved.board) : await this.ingest(id, resolved.parsed, true);
       await this.recordSuccess(id, now, null, null, { poll_interval_minutes: null, kind: resolved.kind });
       this.log?.info({ sourceId: id, feedUrl: resolved.feedUrl, items: added }, "source added");
       return id;
@@ -411,13 +417,7 @@ export class FeedService {
     interactive: boolean,
     lastRead: string | null = null,
   ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string }> {
-    const get = async (url: string) => {
-      if (interactive) return this.fetchInteractive(url, "html", via);
-      await this.limiter.wait(url);
-      const res = await this.fetcherFor(via)(url, { expect: "html" });
-      if (res.kind !== "ok") throw new FetchError("error", "The site answered without content");
-      return res;
-    };
+    const get = (url: string) => this.fetchHtml(url, via, interactive);
     const read = async (url: string) => {
       const res = await get(url);
       const pageUrl = res.url.replace(/#.*$/, "");
@@ -483,6 +483,134 @@ export class FeedService {
       current = parsed;
     }
     return { pages, lastUrl, address };
+  }
+
+  /** A forum page: while adding (with the user waiting, errors as SourceError), or on a check. */
+  private async fetchHtml(url: string, via: boolean, interactive: boolean) {
+    if (interactive) return this.fetchInteractive(url, "html", via);
+    await this.limiter.wait(url);
+    const res = await this.fetcherFor(via)(url, { expect: "html" });
+    if (res.kind !== "ok") throw new FetchError("error", "The site answered without content");
+    return res;
+  }
+
+  // ---- following a vBulletin board's threads (D-123) ------------------------------------
+
+  /**
+   * A board's first page and its sub-forums' first pages: their threads, stickies left out. A
+   * sub-forum that can't be read (e.g. members only) is skipped; the board itself must be readable.
+   */
+  private async readBoard(address: string, via: boolean, interactive: boolean, fetched?: { body: string; url: string }): Promise<{ title: string | null; threads: BoardThread[] }> {
+    const res = fetched ?? (await this.fetchHtml(address, via, interactive));
+    const page = await pageParser.board(res.body, res.url);
+    if (!page) {
+      const message = "Couldn't find the board's list of threads on that page. The forum may have changed its layout, or show it only to members.";
+      if (interactive) throw new SourceError("not_a_board", message, 422);
+      throw new ThreadParseError(message);
+    }
+    const threads = [...page.threads];
+    for (const sub of page.subforums.slice(0, MAX_SUBFORUMS)) {
+      try {
+        const subRes = await this.fetchHtml(sub, via, interactive);
+        const subPage = await pageParser.board(subRes.body, subRes.url);
+        if (subPage) threads.push(...subPage.threads);
+        else this.log?.info({ board: address, subforum: sub }, "sub-forum has no thread list; skipped");
+      } catch (err) {
+        if (!(err instanceof FetchError || err instanceof SourceError)) throw err;
+        this.log?.info({ board: address, subforum: sub, reason: err.message }, "sub-forum couldn't be read; skipped");
+      }
+    }
+    const seen = new Set<string>();
+    return { title: page.title, threads: threads.filter((t) => !t.sticky && !seen.has(t.id) && !!seen.add(t.id)) };
+  }
+
+  /**
+   * One card per thread (guid "thread-<id>"): added when the board first lists it, and brought back
+   * unread, with how many replies are new, when its newest post changes. Returns how many cards
+   * were added or brought back.
+   */
+  private async ingestBoard(sourceId: string, threads: BoardThread[]): Promise<number> {
+    const now = this.now();
+    const source = await this.db.kysely.selectFrom("sources").select(["retention_days"]).where("id", "=", sourceId).executeTakeFirst();
+    const keepDays = source ? this.retentionDays(source) : 0;
+    const cutoff = keepDays > 0 ? now - keepDays * 24 * 3_600_000 : -Infinity;
+    const known = new Map((await this.db.kysely.selectFrom("board_threads").selectAll().where("source_id", "=", sourceId).execute()).map((r) => [r.thread_id, r]));
+    const followers = (await this.db.kysely.selectFrom("subscriptions").select("user_id").where("source_id", "=", sourceId).execute()).map((r) => r.user_id);
+    const unchanged: string[] = [];
+    let changed = 0;
+    for (const t of threads) {
+      if (!t.lastPostId) continue; // e.g. a moved thread's placeholder
+      const was = known.get(t.id);
+      if (was && postNumber(t.lastPostId) <= postNumber(was.last_post_id)) {
+        unchanged.push(t.id);
+        continue;
+      }
+      const guid = `thread-${t.id}`;
+      const at = Math.min(t.lastPostAt ?? now, now);
+      const card = await this.db.kysely.selectFrom("items").select("id").where("source_id", "=", sourceId).where("guid", "=", guid).executeTakeFirst();
+      // "N new replies" counts from when everyone had read the card; while someone hasn't, it adds up.
+      let base = t.replies;
+      let newReplies: number | null = null;
+      if (was) {
+        const unread = card
+          ? await this.db.kysely.selectFrom("item_states").select("user_id").where("item_id", "=", card.id).where("read", "=", 0).limit(1).executeTakeFirst()
+          : undefined;
+        base = unread ? was.base_replies : was.replies;
+        newReplies = base !== null && t.replies !== null ? Math.max(0, t.replies - base) : null;
+      }
+      const row = { last_post_id: t.lastPostId, replies: t.replies, base_replies: base, last_page_url: t.lastPageUrl, seen_at: now };
+      if (was) await this.db.kysely.updateTable("board_threads").set(row).where("source_id", "=", sourceId).where("thread_id", "=", t.id).execute();
+      else await this.db.kysely.insertInto("board_threads").values({ ...row, source_id: sourceId, thread_id: t.id }).execute();
+      // Older than the source keeps, and no card yet: remembered, but no card (like a feed's old items).
+      if (!card && at < cutoff) continue;
+      const values = {
+        title: t.title,
+        url: t.url,
+        author: t.lastPoster ?? t.starter,
+        summary: boardThreadSummary(t, newReplies),
+        image_url: null,
+        published_at: at,
+        fetched_at: now,
+      };
+      const cardId = card?.id ?? crypto.randomUUID();
+      if (card) await this.db.kysely.updateTable("items").set(values).where("id", "=", card.id).execute();
+      else await this.db.kysely.insertInto("items").values({ ...values, id: cardId, source_id: sourceId, guid }).execute();
+      if (followers.length) {
+        // New activity is unread for everyone; a thread seen for the first time that has been quiet for
+        // over a week (on the first check, or moved up the board without a reply) starts out read.
+        const old = !was && at < now - FIRST_FETCH_UNREAD_WINDOW_MS;
+        await this.db.kysely
+          .insertInto("item_states")
+          .values(followers.map((user_id) => ({ user_id, item_id: cardId, source_id: sourceId, read: old ? 1 : 0, saved: 0, read_at: old ? now : null })))
+          .onConflict((oc) => oc.columns(["user_id", "item_id"]).doUpdateSet({ read: 0, read_at: null }))
+          .execute();
+      }
+      changed++;
+    }
+    for (let i = 0; i < unchanged.length; i += INSERT_CHUNK) {
+      await this.db.kysely.updateTable("board_threads").set({ seen_at: now }).where("source_id", "=", sourceId).where("thread_id", "in", unchanged.slice(i, i + INSERT_CHUNK)).execute();
+    }
+    return changed;
+  }
+
+  private async checkBoard(row: SourceRow): Promise<CheckResult> {
+    const startedAt = this.now();
+    const via = row.via_flaresolverr === 1;
+    try {
+      const board = await this.readBoard(row.feed_url, via, false);
+      const newItems = await this.ingestBoard(row.id, board.threads);
+      await this.recordSuccess(row.id, startedAt, null, null, row);
+      if (newItems) this.log?.info({ sourceId: row.id, threads: newItems }, "board activity");
+      return { ok: true, newItems };
+    } catch (err) {
+      const message =
+        err instanceof FetchError ? friendlyFetchError(err, row.feed_url, via)
+        : err instanceof ThreadParseError ? err.message
+        : "Unexpected error while checking this board";
+      if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ err, sourceId: row.id }, "check failed");
+      await this.recordFailure(row, startedAt, message, err instanceof FetchError ? err : undefined);
+      return { ok: false, newItems: 0, error: message };
+    }
   }
 
   /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
@@ -660,8 +788,8 @@ export class FeedService {
   }
 
   async exportOpml(viewer: Viewer): Promise<string> {
-    // Followed threads aren't feeds other readers could use.
-    const sources = (await this.listSources(viewer)).filter((s) => s.kind !== "thread");
+    // Followed threads and boards aren't feeds other readers could use.
+    const sources = (await this.listSources(viewer)).filter((s) => s.kind !== "thread" && s.kind !== "board");
     return buildOpml(
       sources.map((s) => ({ title: s.title, feedUrl: s.feedUrl, siteUrl: s.siteUrl, tags: s.tags })),
       this.now(),
@@ -761,6 +889,12 @@ export class FeedService {
     if (looksLikeFeed(res.body)) {
       const parsed = this.parse(res.body, url.href);
       return { kind: "feed", feedUrl: url.href, siteUrl: parsed.siteUrl ?? url.origin + "/", parsed };
+    }
+    // A vBulletin board (D-123): its threads with their newest replies, read from the page. Its
+    // feed lists only threads started lately, never older ones with new replies.
+    if (looksLikeVbulletinBoard(res.body)) {
+      const board = await this.readBoard(res.url, via, true, res);
+      return { kind: "board", feedUrl: res.url, siteUrl: res.url, parsed: { format: "rss", title: board.title, siteUrl: res.url, items: [] }, board: board.threads };
     }
     const feeds = discoverFeeds(res.body, res.url);
     const first = preferredFeed(feeds);
@@ -900,6 +1034,7 @@ export class FeedService {
     const row = await this.db.kysely.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirst();
     if (!row) return { ok: false, newItems: 0, error: "Source no longer exists" };
     if (row.kind === "thread") return this.checkThread(row);
+    if (row.kind === "board") return this.checkBoard(row);
 
     await this.limiter.wait(row.feed_url);
     const startedAt = this.now();
@@ -1253,11 +1388,18 @@ export class FeedService {
       if (row.kind === "thread" || threadFromInput(patch.url)) {
         throw new SourceError("thread_address", "A followed thread keeps its address. To follow another thread, add it as a new source.", 400, { url: "Add the other thread as a new source" });
       }
+      if (row.kind === "board") {
+        throw new SourceError("board_address", "A followed board keeps its address. To follow another board, add it as a new source.", 400, { url: "Add the other board as a new source" });
+      }
       try {
         moved = await this.resolve(patch.url, via);
       } catch (err) {
         if (err instanceof SourceError) this.log?.warn({ input: patch.url, code: err.code, reason: err.message }, "could not change source address");
         throw err;
+      }
+      // A feed's cards can't turn into a board's (D-123): one card per thread works differently.
+      if (moved.kind === "board") {
+        throw new SourceError("board_address", "That address is a forum board. To follow its threads, add it as a new source.", 400, { url: "Add the board as a new source" });
       }
       if (moved.feedUrl !== row.feed_url) {
         const clash = await this.db.kysely.selectFrom("sources").select(["id"]).where("feed_url", "=", moved.feedUrl).where("id", "!=", id).executeTakeFirst();

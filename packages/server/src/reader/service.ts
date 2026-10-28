@@ -10,7 +10,7 @@ import type { ItemAudio, ReaderComments, ReaderContent, ReaderPreview, ReaderPre
 import type { Viewer } from "../auth/service.js";
 import type { Db } from "../db/index.js";
 import { FetchError, type Fetcher, type HostLimiter, type JsonFetcher } from "../feeds/fetch.js";
-import { followedThreadPager, threadPagerFor, type ThreadPager } from "../feeds/thread.js";
+import { followedThreadPager, threadPagerFor, vbulletinPager, type ThreadPager } from "../feeds/thread.js";
 import type { FlareSolverr } from "../feeds/flaresolverr.js";
 import { FeedParseError, parseFeed } from "../feeds/parse.js";
 import { cleanRedditHtml, cleanRedditSummary, redditCommentsFeedUrl, redditPostLink } from "../feeds/reddit.js";
@@ -31,7 +31,7 @@ const FEED_FULL_TEXT_MIN = 500;
 const COMMENTS_TTL_MS = 15 * 60_000;
 /** A forum thread page read more than this long ago is read again, for new replies (D-081, D-088). */
 const THREAD_REFRESH_MS = 30 * 60_000;
-/** Thread pages kept in memory (each is at most 50 posts). */
+/** Thread pages kept in memory (each is at most 100 posts). */
 const THREAD_PAGES_KEPT = 100;
 
 /** Which page of a forum thread to show: a number, or the newest ("last"). */
@@ -198,6 +198,21 @@ export class ReaderService {
       return this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
     }
 
+    // A board's thread card (D-123): the thread itself, on the page with its newest posts unless
+    // another page is asked for. The page-1 link from the board gives the other pages.
+    if (item.source_kind === "board") {
+      const pager = item.url ? vbulletinPager(item.url) : null;
+      const known = await this.db.kysely
+        .selectFrom("board_threads")
+        .select(["last_post_id", "last_page_url"])
+        .where("source_id", "=", item.source_id)
+        .where("thread_id", "=", item.guid.replace(/^thread-/, ""))
+        .executeTakeFirst();
+      const latestUrl = pager && known?.last_page_url && pager.pageOf(known.last_page_url) ? known.last_page_url : null;
+      // Pages read before the newest post changed are stale: they're kept under its ID.
+      return this.forumThread(base, item, null, via, page ?? "last", () => null, pager && { ...pager, latestUrl }, known?.last_post_id ?? "");
+    }
+
     const videoId = youtubeVideoId(item.url);
     if (videoId) return { ...base, kind: "video", html: null, videoId, notice: null };
 
@@ -317,18 +332,20 @@ export class ReaderService {
     want: ThreadPageRequest,
     feedText: () => string | null,
     pager: ThreadPager | null,
+    version = "",
   ): Promise<ReaderContent> {
     if (!pager) return this.summaryOnly(base, "This link isn't a forum thread.");
-    const key = `${item.id}|${want}`;
+    const cacheId = version ? `${item.id}@${version}` : item.id;
+    const key = `${cacheId}|${want}`;
     const known = this.threadPages.get(key);
     if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
 
     // Without a "newest page" address (vBulletin), the last page is found from page 1's page count.
     if (want === "last" && !pager.latestUrl) {
-      const first = await this.forumThread(base, item, selectors, via, 1, feedText, pager);
+      const first = await this.forumThread(base, item, selectors, via, 1, feedText, pager, version);
       const pages = first.pagination?.pages ?? 1;
       if (pages <= 1 || first.kind !== "page") return first;
-      const last = await this.forumThread(base, item, selectors, via, pages, feedText, pager);
+      const last = await this.forumThread(base, item, selectors, via, pages, feedText, pager, version);
       this.rememberThreadPage(key, last);
       return last;
     }
@@ -346,7 +363,7 @@ export class ReaderService {
       };
       this.rememberThreadPage(key, content);
       // "last" is also page N, and page 1 is what the item opens on.
-      if (article.pages && article.pages.page !== want) this.rememberThreadPage(`${item.id}|${article.pages.page}`, content);
+      if (article.pages && article.pages.page !== want) this.rememberThreadPage(`${cacheId}|${article.pages.page}`, content);
       if (article.pages?.page === 1) await this.store(item.id, "page", "ok", article.html, null);
       return content;
     } catch (err) {

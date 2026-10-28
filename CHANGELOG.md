@@ -6,6 +6,26 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-28
+
+Follow a forum board's discussions, not just its new threads: paste a vBulletin board (e.g. Bike
+Forums' Tandem Cycling) and every thread on it has a card that comes back with its new replies.
+Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.14.0`. The database gets one new table on start; nothing to do by hand.
+
+### Added
+- **Board activity for vBulletin boards** (D-123): paste a board's address (e.g. `https://www.bikeforums.net/tandem-cycling`) and it becomes a **Board** source. Each thread on the board's first page, and on its sub-forums' first pages, has one card that comes back unread with "N new replies · last by …" whenever someone posts; stickies are left out. Opening a card goes straight to the page with the newest replies, with the page bar for the rest. A board added before as a feed stays a feed: remove it and paste the board's address again.
+- Bike Forums (vBulletin) post and thread times are read in the forum's time zone and shown in yours (D-123).
+
+### Fixed
+- Thread pages with more than 50 posts (Bike Forums shows 75) lost their last posts in the reader, the newest replies included; up to 100 are shown now (D-124).
+
+## [1.13.1] - 2026-10-28
+
+The same changes as 1.13.0 below: the `v1.13.0` tag was put on 1.12.0's commit, so the `1.13.0`
+image doesn't have them (D-125). This one does, but reports its version as 1.13.0. Use 1.14.0 or
+later instead of either.
+
 ## [1.13.0] - 2026-10-28
 
 Follow Bike Forums (vBulletin) threads like XenForo ones, and vBulletin boards follow their own

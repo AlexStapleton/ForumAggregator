@@ -135,6 +135,8 @@ Site ─► Category ─► Board ─► (Sub-board) ─► Thread ─► Post
 - Every card has **Follow thread** and **Mute thread** buttons.
 - The same post never appears twice. The most specific subscription wins: thread over board over site.
 - `activity` is the suggested mode for the busy GPU boards.
+- **Built so far** (D-123): `activity` for vBulletin boards (a Board source: the board's and its
+  sub-forums' first pages, stickies left out). XenForo boards follow their RSS (`new_threads`).
 
 ---
 
