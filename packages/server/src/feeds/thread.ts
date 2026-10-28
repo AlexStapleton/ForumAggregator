@@ -1,7 +1,8 @@
 // Following one forum thread (D-084): its newest page is read on each check, posts the app hasn't
 // seen are kept, and the thread has a single card that says how many new replies there are.
+// XenForo threads, and vBulletin threads (D-120).
 import { JSDOM } from "jsdom";
-import { leanPageHtml, parseForumThread, type ForumThreadPage } from "../reader/extract.js";
+import { leanPageHtml, parseForumThread, parseVbulletinThread, type ForumThreadPage } from "../reader/extract.js";
 
 const THREAD_PATH = /^(\/threads\/[^/]+\.\d+)(?:\/|$)/;
 
@@ -25,11 +26,23 @@ export interface ThreadPager {
   pageUrl(page: number): string;
   /** The newest page in one request, where the forum has such an address (XenForo); else null. */
   latestUrl: string | null;
+  /** Which page an address made by `pageUrl` is, or null for any other address. */
+  pageOf(url: string): number | null;
 }
 
 export function xenforoPager(url: string): ThreadPager | null {
   const address = threadAddress(new URL(url));
-  return address ? { pageUrl: (n) => threadPageUrl(address, n), latestUrl: latestPageUrl(address) } : null;
+  if (!address) return null;
+  return {
+    pageUrl: (n) => threadPageUrl(address, n),
+    latestUrl: latestPageUrl(address),
+    pageOf: (u) => (u === address ? 1 : u.startsWith(`${address}page-`) ? wholeNumber(u.slice(`${address}page-`.length)) : null),
+  };
+}
+
+/** "12" → 12; anything else (including "0", "12x") → null. */
+function wholeNumber(text: string): number | null {
+  return /^[1-9]\d*$/.test(text) ? Number(text) : null;
 }
 
 /** A vBulletin board's feed: …/external.php?type=RSS2… (e.g. Bike Forums). */
@@ -52,14 +65,43 @@ export function vbulletinPager(url: string): ThreadPager | null {
   const seo = /^(.*\/\d+-[^/]+?)(?:-new-post)?\.html$/.exec(u.pathname);
   if (seo) {
     const base = `${u.origin}${seo[1]}`;
-    return { pageUrl: (n) => (n <= 1 ? `${base}.html` : `${base}-${n}.html`), latestUrl: null };
+    return {
+      pageUrl: (n) => (n <= 1 ? `${base}.html` : `${base}-${n}.html`),
+      latestUrl: null,
+      pageOf: (v) => (v === `${base}.html` ? 1 : v.startsWith(`${base}-`) && v.endsWith(".html") ? wholeNumber(v.slice(base.length + 1, -".html".length)) : null),
+    };
   }
   const t = u.searchParams.get("t");
   if (/\/showthread\.php$/i.test(u.pathname) && t && /^\d+$/.test(t)) {
     const base = `${u.origin}${u.pathname}?t=${t}`;
-    return { pageUrl: (n) => (n <= 1 ? base : `${base}&page=${n}`), latestUrl: null };
+    return {
+      pageUrl: (n) => (n <= 1 ? base : `${base}&page=${n}`),
+      latestUrl: null,
+      pageOf: (v) => (v === base ? 1 : v.startsWith(`${base}&page=`) ? wholeNumber(v.slice(`${base}&page=`.length)) : null),
+    };
   }
   return null;
+}
+
+/**
+ * A followed thread's pages, from its own address (the source's feed_url): XenForo, else vBulletin
+ * (D-120). Only for thread sources, whose address was confirmed to be a thread when it was added.
+ */
+export function followedThreadPager(address: string): ThreadPager | null {
+  try {
+    return xenforoPager(address) ?? vbulletinPager(address);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A pasted vBulletin-style thread link, as the thread's first page; null for anything else. Such an
+ * address can also be another kind of site's article (D-099), so it is followed as a thread only
+ * if its page turns out to be one.
+ */
+export function vbulletinThreadAddress(url: URL): string | null {
+  return vbulletinPager(url.href)?.pageUrl(1) ?? null;
 }
 
 /** The pager for an item's link: a XenForo thread, or a thread from a vBulletin board's feed. */
@@ -76,7 +118,7 @@ export function threadPagerFor(url: string | null, feedUrl: string | null): Thre
 export function parseThreadPage(html: string, pageUrl: string): ForumThreadPage | null {
   const dom = new JSDOM(leanPageHtml(html), { url: pageUrl });
   try {
-    return parseForumThread(dom.window.document, pageUrl);
+    return parseForumThread(dom.window.document, pageUrl) ?? parseVbulletinThread(dom.window.document, pageUrl);
   } finally {
     dom.window.close();
   }

@@ -52,6 +52,25 @@ function ocPage(n: number, of: number, posts: Post[]): string {
     .join("")}</body></html>`;
 }
 
+/**
+ * One page of a vBulletin 3.9 thread in Bike Forums' theme (D-120): posts in #post<id> with
+ * #post_message_<id>, the "1 / 21" page counter, and the whole forum's and the board's feeds in the
+ * head, as on the user's saved page.
+ */
+function vbPage(n: number, of: number, posts: Post[]): string {
+  return `<!DOCTYPE html><html><head><title>Tandems found for sale. - Bike Forums</title>
+  <link rel="alternate" type="application/rss+xml" title="Bike Forums RSS Feed" href="https://vb.example/external.php?type=RSS2">
+  <link rel="alternate" type="application/rss+xml" title="Bike Forums - Tandem Cycling - RSS Feed" href="https://vb.example/external.php?type=RSS2&amp;forumids=44"></head><body>
+  <h1>Tandems found for sale.</h1><span id="mb_page_current">${n}</span> / <span id="mb_page_total">${of}</span>
+  ${posts
+    .map(
+      (p) => `<div id="post${p.id}"><div class="trow thead"><div class="tcell">10-23-26 | 12:23 AM</div></div>
+      <div class="tcell alt2"><a class="bigusername">${p.author}</a><div>Joined: <b>Jan 2015</b></div></div>
+      <div class="tcell alt1"><div id="post_message_${p.id}">${p.text}</div></div></div>`,
+    )
+    .join("")}</body></html>`;
+}
+
 const posts = (from: number, count: number, who = "Member"): Post[] =>
   Array.from({ length: count }, (_, i) => ({ id: from + i, author: `${who}${from + i}`, text: `Post number ${from + i}: my card runs at 3200 MHz.` }));
 
@@ -224,6 +243,78 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     const last = (await call("GET", `/api/items/${item.id}/reader?page=last`)).json();
     expect(last).toMatchObject({ pagination: { page: 3, pages: 3 } });
     expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-3.html`]); // page 1 was still cached
+  });
+
+  it("follows a vBulletin thread from a link to any of its pages, reading on from the page read last (D-120)", async () => {
+    const { clock, web, call } = await start();
+    const T = "https://vb.example/tandem-cycling/1000939-tandems-found-sale";
+    /** The thread now has `total` posts (ids 1…), 3 a page. */
+    const setVb = (total: number) => {
+      const all = posts(1, total);
+      const pages = Math.ceil(total / 3);
+      for (let n = 1; n <= pages; n++) web.set(n === 1 ? `${T}.html` : `${T}-${n}.html`, { body: vbPage(n, pages, all.slice((n - 1) * 3, n * 3)), contentType: "text/html" });
+    };
+    setVb(9); // 3 pages
+
+    // Pasted from page 2: the thread's address is still page 1; its newest page is read.
+    let before = web.requests.length;
+    const src = (await call("POST", "/api/sources", { url: `${T}-2.html` })).json();
+    expect(src).toMatchObject({ kind: "thread", feedUrl: `${T}.html`, title: "Tandems found for sale." });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-2.html`, `${T}-3.html`]);
+    let card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    expect(card).toMatchObject({ url: `${T}-3.html`, summary: expect.stringMatching(/^3 latest replies/) });
+
+    await call("PATCH", `/api/items/${card.id}`, { read: true });
+    clock.now += 20 * 60_000;
+
+    // Two replies: page 3 (read last time) says there are 4 pages now; page 3 isn't read twice.
+    setVb(11);
+    before = web.requests.length;
+    expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 2 });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-3.html`, `${T}-4.html`]);
+    card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    expect(card).toMatchObject({ url: `${T}-4.html`, read: false, summary: expect.stringMatching(/^2 new replies · Member11: Post number 11/) });
+    const replies = (await call("GET", `/api/items/${card.id}/reader`)).json();
+    expect(replies.html).toContain("Post number 10");
+    expect(replies.html).toContain("Post number 11");
+
+    // Nothing new: one request, for the newest page.
+    before = web.requests.length;
+    expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 0 });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-4.html`]);
+
+    // Replies deleted, the newest page with them: the check starts again from the first page.
+    web.routes.delete(`${T}-4.html`); // answers 404
+    web.set(`${T}.html`, { body: vbPage(1, 3, posts(1, 3)), contentType: "text/html" });
+    before = web.requests.length;
+    expect((await call("POST", `/api/sources/${src.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 0 });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${T}-4.html`, `${T}.html`, `${T}-3.html`]);
+    setVb(11);
+
+    // The whole thread, page by page, from the thread's own address.
+    expect((await call("GET", `/api/items/${card.id}/reader?page=2`)).json()).toMatchObject({ kind: "page", pagination: { page: 2, pages: 4 } });
+
+    // The same thread pasted again, from another page: already followed.
+    expect((await call("POST", "/api/sources", { url: `${T}.html` })).statusCode).toBe(409);
+    expect((await call("POST", "/api/sources", { url: `${T}-4.html` })).statusCode).toBe(409);
+  });
+
+  it("a vBulletin-style link that isn't a thread is added as a page with a feed (D-120)", async () => {
+    const { web, call } = await start();
+    const article = "https://news.example/world/12345-big-news.html";
+    web.set(article, { body: `<html><head><link rel="alternate" type="application/rss+xml" href="https://news.example/rss"></head><body><p>Big news.</p></body></html>`, contentType: "text/html" });
+    web.set("https://news.example/rss", { body: rss("News", [{ guid: "n1", title: "Big news", date: new Date(NOW).toISOString() }]) });
+    const src = (await call("POST", "/api/sources", { url: article })).json();
+    expect(src).toMatchObject({ kind: "feed", feedUrl: "https://news.example/rss" });
+  });
+
+  it("a vBulletin board's own feed is followed, not the whole forum's listed before it (D-121)", async () => {
+    const { web, call } = await start();
+    web.set("https://vb.example/tandem-cycling/", { body: vbPage(1, 1, []), contentType: "text/html" });
+    web.set("https://vb.example/external.php?type=RSS2&forumids=44", { body: rss("Bike Forums - Tandem Cycling", [{ guid: "t1", title: "Tandem", date: new Date(NOW).toISOString() }]) });
+    const src = (await call("POST", "/api/sources", { url: "https://vb.example/tandem-cycling/" })).json();
+    expect(src).toMatchObject({ kind: "feed", feedUrl: "https://vb.example/external.php?type=RSS2&forumids=44" });
+    expect(web.requests.map((q) => q.url)).not.toContain("https://vb.example/external.php?type=RSS2");
   });
 
   it("Overclock.net's theme: post times (not join dates), page count and title (D-102)", async () => {

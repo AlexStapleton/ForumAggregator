@@ -3,7 +3,7 @@ import path from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import { cleanFeedHtml, extractArticle, extractWithSelectors, pageAudio, pageNote, parseVbulletinThread, polishArticle, youtubeVideoId } from "../src/reader/extract.js";
-import { threadPagerFor, vbulletinPager } from "../src/feeds/thread.js";
+import { followedThreadPager, threadPagerFor, vbulletinPager } from "../src/feeds/thread.js";
 import { sanitizeHtml } from "../src/reader/sanitize.js";
 
 const BASE = "https://news.example/2026/10/story";
@@ -143,6 +143,17 @@ describe("thread pagers (D-099)", () => {
     const classic = vbulletinPager("https://f.example/forum/showthread.php?t=123&goto=newpost")!;
     expect([classic.pageUrl(1), classic.pageUrl(3)]).toEqual(["https://f.example/forum/showthread.php?t=123", "https://f.example/forum/showthread.php?t=123&page=3"]);
     expect(vbulletinPager("https://news.example/story")).toBeNull();
+  });
+
+  it("tells which page a followed thread's page address is (D-120)", () => {
+    const seo = followedThreadPager("https://f.example/x/1324707-top-10.html")!;
+    expect([seo.pageOf("https://f.example/x/1324707-top-10.html"), seo.pageOf("https://f.example/x/1324707-top-10-21.html")]).toEqual([1, 21]);
+    expect([seo.pageOf("https://f.example/x/1324707-top-10-0.html"), seo.pageOf("https://f.example/x/9-other.html")]).toEqual([null, null]);
+    const classic = followedThreadPager("https://f.example/forum/showthread.php?t=123")!;
+    expect([classic.pageOf("https://f.example/forum/showthread.php?t=123"), classic.pageOf("https://f.example/forum/showthread.php?t=123&page=4")]).toEqual([1, 4]);
+    const xf = followedThreadPager("https://forum.example/threads/gpu.12/")!;
+    expect([xf.latestUrl, xf.pageOf("https://forum.example/threads/gpu.12/page-3")]).toEqual(["https://forum.example/threads/gpu.12/latest", 3]);
+    expect(followedThreadPager("https://news.example/story")).toBeNull();
   });
 
   it("pages vBulletin links only when they come from a vBulletin board's feed", () => {
