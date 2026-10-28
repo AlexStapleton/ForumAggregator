@@ -7,10 +7,19 @@ import { Worker } from "node:worker_threads";
 import type { ForumThreadPage } from "./extract.js";
 import { extractWithSelectors, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
 import { parseThreadPage } from "../feeds/thread.js";
+import { parseBoardPage, type BoardPage } from "../feeds/board.js";
 
 export type PageJob =
   | { kind: "extract"; html: string; url: string; selectors: ReaderSelectors }
-  | { kind: "thread"; html: string; url: string };
+  | { kind: "thread"; html: string; url: string }
+  | { kind: "board"; html: string; url: string };
+
+/** Does one job; the same code in the worker and in-process. */
+export function runPageJob(job: PageJob): unknown {
+  return job.kind === "thread" ? parseThreadPage(job.html, job.url)
+    : job.kind === "board" ? parseBoardPage(job.html, job.url)
+    : extractWithSelectors(job.html, job.url, job.selectors);
+}
 
 /** A page that takes longer than this is given up on (and the worker replaced). */
 const JOB_TIMEOUT_MS = 30_000;
@@ -43,10 +52,15 @@ export class PageParser {
     return this.run({ kind: "thread", html, url }) as Promise<ForumThreadPage | null>;
   }
 
+  /** A vBulletin board page's threads (D-123). */
+  board(html: string, url: string): Promise<BoardPage | null> {
+    return this.run({ kind: "board", html, url }) as Promise<BoardPage | null>;
+  }
+
   private run(job: PageJob): Promise<unknown> {
     if (!this.useWorker) {
       try {
-        return Promise.resolve(job.kind === "thread" ? parseThreadPage(job.html, job.url) : extractWithSelectors(job.html, job.url, job.selectors));
+        return Promise.resolve(runPageJob(job));
       } catch (err) {
         return Promise.reject(err);
       }

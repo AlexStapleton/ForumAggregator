@@ -15,7 +15,8 @@ How to cut a version (e.g. 1.1.0). Images are built by CI: `latest` from `main`,
 2. **Merge the PR** into `main`.
 3. **Create the release on GitHub:** Releases → Draft a new release → tag `vX.Y.Z` on `main`,
    title `vX.Y.Z`, notes from the changelog section. Publishing it pushes the tag, and CI
-   publishes the versioned images.
+   publishes the versioned images. Make sure the tag goes on the **merge commit** of the release
+   PR ("Target: main" after merging), not an earlier commit: `v1.13.0` went on 1.12.0's (D-125).
 4. **Check** that Docker Hub shows `alexstapo/forumaggregator:X.Y.Z` and that
    `/api/version` on the updated install reports X.Y.Z.
 

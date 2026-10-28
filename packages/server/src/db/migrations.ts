@@ -384,6 +384,26 @@ export const migrations: Record<string, Migration> = {
       for (const column of ["last_login_at", "disabled", "role"]) await db.schema.alterTable("users").dropColumn(column).execute();
     },
   },
+  "0016_board_threads": {
+    async up(db: Kysely<any>) {
+      // The threads a followed board lists (D-123): what each had at the last check, so a thread's
+      // card comes back only when its newest post changes.
+      await db.schema
+        .createTable("board_threads")
+        .addColumn("source_id", "text", (c) => c.notNull().references("sources.id").onDelete("cascade"))
+        .addColumn("thread_id", "text", (c) => c.notNull())
+        .addColumn("last_post_id", "text", (c) => c.notNull())
+        .addColumn("replies", "integer")
+        .addColumn("base_replies", "integer")
+        .addColumn("last_page_url", "text")
+        .addColumn("seen_at", "bigint", (c) => c.notNull())
+        .addPrimaryKeyConstraint("board_threads_pk", ["source_id", "thread_id"])
+        .execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.dropTable("board_threads").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

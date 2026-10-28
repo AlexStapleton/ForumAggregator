@@ -37,6 +37,8 @@ const THREAD_LINK = /\/threads\/[^/]+\.\d+(\/|$)|\/\d+-[^/]+\.html$|\/showthread
 /** Where an item opens (D-088): forum threads on the page chosen in Settings; a followed thread's card on its new replies. */
 function startPage(item: FeedItem): Page {
   if (item.sourceKind === "thread" || !item.url) return undefined;
+  // A board's thread card is about its new replies (D-123): the newest page, whatever the setting.
+  if (item.sourceKind === "board") return "last";
   try {
     return THREAD_LINK.test(new URL(item.url).pathname) && readPrefs().threadStart === "last" ? "last" : undefined;
   } catch {

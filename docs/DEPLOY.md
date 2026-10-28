@@ -314,6 +314,8 @@ How it behaves:
   for new replies.
 - To follow one thread for new replies, paste the thread's link in Sources (XenForo D-084,
   vBulletin D-120).
+- To follow a vBulletin board's discussions, paste the board's page (D-123): one card per thread,
+  back when it has new replies. Each check reads the board's first page and its sub-forums'.
 - Nothing logs in; you see what a guest sees.
 
 ## 8. Backups

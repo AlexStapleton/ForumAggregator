@@ -101,7 +101,7 @@ export interface SettingsTable {
 
 export interface SourcesTable {
   id: string;
-  kind: "feed" | "youtube" | "reddit" | "thread";
+  kind: "feed" | "youtube" | "reddit" | "thread" | "board";
   /** The feed's own name; each follower's name for it is subscriptions.title. */
   title: string;
   site_url: string | null;
@@ -142,6 +142,22 @@ export interface ThreadPostsTable {
   /** Sanitised. */
   html: string;
   fetched_at: number;
+}
+
+/** The threads a followed vBulletin board lists (D-123); each has a card, guid "thread-<id>". */
+export interface BoardThreadsTable {
+  source_id: string;
+  /** The forum's thread ID. */
+  thread_id: string;
+  /** The newest post's ID at the last check (only grows). */
+  last_post_id: string;
+  replies: number | null;
+  /** Replies when the card was last read by everyone: "N new replies" counts from here. */
+  base_replies: number | null;
+  /** The page with the newest post: where the reader opens the thread. */
+  last_page_url: string | null;
+  /** When the board last listed it. */
+  seen_at: number;
 }
 
 export interface ItemsTable {
@@ -188,6 +204,7 @@ export interface Database {
   settings: SettingsTable;
   sources: SourcesTable;
   thread_posts: ThreadPostsTable;
+  board_threads: BoardThreadsTable;
   items: ItemsTable;
   invites: InvitesTable;
   subscriptions: SubscriptionsTable;

@@ -200,6 +200,7 @@ a.button {
 .kind-feed { background: var(--info-bg); color: var(--info-text); }
 .kind-reddit { background: #d93a00; color: #fff; }
 .kind-thread { background: #6d28d9; color: #fff; }
+.kind-board { background: #0f766e; color: #fff; }
 
 .source { margin-bottom: 0.75rem; }
 .source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }

@@ -96,7 +96,7 @@ export function SourcesPage() {
             name="url"
             value={url}
             onChange={setUrl}
-            hint="A YouTube channel (link or @handle), a website, an RSS/Atom feed, a forum board (…/forums/board-name.12/) or a forum thread to follow for new replies (…/threads/title.123/ or …/123456-title.html)."
+            hint="A YouTube channel (link or @handle), a website, an RSS/Atom feed, a forum board (…/forums/board-name.12/, or a vBulletin board's page to follow its threads' new replies) or a forum thread to follow for new replies (…/threads/title.123/ or …/123456-title.html)."
             autoComplete="url"
           />
           <Field label="Tags (optional)" name="tags" value={newTags} onChange={setNewTags} hint="Comma-separated, e.g. news, politics" autoComplete="off" />
@@ -384,10 +384,12 @@ function EditSource({
         value={address}
         onChange={setAddress}
         error={fields.url}
-        readOnly={source.kind === "thread"}
+        readOnly={source.kind === "thread" || source.kind === "board"}
         hint={
           source.kind === "thread"
             ? "A followed thread keeps its address. To follow another thread, add it as a new source."
+            : source.kind === "board"
+              ? "A followed board keeps its address. To follow another board, add it as a new source."
             : source.canEditShared
               ? "Changing it re-checks the new address before saving. Existing items are kept."
               : "Changing it re-checks the new address, then you follow that instead; the others keep this one."
@@ -423,7 +425,7 @@ function EditSource({
         </select>
         <small className="hint">Saved items are never deleted.</small>
       </div>
-      {(flareOn || source.viaFlareSolverr) && (source.kind === "feed" || source.kind === "thread") && (
+      {(flareOn || source.viaFlareSolverr) && (source.kind === "feed" || source.kind === "thread" || source.kind === "board") && (
         <label className="choice">
           <input type="checkbox" checked={viaFlare} onChange={(e) => setViaFlare(e.target.checked)} />
           <span>
