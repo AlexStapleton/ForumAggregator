@@ -6,6 +6,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-28
+
+Follow Bike Forums (vBulletin) threads like XenForo ones, and vBulletin boards follow their own
+feed instead of the whole forum's. Upgrade with `docker compose pull && docker compose up -d`, or
+pin `alexstapo/forumaggregator:1.13.0`. No database changes.
+
 ### Added
 - **Follow a vBulletin thread** (e.g. Bike Forums), like XenForo threads: paste the thread's link (any page) and it becomes a Thread source with one card that comes back with the new replies, and the whole thread page by page (D-120). Bike Forums sources added before this are not changed: to follow a thread, paste its link again.
 
