@@ -22,6 +22,23 @@ const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "date
 
 let currentBase = "";
 
+// Recover lazy images before the attribute allow-list removes their real addresses.
+// This also covers feed HTML and followed-thread posts, which bypass Readability.
+export function restoreLazyImage(el: Element, baseUrl: string): void {
+  for (const attr of ["data-src", "data-lazy-src", "data-original"]) {
+    const src = safeHttpUrl(el.getAttribute(attr), baseUrl);
+    if (src?.startsWith("https://")) {
+      el.setAttribute("src", src);
+      break;
+    }
+  }
+}
+
+purify.addHook("beforeSanitizeAttributes", (node) => {
+  const el = node as unknown as Element;
+  if (el.tagName === "IMG") restoreLazyImage(el, currentBase);
+});
+
 purify.addHook("afterSanitizeAttributes", (node) => {
   const el = node as unknown as Element;
   if (el.tagName === "A") {

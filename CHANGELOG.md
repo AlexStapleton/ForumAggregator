@@ -7,6 +7,8 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ## [Unreleased]
 
 ### Fixed
+- Preserve lazy-loaded images in followed threads and feed content, and recognize image-only
+  forum pages so screenshot and benchmark posts remain readable.
 - Overclock.net's nested thread layout now renders individual posts with thread page controls,
   instead of falling back to article extraction and including unrelated page widgets. Nested
   replies appear once, and the repeated original post is omitted after the first page.
