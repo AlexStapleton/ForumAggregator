@@ -2,6 +2,7 @@
 // a timeout, and bot-check / block detection, so callers stop instead of retrying hard.
 import { classifyResponse, KIND_HELP, type ResponseKind } from "../sites/probe.js";
 import { USER_AGENT } from "../sites/userAgent.js";
+import { OutboundBlocked, OutboundPolicy, publicOutbound, webUrl } from "./outbound.js";
 
 export interface FetchOptions {
   etag?: string | null;
@@ -31,7 +32,7 @@ export type FetchResult =
     }
   | { kind: "not_modified" };
 
-export type FetchErrorKind = ResponseKind | "timeout" | "network" | "too_large";
+export type FetchErrorKind = ResponseKind | "timeout" | "network" | "too_large" | "blocked_destination";
 
 export class FetchError extends Error {
   constructor(
@@ -104,7 +105,7 @@ async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> 
   return out;
 }
 
-export const httpFetch: Fetcher = async (url, options) => {
+export const createHttpFetch = (policy: OutboundPolicy): Fetcher => async (url, options) => {
   const headers: Record<string, string> = { "user-agent": options.userAgent ?? USER_AGENT, accept: ACCEPT[options.expect] };
   if (options.cookie) headers.cookie = options.cookie;
   if (options.etag) headers["if-none-match"] = options.etag;
@@ -112,8 +113,9 @@ export const httpFetch: Fetcher = async (url, options) => {
 
   let res: Response;
   try {
-    res = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(options.timeoutMs ?? 20_000) });
+    res = await policy.fetch(url, { headers, signal: AbortSignal.timeout(options.timeoutMs ?? 20_000) });
   } catch (err) {
+    if (err instanceof OutboundBlocked) throw new FetchError("blocked_destination", err.message);
     const e = err as Error & { cause?: { code?: string; message?: string } };
     if (e.name === "TimeoutError" || e.name === "AbortError") throw new FetchError("timeout", "The site took too long to answer");
     throw new FetchError("network", `Couldn't connect (${e.cause?.code ?? e.cause?.message ?? e.message})`);
@@ -141,6 +143,8 @@ export const httpFetch: Fetcher = async (url, options) => {
     lastModified: res.headers.get("last-modified"),
   };
 };
+
+export const httpFetch = createHttpFetch(publicOutbound);
 
 /**
  * Spaces out requests to the same host (DESIGN §7): at least `minDelayMs` plus random jitter
@@ -190,11 +194,12 @@ export class HostLimiter {
  */
 export type JsonFetcher = (url: string) => Promise<{ status: number; body: unknown }>;
 
-export const httpJson: JsonFetcher = async (url) => {
+export const createHttpJson = (request: (url: string, init: RequestInit) => Promise<Response>): JsonFetcher => async (url) => {
   let res: Response;
   try {
-    res = await fetch(url, { headers: { "user-agent": USER_AGENT, accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+    res = await request(url, { headers: { "user-agent": USER_AGENT, accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
   } catch (err) {
+    if (err instanceof OutboundBlocked) throw new FetchError("blocked_destination", err.message);
     const e = err as Error & { cause?: { code?: string } };
     if (e.name === "TimeoutError" || e.name === "AbortError") throw new FetchError("timeout", "The API took too long to answer");
     throw new FetchError("network", `Couldn't connect (${e.cause?.code ?? e.name})`);
@@ -208,3 +213,7 @@ export const httpJson: JsonFetcher = async (url) => {
   }
   return { status: res.status, body };
 };
+
+export const httpJson = createHttpJson((url, init) => publicOutbound.fetch(url, init));
+/** Admin-configured service endpoint only. Never follow its redirects into another service. */
+export const httpServiceJson = createHttpJson((url, init) => fetch(webUrl(url), { ...init, redirect: "error" }));

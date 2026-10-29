@@ -58,6 +58,8 @@ export async function createTestApp(
     fetchJson: deps.fetchJson ?? (async () => ({ status: 503, body: null })),
     // Never reach a real FlareSolverr from tests.
     postJson: deps.postJson ?? (async () => ({ status: 503, body: null })),
+    // Fake browser tests never open sockets; production validates destination DNS instead.
+    authorizeFlareTarget: deps.postJson ? async () => {} : undefined,
     // No waiting between requests in tests.
     limiter: new HostLimiter(0, 0, async () => {}),
   });

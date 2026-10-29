@@ -7,6 +7,8 @@
 import { checkRobots } from "../sites/robots.js";
 import { classifyResponse, detectSoftware, isRss, KIND_HELP, type ProbeResponse, type ResponseKind } from "../sites/probe.js";
 import { USER_AGENT } from "../sites/userAgent.js";
+import { OutboundPolicy } from "../feeds/outbound.js";
+import { splitList } from "../env.js";
 
 const DEFAULT_TARGETS = [
   "https://thehotpepper.com/",
@@ -36,9 +38,9 @@ interface SiteReport {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchProbe(url: string): Promise<ProbeResponse> {
-  const res = await fetch(url, {
+  const policy = new OutboundPolicy(splitList(process.env.FA_ALLOWED_INTERNAL_ORIGINS ?? ""));
+  const res = await policy.fetch(url, {
     headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml,application/rss+xml;q=0.9,*/*;q=0.8" },
-    redirect: "follow",
     signal: AbortSignal.timeout(20_000),
   });
   const headers: Record<string, string> = {};

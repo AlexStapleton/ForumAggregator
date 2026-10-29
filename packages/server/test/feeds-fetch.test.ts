@@ -2,12 +2,14 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ConfigSchema } from "../src/config.js";
-import { FetchError, HostLimiter, httpFetch } from "../src/feeds/fetch.js";
+import { FetchError, HostLimiter, createHttpFetch, type Fetcher } from "../src/feeds/fetch.js";
+import { OutboundPolicy } from "../src/feeds/outbound.js";
 import { nextCheck } from "../src/feeds/schedule.js";
 import { USER_AGENT } from "../src/sites/userAgent.js";
 
 let server: http.Server;
 let base = "";
+let httpFetch: Fetcher;
 const seen: http.IncomingHttpHeaders[] = [];
 
 beforeAll(async () => {
@@ -48,6 +50,7 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  httpFetch = createHttpFetch(new OutboundPolicy([base, "http://127.0.0.1:1"]));
 });
 
 afterAll(() => new Promise<void>((r) => server.close(() => r())));

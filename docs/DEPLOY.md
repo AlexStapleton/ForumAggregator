@@ -273,6 +273,7 @@ AUTH_PROXY_TRUSTED=172.20.0.5  # NPM's container IP, and nothing broader
 | `AUTH_PROXY_TRUSTED` | — | Required for `proxy`/`both`: direct-peer IPs allowed to send that header |
 | `FA_SETUP_CODE` | random | Fixes the first-run setup code instead of printing a random one |
 | `LOG_LEVEL` | `info` | `debug` for troubleshooting |
+| `FA_ALLOWED_INTERNAL_ORIGINS` | empty | Comma-separated exact origins allowed to serve internal feeds/articles; see below |
 
 What to follow and how politely to fetch it lives in `data/config.yaml`; see
 `config.example.yaml`.
@@ -290,7 +291,47 @@ per site, 5 s apart. See [SITE-ACCESS.md](SITE-ACCESS.md) for what to do with th
 If your server reaches the internet through an outbound proxy, give the container
 `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY=…` environment variables.
 
+### Outbound requests and internal feeds
+
+Feeds, discovered feed URLs, articles, forum pages and JSON APIs may only connect to public
+HTTP/HTTPS destinations by default. Loopback, private, link-local, metadata, multicast,
+reserved and IPv4-mapped/transition IPv6 addresses are blocked. URLs containing credentials
+are rejected. DNS answers are checked at socket lookup and the checked addresses are used for
+that connection; every redirect is checked again (at most five redirects). Cookies and
+authorization headers are not forwarded to a different origin.
+
+For an intentional internal feed, set an exact origin in the **app container's environment**:
+
+```yaml
+environment:
+  FA_ALLOWED_INTERNAL_ORIGINS: "http://feeds.internal:8080,https://news.internal"
+```
+
+Restart the app after changing it. Origins include the scheme, hostname and effective port;
+paths, queries, credentials, CIDRs and wildcard patterns are not accepted. An exception covers
+all paths at that origin, and **every account can request it**. Only allow dedicated content
+services you intend to share, not management interfaces or metadata endpoints. Redirects and
+article links to another internal origin need their own exception. A hostname exception trusts
+the addresses that hostname resolves to. Ordinary accounts cannot edit this environment setting.
+Keep the list narrow. Existing internal sources without an exception will report a blocked
+destination after upgrading; public sources continue to work normally.
+
 ### Forums behind a Cloudflare check: FlareSolverr (optional)
+
+**FlareSolverr remains available when configured; no new opt-in setting is required.** The app
+checks the requested destination before asking FlareSolverr to fetch it and checks the returned
+destination before using the response. Its remote browser resolves DNS and follows redirects
+and subresources itself, however, so these checks cannot prevent all internal-network requests
+from that browser. A returned-URL check happens after the browser has already made its requests.
+
+For protection against that remaining risk, use an outbound firewall or equivalent network policy
+for the browser that denies private, loopback, link-local/cloud metadata and other non-public
+destinations on IPv4 and IPv6, including the host and other containers. Permit only needed DNS to
+a trusted resolver and public web traffic. A separate Docker network alone does not enforce this.
+The app does not configure or verify this external protection.
+
+The admin-configured FlareSolverr API address may itself be internal; it does not need a
+content-origin exception. Calls to that API never follow redirects.
 
 If the check above shows a Cloudflare browser check ("Just a moment…") for a forum you want to
 follow, and you run [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr), the app can

@@ -47,6 +47,8 @@ const EnvSchema = z
     WEB_DIST: z.string().optional(),
     /** Enable the login rate limiter (only ever disabled by tests). */
     LOGIN_RATE_LIMIT: bool.default(true),
+    /** Exact origins an administrator intentionally allows for internal feeds/articles. */
+    FA_ALLOWED_INTERNAL_ORIGINS: z.string().default(""),
   })
   .superRefine((env, ctx) => {
     if (env.AUTH_MODE !== "local" && !env.AUTH_PROXY_TRUSTED) {
