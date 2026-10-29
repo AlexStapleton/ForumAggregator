@@ -7,6 +7,7 @@ import { usePrefs, useSplitView } from "../prefs";
 import { dayLabel, durationLabel, fullDate, relativeTime, startOfDay } from "../time";
 import { Reader } from "./Reader";
 import { SourcePicker } from "./SourcePicker";
+import { createItemUpdater } from "../itemUpdates";
 
 const FILTERS: Array<{ value: ItemsFilter; label: string }> = [
   { value: "unread", label: "Unread" },
@@ -97,15 +98,17 @@ export function FeedPage() {
     }
   }, [cursor, query, setItems]);
 
+  const itemUpdater = useMemo(() => createItemUpdater(
+    (id, patch) => api("PATCH", `/api/items/${id}`, patch),
+    (id, flags) => setItems((prev) => prev.map((i) => i.id === id ? { ...i, ...flags } : i)),
+  ), [setItems]);
   const update = useCallback(async (item: FeedItem, patch: { read?: boolean; saved?: boolean }) => {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...patch } : i)));
     try {
-      await api("PATCH", `/api/items/${item.id}`, patch);
+      await itemUpdater(item.id, itemsRef.current.find((i) => i.id === item.id) ?? item, patch);
     } catch (err) {
-      setItems((prev) => prev.map((i) => (i.id === item.id ? item : i)));
       setError(errorMessage(err));
     }
-  }, [setItems]);
+  }, [itemUpdater]);
   const closeReader = useCallback(() => setSelectedId(null), []);
   const openIndex = useCallback((i: number) => setSelectedId(itemsRef.current[i]?.id ?? null), []);
 
