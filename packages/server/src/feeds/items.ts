@@ -153,6 +153,7 @@ export class ItemService {
   async update(viewer: Viewer, id: string, patch: UpdateItemRequest): Promise<boolean> {
     const item = await this.visible(viewer, id);
     if (!item) return false;
+    if (patch.read === undefined && patch.saved === undefined) return true;
     const read = patch.read ?? Number(item.read) === 1;
     const row = {
       source_id: item.source_id,
@@ -163,7 +164,12 @@ export class ItemService {
     await this.db.kysely
       .insertInto("item_states")
       .values({ user_id: viewer.id, item_id: id, ...row })
-      .onConflict((oc) => oc.columns(["user_id", "item_id"]).doUpdateSet(row))
+      // The visibility snapshot can already be stale when another device updates this item.
+      // On conflict, only touch the fields the caller actually supplied.
+      .onConflict((oc) => oc.columns(["user_id", "item_id"]).doUpdateSet({
+        ...(patch.read === undefined ? {} : { read: row.read, read_at: row.read_at }),
+        ...(patch.saved === undefined ? {} : { saved: row.saved }),
+      }))
       .execute();
     return true;
   }

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FetchError } from "../src/feeds/fetch.js";
 import { FakeWeb, rss } from "./fakeWeb.js";
 import { backends, createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
@@ -40,6 +40,39 @@ describe.each(backends)("sources and feed (%s)", (backend) => {
     app!.fastify.inject({ method, url, payload, headers: { cookie, ...(method === "GET" ? {} : CSRF) } });
   const items = async (query = "") => (await call("GET", `/api/items${query}`)).json();
   const addFeed = async (url: string) => call("POST", "/api/sources", { url });
+
+  it.each(["existing", "missing", "clear"])("preserves concurrent read/save patches (%s state)", async (state) => {
+    await start();
+    web.set("https://race.example/feed", { body: rss("Race", [{ guid: "race", title: "Race item", date: iso(-60_000) }]) });
+    await addFeed("https://race.example/feed");
+    const item = (await items("?filter=all")).items[0];
+    if (state === "missing") await app!.db.kysely.deleteFrom("item_states").where("item_id", "=", item.id).execute();
+    if (state === "clear") await call("PATCH", `/api/items/${item.id}`, { read: true, saved: true });
+    // Hold both requests after their real SELECT: both must see the same old snapshot.
+    const service = app!.items as unknown as { visible: (...args: unknown[]) => Promise<unknown> };
+    const original = service.visible.bind(service);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let arrived = 0;
+    const spy = vi.spyOn(service, "visible").mockImplementation(async (...args) => {
+      const snapshot = await original(...args);
+      if (++arrived === 2) release();
+      await gate;
+      return snapshot;
+    });
+    try {
+      const value = state !== "clear";
+      const results = await Promise.all([
+        call("PATCH", `/api/items/${item.id}`, { read: value }),
+        call("PATCH", `/api/items/${item.id}`, { saved: value }),
+      ]);
+      expect(results.map((r) => r.statusCode)).toEqual([200, 200]);
+      expect((await items("?filter=all")).items[0]).toMatchObject({ read: value, saved: value });
+      const stored = await app!.db.kysely.selectFrom("item_states").select("read_at").where("item_id", "=", item.id).executeTakeFirstOrThrow();
+      expect(stored.read_at).toBe(value ? NOW : null);
+    } finally { spy.mockRestore(); }
+    expect((await call("PATCH", `/api/items/${item.id}`, {})).statusCode).toBe(200);
+  });
 
   it("requires login", async () => {
     await start();
