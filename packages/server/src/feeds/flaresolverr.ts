@@ -14,6 +14,7 @@
 // Only opted-in sources use this; the per-site spacing still applies (callers wait first).
 import { FetchError, type FetchOptions, type FetchResult, type Fetcher, type JsonFetcher } from "./fetch.js";
 import { classifyResponse } from "../sites/probe.js";
+import { webUrl } from "./outbound.js";
 
 /** POST with a JSON body; returns the status and parsed JSON (even for errors). */
 export type JsonPoster = (url: string, body: unknown, timeoutMs: number) => Promise<{ status: number; body: unknown }>;
@@ -21,7 +22,8 @@ export type JsonPoster = (url: string, body: unknown, timeoutMs: number) => Prom
 export const httpPostJson: JsonPoster = async (url, body, timeoutMs) => {
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetch(webUrl(url), {
+      redirect: "error",
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(body),
@@ -106,6 +108,9 @@ export class FlareSolverr {
     private readonly post: JsonPoster,
     private readonly get: JsonFetcher,
     private readonly now: () => number = Date.now,
+    private readonly authorizeTarget: (url: string) => Promise<void> = async () => {
+      throw new FetchError("blocked_destination", "FlareSolverr browser fetching is disabled until its network is isolated and FA_FLARESOLVERR_ISOLATED=true is configured. See docs/DEPLOY.md.");
+    },
   ) {}
 
   async configured(): Promise<boolean> {
@@ -211,6 +216,7 @@ export class FlareSolverr {
   /** Wraps a fetcher so its requests go through FlareSolverr's clearance (see the top of this file). */
   wrap(base: Fetcher): Fetcher {
     return async (url, options) => {
+      await this.authorizeTarget(url);
       const plain = this.plainWorks(url);
       const known = plain ? this.clearanceFor(url) : null;
       if (known) {
@@ -224,6 +230,7 @@ export class FlareSolverr {
         }
       }
       const solution = await this.solve(url);
+      await this.authorizeTarget(solution.url);
       const direct = this.usable(solution, options);
       if (direct) return direct;
       if (!this.plainWorks(url)) throw new FetchError("cloudflare_challenge", `FlareSolverr's copy of the page wasn't usable (${this.whyUnusable(solution, options)})`);

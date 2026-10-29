@@ -18,7 +18,8 @@ import type { Db } from "./db/index.js";
 import { splitList, type Env } from "./env.js";
 import { sendError } from "./http.js";
 import { VERSION } from "./version.js";
-import { HostLimiter, httpFetch, httpJson, type Fetcher, type JsonFetcher } from "./feeds/fetch.js";
+import { HostLimiter, createHttpFetch, createHttpJson, httpServiceJson, FetchError, type Fetcher, type JsonFetcher } from "./feeds/fetch.js";
+import { OutboundPolicy, OutboundBlocked } from "./feeds/outbound.js";
 import { ItemService } from "./feeds/items.js";
 import { Poller } from "./feeds/poller.js";
 import { registerFeedRoutes } from "./feeds/routes.js";
@@ -42,6 +43,8 @@ export interface AppDeps {
   fetchJson?: JsonFetcher;
   /** JSON POSTs (FlareSolverr); tests pass a fake. */
   postJson?: JsonPoster;
+  /** Tests using a fake browser may inject a no-network authorization check. */
+  authorizeFlareTarget?: (url: string) => Promise<void>;
 }
 
 export interface App {
@@ -59,7 +62,7 @@ function trustProxySetting(value: string): boolean | string[] {
   return splitList(value);
 }
 
-export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter, fetchJson, postJson }: AppDeps): Promise<App> {
+export async function buildApp({ env, secretKey, config, db, now, fetcher, limiter, fetchJson, postJson, authorizeFlareTarget }: AppDeps): Promise<App> {
   const fastify = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -122,11 +125,19 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
 
   registerAuth(fastify, env, auth);
 
-  const sharedFetcher = fetcher ?? httpFetch;
+  const outbound = new OutboundPolicy(splitList(env.FA_ALLOWED_INTERNAL_ORIGINS));
+  const sharedFetcher = fetcher ?? createHttpFetch(outbound);
   const sharedLimiter = limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000);
   const settings = new SettingsService(db, box, fastify.log);
-  const sharedJson = fetchJson ?? httpJson;
-  const flare = new FlareSolverr(() => settings.flaresolverrUrl(), postJson ?? httpPostJson, sharedJson, now);
+  const sharedJson = fetchJson ?? createHttpJson((url, init) => outbound.fetch(url, init));
+  const flareGuard = authorizeFlareTarget ?? (env.FA_FLARESOLVERR_ISOLATED ? async (url: string) => {
+    try { await outbound.check(url); }
+    catch (err) {
+      if (err instanceof OutboundBlocked) throw new FetchError("blocked_destination", err.message);
+      throw err;
+    }
+  } : undefined);
+  const flare = new FlareSolverr(() => settings.flaresolverrUrl(), postJson ?? httpPostJson, fetchJson ?? httpServiceJson, now, flareGuard);
   const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log, flare, {
     apiKey: () => settings.youtubeApiKey(),
     fetchJson: sharedJson,

@@ -134,7 +134,7 @@ describe("FlareSolverr client", () => {
     web.set("https://forum.example/forums/board.4/index.rss", { body: RSS([{ id: 1, title: "Hello", date: NOW }]) });
     const site = cloudflared(web, "forum.example");
     const fs = fakeFlareSolverr(web, { wrapXml: true, now: () => now });
-    const flare = new FlareSolverr(async () => FS, fs.post, async () => ({ status: 503, body: null }), () => now);
+    const flare = new FlareSolverr(async () => FS, fs.post, async () => ({ status: 503, body: null }), () => now, async () => {});
     const fetcher = flare.wrap(site.fetcher);
 
     const first = await fetcher("https://forum.example/forums/board.4/index.rss", { expect: "feed" });
@@ -162,7 +162,7 @@ describe("FlareSolverr client", () => {
       status: 200,
       body: { status: "ok", solution: { url: "x", status: 200, response: "<html><body><p>XML viewer</p></body></html>", userAgent: BROWSER_UA, cookies: [{ name: "cf_clearance", value: "granted", domain: "forum.example" }] } },
     });
-    const flare = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => NOW);
+    const flare = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => NOW, async () => {});
     const res = await flare.wrap(site.fetcher)("https://forum.example/forums/board.4/index.rss", { expect: "feed" });
     expect(res.kind === "ok" && res.body).toContain("<rss");
     expect(site.seen.at(-1)).toMatchObject({ cookie: "cf_clearance=granted", userAgent: BROWSER_UA });
@@ -184,7 +184,7 @@ describe("FlareSolverr client", () => {
       solves++;
       return { status: 200, body: { status: "ok", solution: { url, status: 200, response: page, userAgent: BROWSER_UA, cookies: [{ name: "cf_clearance", value: "granted", domain: ".forum.example" }] } } };
     };
-    const fetcher = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => now).wrap(refusing);
+    const fetcher = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => now, async () => {}).wrap(refusing);
     for (let i = 0; i < 4; i++) {
       const res = await fetcher(url, { expect: "html" });
       expect(res.kind === "ok" && res.body).toContain("Paper envelopes");
@@ -203,7 +203,7 @@ describe("FlareSolverr client", () => {
     const web = new FakeWeb();
     const site = cloudflared(web, "forum.example");
     const fs = fakeFlareSolverr(web, { fail: "Error solving the challenge. Timeout after 60.0 seconds.", now: () => NOW });
-    const flare = new FlareSolverr(async () => FS, fs.post, async () => ({ status: 503, body: null }), () => NOW);
+    const flare = new FlareSolverr(async () => FS, fs.post, async () => ({ status: 503, body: null }), () => NOW, async () => {});
     await expect(flare.wrap(site.fetcher)("https://forum.example/forums/board.4/", { expect: "html" })).rejects.toMatchObject({
       kind: "cloudflare_challenge",
       message: expect.stringMatching(/FlareSolverr couldn't get past.*Timeout after 60/),
