@@ -49,8 +49,6 @@ const EnvSchema = z
     LOGIN_RATE_LIMIT: bool.default(true),
     /** Exact origins an administrator intentionally allows for internal feeds/articles. */
     FA_ALLOWED_INTERNAL_ORIGINS: z.string().default(""),
-    /** Operator confirms FlareSolverr has network-level SSRF protection (see DEPLOY.md). */
-    FA_FLARESOLVERR_ISOLATED: bool.default(false),
   })
   .superRefine((env, ctx) => {
     if (env.AUTH_MODE !== "local" && !env.AUTH_PROXY_TRUSTED) {

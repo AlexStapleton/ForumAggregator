@@ -10,8 +10,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 - Block non-public destinations for feeds, articles, forum pages and JSON requests, including
   redirects and DNS changes at connection time. Internal content services require an exact
   origin exception in `FA_ALLOWED_INTERNAL_ORIGINS`.
-- FlareSolverr browser fetching is now disabled by default. Existing deployments must enforce
-  browser network isolation before setting `FA_FLARESOLVERR_ISOLATED=true`; see
+- FlareSolverr stays enabled when configured, with checks on requested and returned destinations.
+  Its separate browser still needs network-level protection against internal redirects and
+  subresources; see
   [deployment instructions](docs/DEPLOY.md#forums-behind-a-cloudflare-check-flaresolverr-optional).
   Admin-configured FlareSolverr API calls remain available but never follow redirects.
 

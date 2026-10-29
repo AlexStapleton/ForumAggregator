@@ -14,7 +14,7 @@
 // Only opted-in sources use this; the per-site spacing still applies (callers wait first).
 import { FetchError, type FetchOptions, type FetchResult, type Fetcher, type JsonFetcher } from "./fetch.js";
 import { classifyResponse } from "../sites/probe.js";
-import { webUrl } from "./outbound.js";
+import { webUrl, publicOutbound, OutboundBlocked } from "./outbound.js";
 
 /** POST with a JSON body; returns the status and parsed JSON (even for errors). */
 export type JsonPoster = (url: string, body: unknown, timeoutMs: number) => Promise<{ status: number; body: unknown }>;
@@ -108,8 +108,12 @@ export class FlareSolverr {
     private readonly post: JsonPoster,
     private readonly get: JsonFetcher,
     private readonly now: () => number = Date.now,
-    private readonly authorizeTarget: (url: string) => Promise<void> = async () => {
-      throw new FetchError("blocked_destination", "FlareSolverr browser fetching is disabled until its network is isolated and FA_FLARESOLVERR_ISOLATED=true is configured. See docs/DEPLOY.md.");
+    private readonly authorizeTarget: (url: string) => Promise<void> = async (url) => {
+      try { await publicOutbound.check(url); }
+      catch (err) {
+        if (err instanceof OutboundBlocked) throw new FetchError("blocked_destination", err.message);
+        throw err;
+      }
     },
   ) {}
 

@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OutboundBlocked, OutboundPolicy, publicAddress } from "../src/feeds/outbound.js";
+import { OutboundBlocked, OutboundPolicy, publicAddress, publicOutbound } from "../src/feeds/outbound.js";
 import { createHttpFetch, httpFetch, httpJson, httpServiceJson } from "../src/feeds/fetch.js";
 import { FlareSolverr, httpPostJson } from "../src/feeds/flaresolverr.js";
 import { createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
@@ -144,13 +144,34 @@ describe("real HTTP boundaries (only local dummy servers)", () => {
     } finally { await app.close(); }
   });
 
-  it("disables remote browser fetching by default, without calling its service", async () => {
-    const post = vi.fn();
+  it("keeps configured remote browser fetching enabled without an opt-in flag", async () => {
+    const check = vi.spyOn(publicOutbound, "check").mockResolvedValue();
+    const post = vi.fn().mockResolvedValue({ status: 200, body: { status: "ok", solution: {
+      url: "https://public.example/", status: 200, response: "<html><body>Public article</body></html>", cookies: [], userAgent: "test",
+    } } });
     const direct = vi.fn();
     const flare = new FlareSolverr(async () => base, post, vi.fn());
-    await expect(flare.wrap(direct)("https://public.example", { expect: "html" })).rejects.toMatchObject({ kind: "blocked_destination" });
-    expect(post).not.toHaveBeenCalled();
+    await expect(flare.wrap(direct)("https://public.example/", { expect: "html" })).resolves.toMatchObject({ kind: "ok", body: "<html><body>Public article</body></html>" });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(2);
     expect(direct).not.toHaveBeenCalled();
+  });
+
+  it("still rejects private destinations with the default remote browser policy", async () => {
+    const post = vi.fn();
+    const flare = new FlareSolverr(async () => base, post, vi.fn());
+    await expect(flare.wrap(vi.fn())(base, { expect: "html" })).rejects.toMatchObject({ kind: "blocked_destination" });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe browser result before returning its content", async () => {
+    const check = vi.spyOn(publicOutbound, "check").mockResolvedValueOnce(undefined).mockRejectedValueOnce(new OutboundBlocked());
+    const post = vi.fn().mockResolvedValue({ status: 200, body: { status: "ok", solution: {
+      url: base, status: 200, response: "Internal content", cookies: [], userAgent: "test",
+    } } });
+    const flare = new FlareSolverr(async () => base, post, vi.fn());
+    await expect(flare.wrap(vi.fn())("https://public.example/", { expect: "html" })).rejects.toMatchObject({ kind: "blocked_destination" });
+    expect(check).toHaveBeenLastCalledWith(base);
   });
 
   it("does not let an allowed feed fetch a private article on another origin", async () => {

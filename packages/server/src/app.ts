@@ -130,13 +130,13 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const sharedLimiter = limiter ?? new HostLimiter(config.polling.minDelaySeconds * 1000, config.polling.jitterSeconds * 1000);
   const settings = new SettingsService(db, box, fastify.log);
   const sharedJson = fetchJson ?? createHttpJson((url, init) => outbound.fetch(url, init));
-  const flareGuard = authorizeFlareTarget ?? (env.FA_FLARESOLVERR_ISOLATED ? async (url: string) => {
+  const flareGuard = authorizeFlareTarget ?? (async (url: string) => {
     try { await outbound.check(url); }
     catch (err) {
       if (err instanceof OutboundBlocked) throw new FetchError("blocked_destination", err.message);
       throw err;
     }
-  } : undefined);
+  });
   const flare = new FlareSolverr(() => settings.flaresolverrUrl(), postJson ?? httpPostJson, fetchJson ?? httpServiceJson, now, flareGuard);
   const feeds = new FeedService(db, config, sharedFetcher, sharedLimiter, now, fastify.log, flare, {
     apiKey: () => settings.youtubeApiKey(),
