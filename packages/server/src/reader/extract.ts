@@ -161,9 +161,34 @@ export interface ForumThreadPage {
 
 const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+// California/Overclock's nested layout uses article.js-post without the message class,
+// plus a standalone MessageCard for the original post. Inner reply cards are not posts.
+const XENFORO_POST = "article.message, article.js-post[data-content], .MessageCard.js-post";
+
 /** XenForo 2 thread page → its posts (author, time, body), or null if it isn't one. */
 export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPage | null {
-  const articles = Array.from(doc.querySelectorAll("article.message")).filter((p) => p.querySelector(".bbWrapper"));
+  const number = (text: string | null | undefined) => /^\d{1,6}$/.test(text?.trim() ?? "") ? Number(text!.trim()) : 0;
+  const current = doc.querySelector(".pageNav [aria-current='page']");
+  const compact = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(current?.textContent ?? "");
+  const urlPage = /\/page-(\d+)\/?$/.exec(new URL(pageUrl).pathname)?.[1];
+  let page = number(current?.textContent) || number(doc.querySelector(".pageNav-page--current")?.textContent) || number(urlPage) || 1;
+  let pages = Math.max(page, ...Array.from(doc.querySelectorAll(".pageNav-page, .pageNav a")).map((el) => number(el.textContent)));
+  if (compact) {
+    page = number(compact[1]) || page;
+    pages = Math.max(pages, page, number(compact[2]));
+  }
+  const bodyOf = (post: Element) => Array.from(post.querySelectorAll(".message-body .bbWrapper, .bbWrapper"))
+    .find((body) => body.closest(XENFORO_POST) === post);
+  const seen = new Set<string>();
+  const articles = Array.from(doc.querySelectorAll(XENFORO_POST)).filter((post) => {
+    // The nested view repeats a collapsed original post above every page of replies.
+    if (page > 1 && post.querySelector(".js-originalPostContainer")) return false;
+    const id = post.getAttribute("data-content") ?? post.id;
+    const key = /(\d+)$/.exec(id)?.[1];
+    if (!bodyOf(post) || (key && seen.has(key))) return false;
+    if (key) seen.add(key);
+    return true;
+  });
   if (!articles.length) return null;
   const posts: ForumPost[] = articles.map((post) => {
     const author = post.getAttribute("data-author") ?? post.querySelector(".message-name, .username")?.textContent?.trim() ?? null;
@@ -173,7 +198,7 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
       post.querySelector(".message-attribution time, time[qid='post-date-time']") ??
       Array.from(post.querySelectorAll("time.u-dt, time[datetime]")).find((t) => !t.closest(".message-user, .message-cell--user, .message-userDetails")) ??
       null;
-    const body = post.querySelector(".message-body .bbWrapper, .bbWrapper")!;
+    const body = bodyOf(post)!;
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
     const idSource = post.getAttribute("data-content") ?? post.id ?? "";
@@ -191,15 +216,6 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
       html: sanitizeHtml(body.innerHTML, pageUrl),
     };
   });
-  // Page count from the page navigation ("1 2 3 … 40"); Overclock.net's theme shows "22/23" on the
-  // current page's button instead (D-102).
-  let pages = Math.max(1, ...Array.from(doc.querySelectorAll(".pageNav-page")).map((li) => Number(li.textContent?.trim()) || 1));
-  let page = Number(doc.querySelector(".pageNav-page--current")?.textContent?.trim()) || 1;
-  const compact = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(doc.querySelector(".pageNav [aria-current='page']")?.textContent ?? "");
-  if (compact && pages === 1) {
-    page = Number(compact[1]);
-    pages = Math.max(page, Number(compact[2]));
-  }
   const title =
     doc.querySelector("h1.p-title-value")?.textContent?.trim() ||
     doc.querySelector(".p-title h1, .p-body-header h1")?.textContent?.trim() ||

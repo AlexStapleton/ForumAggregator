@@ -6,6 +6,11 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Fixed
+- Overclock.net's nested thread layout now renders individual posts with thread page controls,
+  instead of falling back to article extraction and including unrelated page widgets. Nested
+  replies appear once, and the repeated original post is omitted after the first page.
+
 ### Security
 - Block non-public destinations for feeds, articles, forum pages and JSON requests, including
   redirects and DNS changes at connection time. Internal content services require an exact
