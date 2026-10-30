@@ -8,6 +8,7 @@ import { dayLabel, durationLabel, fullDate, relativeTime, startOfDay } from "../
 import { Reader } from "./Reader";
 import { SourcePicker } from "./SourcePicker";
 import { createItemUpdater } from "../itemUpdates";
+import { createFeedPagination } from "../feedPagination";
 
 const FILTERS: Array<{ value: ItemsFilter; label: string }> = [
   { value: "unread", label: "Unread" },
@@ -36,6 +37,7 @@ export function FeedPage() {
   }, []);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   // Ignore responses from a previous filter if the user switches quickly.
   const requestId = useRef(0);
@@ -51,8 +53,21 @@ export function FeedPage() {
     [filter, order, hiddenKey, tag],
   );
 
+  const pagination = useMemo(() => createFeedPagination(
+    (after) => api<ItemsPage>("GET", query(after)),
+    (page) => {
+      setItems((prev) => [...prev, ...page.items.filter((n) => !prev.some((p) => p.id === n.id))]);
+      setCursor(page.nextCursor);
+    },
+    (err) => setError(errorMessage(err)),
+    setLoadingMore,
+  ), [query, setItems]);
+
   const load = useCallback(async () => {
     const id = ++requestId.current;
+    pagination.reset();
+    setCursor(null);
+    setLoadingMore(false);
     setLoading(true);
     setError(undefined);
     try {
@@ -64,6 +79,7 @@ export function FeedPage() {
       if (id !== requestId.current) return;
       setItems(page.items);
       setCursor(page.nextCursor);
+      pagination.setCursor(page.nextCursor);
       setSources(srcs);
       setTags(tagList);
     } catch (err) {
@@ -71,11 +87,15 @@ export function FeedPage() {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [query, setItems]);
+  }, [query, setItems, pagination]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => {
+      requestId.current++;
+      pagination.reset();
+    };
+  }, [load, pagination]);
 
   const index = selectedId === null ? -1 : items.findIndex((i) => i.id === selectedId);
   const readerIndex = index >= 0 ? index : null;
@@ -87,16 +107,7 @@ export function FeedPage() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load, readerIndex]);
 
-  const loadMore = useCallback(async () => {
-    if (!cursor) return;
-    try {
-      const page = await api<ItemsPage>("GET", query(cursor));
-      setItems((prev) => [...prev, ...page.items.filter((n) => !prev.some((p) => p.id === n.id))]);
-      setCursor(page.nextCursor);
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }, [cursor, query, setItems]);
+  const loadMore = pagination.loadMore;
 
   const itemUpdater = useMemo(() => createItemUpdater(
     (id, patch) => api("PATCH", `/api/items/${id}`, patch),
@@ -248,8 +259,8 @@ export function FeedPage() {
       ))}
 
       {cursor && (
-        <button className="secondary load-more" onClick={() => void loadMore()}>
-          Load older items
+        <button className="secondary load-more" onClick={() => void loadMore()} disabled={loading || loadingMore}>
+          {loadingMore ? "Loading…" : "Load older items"}
         </button>
       )}
       </div>
