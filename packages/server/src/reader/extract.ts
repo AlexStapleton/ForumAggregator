@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import type { ItemAudio } from "@fa/shared";
 import { htmlToText, safeHttpUrl } from "../feeds/text.js";
 import { sanitizeHtml } from "./sanitize.js";
+import { restoreReaderImage } from "./images.js";
 
 /** Below this much text, what we got is probably a teaser, a paywall or an error page. */
 export const MIN_ARTICLE_TEXT = 300;
@@ -81,10 +82,9 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
   const dom = new JSDOM(leanPageHtml(pageHtml), { url: pageUrl });
   try {
     const doc = dom.window.document;
-    // Many sites lazy-load images with data-src; make them real before extraction.
-    for (const img of Array.from(doc.querySelectorAll("img[data-src], img[data-lazy-src], img[data-original]"))) {
-      const real = img.getAttribute("data-src") ?? img.getAttribute("data-lazy-src") ?? img.getAttribute("data-original");
-      if (real) img.setAttribute("src", real);
+    // Resolve responsive/lazy images and attachments before extraction strips their metadata.
+    for (const img of Array.from(doc.querySelectorAll("img"))) {
+      restoreReaderImage(img, pageUrl);
     }
     // Before anything is removed: the player may sit outside the article.
     const audio = pageAudio(doc, pageUrl);
@@ -252,7 +252,7 @@ function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
   if (!thread) return null;
   const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
   const textLength = htmlToText(html).length;
-  if (!thread.posts.some((p) => htmlToText(p.html).length)) return null;
+  if (!thread.posts.some((p) => htmlToText(p.html).length || /<img\b/i.test(p.html))) return null;
   return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength, pages: { page: thread.page, pages: thread.pages } };
 }
 
@@ -389,7 +389,7 @@ function vbulletinQuotes(body: Element) {
 /** A vBulletin thread page for the reader (D-098): its posts, which page of how many, and the next page's link. */
 function vbulletinThread(doc: Document, pageUrl: string): Extracted | null {
   const thread = parseVbulletinThread(doc, pageUrl);
-  if (!thread || !thread.posts.some((p) => htmlToText(p.html).length)) return null;
+  if (!thread || !thread.posts.some((p) => htmlToText(p.html).length || /<img\b/i.test(p.html))) return null;
   const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
   const nextPageUrl = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
   return {
