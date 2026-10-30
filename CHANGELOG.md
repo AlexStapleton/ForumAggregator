@@ -11,6 +11,8 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
   forum pages so screenshot and benchmark posts remain readable.
 - Recover high-resolution responsive images and unconditional picture sources, and show the
   full-size image when a thumbnail links directly to an image attachment.
+- Ignore stale "Load older" results and errors after feed changes or refreshes, and share
+  overlapping pagination requests so repeated clicks cannot advance the cursor out of order.
 - Overclock.net's nested thread layout now renders individual posts with thread page controls,
   instead of falling back to article extraction and including unrelated page widgets. Nested
   replies appear once, and the repeated original post is omitted after the first page.
