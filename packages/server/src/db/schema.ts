@@ -101,6 +101,8 @@ export interface SettingsTable {
 
 export interface SourcesTable {
   id: string;
+  /** Persisted thread catch-up checkpoint; null when no gap remains. */
+  thread_catchup: Generated<string | null>;
   kind: "feed" | "youtube" | "reddit" | "thread" | "board";
   /** The feed's own name; each follower's name for it is subscriptions.title. */
   title: string;
