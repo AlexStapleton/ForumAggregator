@@ -8,6 +8,24 @@ and mobile. Build on the existing image extraction, catch-up, and reading-positi
 
 ## Priorities and progress
 
+Detailed implementation plans:
+
+1. [Quote and reply context](plans/01-quote-context.md)
+2. [Incomplete-extraction detection](plans/02-extraction-quality.md)
+3. [Edited-post handling](plans/03-edited-posts.md)
+4. [Additional forum engines](plans/04-forum-engines.md)
+5. [Tables and code blocks](plans/05-tables-code.md)
+
+Each plan specifies the current code, proposed contracts, staged PRs, regression cases, and
+release checks. These are implementation proposals, not completed features. Concrete defaults
+are starting decisions to validate against fixtures, rather than release promises.
+
+Dependency order: quote extraction can start now; its reader interactions must integrate with
+the reading-position work in PR #27. Extraction-quality results should land before edited-post
+auditing and additional engine ingestion. Tables/code improvements can proceed independently,
+with reading-position integration before release. Choose the next real forum site before writing
+its adapter. Keep all five workstreams planned until their implementation starts.
+
 The recommended order balances visible improvements with extraction reliability. Forum-engine
 selection depends on actual sources the user follows; table/code work can proceed independently.
 
