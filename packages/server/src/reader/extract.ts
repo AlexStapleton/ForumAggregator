@@ -3,7 +3,8 @@ import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import type { ItemAudio } from "@fa/shared";
 import { htmlToText, safeHttpUrl } from "../feeds/text.js";
-import { restoreLazyImage, sanitizeHtml } from "./sanitize.js";
+import { sanitizeHtml } from "./sanitize.js";
+import { restoreReaderImage } from "./images.js";
 
 /** Below this much text, what we got is probably a teaser, a paywall or an error page. */
 export const MIN_ARTICLE_TEXT = 300;
@@ -81,9 +82,9 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
   const dom = new JSDOM(leanPageHtml(pageHtml), { url: pageUrl });
   try {
     const doc = dom.window.document;
-    // Many sites lazy-load images with data-src; make them real before extraction.
-    for (const img of Array.from(doc.querySelectorAll("img[data-src], img[data-lazy-src], img[data-original]"))) {
-      restoreLazyImage(img, pageUrl);
+    // Resolve responsive/lazy images and attachments before extraction strips their metadata.
+    for (const img of Array.from(doc.querySelectorAll("img"))) {
+      restoreReaderImage(img, pageUrl);
     }
     // Before anything is removed: the player may sit outside the article.
     const audio = pageAudio(doc, pageUrl);

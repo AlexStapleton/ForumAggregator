@@ -5,6 +5,7 @@
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 import { safeHttpUrl } from "../feeds/text.js";
+import { restoreReaderImage } from "./images.js";
 
 const window = new JSDOM("").window;
 const purify = createDOMPurify(window as unknown as Parameters<typeof createDOMPurify>[0]);
@@ -22,21 +23,17 @@ const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "date
 
 let currentBase = "";
 
-// Recover lazy images before the attribute allow-list removes their real addresses.
-// This also covers feed HTML and followed-thread posts, which bypass Readability.
-export function restoreLazyImage(el: Element, baseUrl: string): void {
-  for (const attr of ["data-src", "data-lazy-src", "data-original"]) {
-    const src = safeHttpUrl(el.getAttribute(attr), baseUrl);
-    if (src?.startsWith("https://")) {
-      el.setAttribute("src", src);
-      break;
-    }
+// SOURCE elements are removed by the allow-list; resolve picture images before that happens.
+purify.addHook("beforeSanitizeElements", (node) => {
+  const el = node as unknown as Element;
+  if (el.tagName === "PICTURE") {
+    for (const img of Array.from(el.querySelectorAll("img"))) restoreReaderImage(img, currentBase);
   }
-}
+});
 
 purify.addHook("beforeSanitizeAttributes", (node) => {
   const el = node as unknown as Element;
-  if (el.tagName === "IMG") restoreLazyImage(el, currentBase);
+  if (el.tagName === "IMG") restoreReaderImage(el, currentBase);
 });
 
 purify.addHook("afterSanitizeAttributes", (node) => {
