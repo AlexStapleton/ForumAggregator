@@ -47,6 +47,8 @@ export interface SubscriptionsTable {
   enabled: Generated<number>;
   /** Thread sources: posts fetched at or after this time are "new" on this follower's card (D-084). */
   thread_batch_from: number | null;
+  /** Furthest post reached in this follower's thread reader. */
+  thread_read_post: Generated<number | null>;
   created_at: number;
   updated_at: number;
 }

@@ -199,6 +199,8 @@ export interface TagCount {
 
 /** What the in-app reader shows for an item. */
 export interface ReaderContent {
+  /** Followed threads: account-specific reading position, never stored in shared page caches. */
+  threadProgress?: { readPostId: number | null; firstUnreadPostId: string | null; hasMore: boolean; tracking: boolean };
   itemId: string;
   title: string;
   url: string | null;

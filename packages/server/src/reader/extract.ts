@@ -234,14 +234,15 @@ export function cleanPageTitle(title: string | null | undefined): string {
 }
 
 /** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */
-export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html">>): string {
+export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html"> & { id?: string | null }>): string {
   return posts
     .map((p) => {
       const head = [
         p.author ? `<strong>${escHtml(p.author)}</strong>` : "",
         p.timeLabel ? `<time datetime="${escHtml(p.datetime ?? "")}">${escHtml(p.timeLabel)}</time>` : "",
       ].filter(Boolean).join(" · ");
-      return `<section><p>${head}</p>${p.html}</section><hr>`;
+      const anchor = p.id && /^\d+$/.test(p.id) ? ` id="fa-post-${p.id}"` : "";
+      return `<section${anchor}><p>${head}</p>${p.html}</section><hr>`;
     })
     .join("\n");
 }

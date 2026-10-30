@@ -135,6 +135,14 @@ export function registerFeedRoutes(app: FastifyInstance, feeds: FeedService, ite
     return { ok: true };
   });
 
+  app.put<{ Params: { id: string } }>("/api/items/:id/thread-position", async (request, reply) => {
+    const postId = (request.body as { postId?: unknown } | null)?.postId;
+    if (typeof postId !== "number" || !Number.isSafeInteger(postId) || postId < 1) return sendError(reply, 400, "invalid_position", "A valid post ID is required");
+    const result = await reader.saveThreadPosition(viewer(request), request.params.id, postId);
+    if (!result) return sendError(reply, 404, "not_found", "Followed thread not found");
+    return result;
+  });
+
   app.post("/api/items/mark-read", async (request, reply) => {
     const body = parseBody(MarkReadRequest, request, reply);
     if (!body) return;

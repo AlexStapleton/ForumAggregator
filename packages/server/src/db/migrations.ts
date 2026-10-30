@@ -412,6 +412,14 @@ export const migrations: Record<string, Migration> = {
       await db.schema.alterTable("sources").dropColumn("thread_catchup").execute();
     },
   },
+  "0018_thread_reading_position": {
+    async up(db: Kysely<any>) {
+      await db.schema.alterTable("subscriptions").addColumn("thread_read_post", "bigint").execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("subscriptions").dropColumn("thread_read_post").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

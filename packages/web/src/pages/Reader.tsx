@@ -9,6 +9,7 @@ import { RedditMediaView } from "../RedditMedia";
 import { KIND_LABEL } from "../kinds";
 import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
+import { trackThreadPosition } from "../threadPosition";
 
 interface Props {
   mode: "overlay" | "pane";
@@ -49,10 +50,12 @@ function startPage(item: FeedItem): Page {
 async function loadContent(item: FeedItem, page: Page): Promise<ReaderContent> {
   const key = `${cacheKey(item)}|${page ?? ""}`;
   const hit = cache.get(key);
-  if (hit) return hit;
+  if (hit && item.sourceKind !== "thread") return hit;
   const content = await api<ReaderContent>("GET", `/api/items/${item.id}/reader${page === undefined ? "" : `?page=${page}`}`);
-  cache.set(key, content);
-  if (content.pagination && page === "last") cache.set(`${cacheKey(item)}|${content.pagination.page}`, content);
+  if (item.sourceKind !== "thread") {
+    cache.set(key, content);
+    if (content.pagination && page === "last") cache.set(`${cacheKey(item)}|${content.pagination.page}`, content);
+  }
   return content;
 }
 
@@ -60,6 +63,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const item = items[index];
   const [content, setContent] = useState<ReaderContent>();
   const [error, setError] = useState<string>();
+  const [positionError, setPositionError] = useState<string>();
+  const [reload, setReload] = useState(0);
   const [page, setPage] = useState<Page>(() => (item ? startPage(item) : undefined));
   // The pager stays put while the next page loads.
   const [pager, setPager] = useState<ReaderPagination | null>(null);
@@ -69,6 +74,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const scroller = useRef<HTMLDivElement>(null);
   const touch = useRef<{ x: number; y: number } | null>(null);
   const closing = useRef(false);
+  const pendingPositions = useRef(new Map<string, Promise<unknown>>());
 
   // Full screen: browser/phone Back closes the reader instead of leaving the page.
   useEffect(() => {
@@ -97,11 +103,18 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   // A different item starts on its own start page.
   const itemKey = item ? cacheKey(item) : null;
   const shownKey = useRef(itemKey);
+  const shownItem = useRef(item?.id);
   if (shownKey.current !== itemKey) {
     shownKey.current = itemKey;
-    setPage(item ? startPage(item) : undefined);
-    setPager(null);
+    if (shownItem.current !== item?.id) {
+      shownItem.current = item?.id;
+      setPage(item ? startPage(item) : undefined);
+      setPager(null);
+    }
   }
+  const requestKey = `${itemKey}|${page ?? ""}|${reload}`;
+  const currentRequest = useRef(requestKey);
+  currentRequest.current = requestKey;
 
   // Load the current item (or another page of a thread); mark it read; warm up the next item.
   useEffect(() => {
@@ -109,11 +122,12 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     let cancelled = false;
     setContent(undefined);
     setError(undefined);
+    setPositionError(undefined);
     setMore([]);
     setMoreState({ busy: false });
     scroller.current?.scrollTo({ top: 0 });
     if (!item.read) onUpdate(item, { read: true });
-    loadContent(item, page)
+    (pendingPositions.current.get(item.id) ?? Promise.resolve()).then(() => loadContent(item, page))
       .then((c) => {
         if (cancelled) return;
         setContent(c);
@@ -121,11 +135,36 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
       })
       .catch((err) => !cancelled && setError(errorMessage(err)));
     const next = items[index + 1];
-    if (next) void loadContent(next, startPage(next)).catch(() => undefined);
+    if (next && next.sourceKind !== "thread") void loadContent(next, startPage(next)).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [itemKey, page]); // only when the item (or a thread card's replies) or the page changes
+  }, [itemKey, page, reload]); // only when the item (or a thread card's replies) or the page changes
+
+  // Account-specific resume target; leave a little preceding context visible.
+  useEffect(() => {
+    const root = scroller.current;
+    const target = content?.threadProgress?.firstUnreadPostId;
+    if (!root || !target) return;
+    const post = root.querySelector(`#fa-post-${target}`);
+    if (post) root.scrollTo({ top: root.scrollTop + post.getBoundingClientRect().top - root.getBoundingClientRect().top - 80 });
+  }, [content]);
+
+  // Save after scrolling settles, and send the last visible position when leaving the page.
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || !item || content?.itemId !== item.id || !content.threadProgress?.tracking) return;
+    const stop = trackThreadPosition(root, content.threadProgress.readPostId ?? 0,
+      (postId) => api<{ saved: boolean }>("PUT", `/api/items/${item.id}/thread-position`, { postId }, { keepalive: true }),
+      (failed) => setPositionError(failed ? "Couldn't save your reading position. Scroll again to retry." : undefined));
+    return () => {
+      const pending = Promise.all([pendingPositions.current.get(item.id), stop()]);
+      pendingPositions.current.set(item.id, pending);
+      void pending.then(() => {
+        if (pendingPositions.current.get(item.id) === pending) pendingPositions.current.delete(item.id);
+      });
+    };
+  }, [content, more, item?.id, requestKey]);
 
   // Forum post times in this device's time zone, from the exact time (D-102): the forum's own label
   // ("2d ago", "Today at 8:00 AM") was right only when the page was read.
@@ -143,16 +182,17 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const nextPage = lastShown && lastShown.page < lastShown.pages ? lastShown.page + 1 : null;
   const loadNextPage = async () => {
     if (!item || nextPage === null || moreState.busy) return;
-    const forItem = itemKey;
+    const forRequest = currentRequest.current;
     setMoreState({ busy: true });
     try {
       const c = await loadContent(item, nextPage);
-      if (shownKey.current !== forItem) return;
+      if (currentRequest.current !== forRequest) return;
       setMore((m) => [...m, c]);
       // The pager follows the bottom of what's shown, so › continues from there.
       if (c.pagination) setPager(c.pagination);
       setMoreState({ busy: false });
     } catch (err) {
+      if (currentRequest.current !== forRequest) return;
       setMoreState({ busy: false, error: errorMessage(err) });
     }
   };
@@ -287,6 +327,19 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
           {content?.html && (
             // Sanitised on the server (reader/sanitize.ts); the CSP blocks scripts as a second line of defence.
             <div className="reader-content" dangerouslySetInnerHTML={{ __html: content.html }} />
+          )}
+
+          {positionError && <div className="alert alert-error">{positionError}</div>}
+          {content?.threadProgress?.hasMore && page === undefined && (
+            <button className="secondary" disabled={!content.threadProgress.tracking} onClick={async () => {
+              const forRequest = currentRequest.current;
+              const ids = [...(content.html ?? "").matchAll(/<section id="fa-post-(\d+)"/g)].map((m) => Number(m[1]));
+              if (!ids.length) return;
+              try {
+                await api("PUT", `/api/items/${item.id}/thread-position`, { postId: Math.max(...ids) });
+                if (currentRequest.current === forRequest) setReload((n) => n + 1);
+              } catch { if (currentRequest.current === forRequest) setPositionError("Couldn't save your reading position. Try continuing again."); }
+            }}>Continue to more unread replies</button>
           )}
 
           {more.map((c) => (

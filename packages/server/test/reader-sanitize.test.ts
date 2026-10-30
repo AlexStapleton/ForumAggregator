@@ -116,7 +116,7 @@ describe("vBulletin threads (D-098)", () => {
 
   it("is used by the reader, with the page count and the next page's link", () => {
     const article = extractWithSelectors(html, url, {}).article!;
-    expect(article.html).toMatch(/^<section><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
+    expect(article.html).toMatch(/^<section id="fa-post-501"><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
     expect(article.pages).toEqual({ page: 1, pages: 3 });
     expect(article.nextPageUrl).toBe("https://forum.example/classic-vintage/100-steel-frames-2.html");
     expect(article.byline).toBe("Rider One");
