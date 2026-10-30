@@ -7,6 +7,9 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 ## [Unreleased]
 
 ### Fixed
+- Followed threads resume gaps across checks when new replies exceed the page budget. Catch-up
+  progress survives restarts, appears in the reader, and commits atomically with posts. The usual
+  300-post history limit applies after catch-up completes.
 - Overclock.net's nested thread layout now renders individual posts with thread page controls,
   instead of falling back to article extraction and including unrelated page widgets. Nested
   replies appear once, and the repeated original post is omitted after the first page.

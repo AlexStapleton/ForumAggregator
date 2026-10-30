@@ -3,7 +3,9 @@ import path from "node:path";
 // Following a forum thread with one updating card (D-084).
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonPoster } from "../src/feeds/flaresolverr.js";
-import { FetchError } from "../src/feeds/fetch.js";
+import { FetchError, HostLimiter } from "../src/feeds/fetch.js";
+import { FeedService } from "../src/feeds/service.js";
+import { ConfigSchema } from "../src/config.js";
 import { threadAddress } from "../src/feeds/thread.js";
 import { FakeWeb, rss } from "./fakeWeb.js";
 import { backends, createTestApp, CSRF, SETUP_CODE, sessionCookie } from "./helpers.js";
@@ -114,6 +116,155 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     return { clock, web, call, setThread };
   }
 
+  it("fills a ten-page gap across checks, resumes in a new service, and then picks up newer activity", async () => {
+    const { clock, web, call, setThread } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    const checkpoint = async () => (await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup;
+    const card = async () => (await call("GET", "/api/items?filter=all")).json().items[0];
+    setThread(220);
+    clock.now += 60_000;
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 60 });
+    const saved = (await checkpoint())!;
+    expect(JSON.parse(saved)).toMatchObject({ nextPage: 8, floor: 1019 });
+    const newest = await card();
+    expect((await call("GET", `/api/items/${newest.id}/reader`)).json().notice).toContain("Catching up");
+
+    // Fresh service, same database: there is no in-memory cursor to rely on.
+    const restarted = new FeedService(app!.db, ConfigSchema.parse({}), web.fetcher, new HostLimiter(0, 0, async () => {}), () => clock.now);
+    setThread(240); // This later page must not prevent the older gap from making progress.
+    const counts: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const before = web.requests.length;
+      clock.now += 60_000;
+      const result = await restarted.checkSource(src.id);
+      expect(result.ok).toBe(true);
+      counts.push(result.newItems);
+      expect(web.requests.length - before).toBeLessThanOrEqual(3);
+      expect(web.requests.slice(before).some((r) => r.url.endsWith("latest"))).toBe(false);
+      expect(await card()).toMatchObject({ url: newest.url, publishedAt: newest.publishedAt });
+    }
+    expect(counts).toEqual([60, 60, 20]);
+    expect(await checkpoint()).toBeNull();
+    expect((await call("GET", `/api/items/${newest.id}/reader`)).json().notice ?? "").not.toContain("Catching up");
+    clock.now += 60_000;
+    expect(await restarted.checkSource(src.id)).toMatchObject({ ok: true, newItems: 20 });
+    const rows = await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute();
+    expect(rows.map((r) => Number(r.post_id)).sort((a, b) => a - b)).toEqual(Array.from({ length: 240 }, (_, i) => 1000 + i));
+    expect(await restarted.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+  });
+
+  it("retains the checkpoint on page failure and safely replays already stored pages", async () => {
+    const { clock, web, call, setThread } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    setThread(220);
+    await app!.feeds.checkSource(src.id);
+    const saved = (await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup;
+    web.set(`${THREAD}page-7`, { body: "<p>Temporarily unavailable</p>", contentType: "text/html" });
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: false });
+    expect((await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup).toBe(saved);
+    // A valid-looking response for the wrong page must not silently close the gap either.
+    web.set(`${THREAD}page-8`, { body: page(1, 11, posts(1000, 20)), contentType: "text/html" });
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: false });
+    expect((await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup).toBe(saved);
+    setThread(220);
+    clock.now += 60_000;
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 60 });
+    // Simulate restart after posts were stored but before the checkpoint advanced.
+    await app!.db.kysely.updateTable("sources").set({ thread_catchup: saved }).where("id", "=", src.id).execute();
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+    expect((await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute())).toHaveLength(140);
+  });
+
+  it("rolls back new posts and card state when saving the first checkpoint fails", async () => {
+    const { web, call, setThread, clock } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    const card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    await call("PATCH", `/api/items/${card.id}`, { read: true });
+    clock.now += 60_000;
+    setThread(220);
+    let failed = false;
+    const db = app!.db.kysely.withPlugin({
+      transformQuery({ node }) {
+        if (!failed && node.kind === "UpdateQueryNode" && JSON.stringify(node.updates).includes('"thread_catchup"')) {
+          failed = true;
+          throw new Error("simulated checkpoint write failure");
+        }
+        return node;
+      },
+      async transformResult({ result }) { return result; },
+    });
+    const failing = new FeedService({ ...app!.db, kysely: db }, ConfigSchema.parse({}), web.fetcher, new HostLimiter(0, 0, async () => {}), () => clock.now);
+    expect(await failing.checkSource(src.id)).toMatchObject({ ok: false });
+    expect(failed).toBe(true);
+    expect(await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute()).toHaveLength(20);
+    expect((await call("GET", "/api/items?filter=all")).json().items[0]).toMatchObject({ read: true, publishedAt: card.publishedAt });
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 60 });
+  });
+
+  it("recovers a disappeared catch-up page without exceeding a one-page budget", async () => {
+    const { web, call, setThread, clock } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 1 });
+    setThread(100);
+    await app!.feeds.checkSource(src.id); // stores page 5; next is page 4
+    setThread(60);
+    web.routes.delete(`${THREAD}page-4`);
+    for (let i = 0; i < 5; i++) {
+      clock.now += 60_000;
+      const before = web.requests.length;
+      expect((await app!.feeds.checkSource(src.id)).ok).toBe(true);
+      expect(web.requests.length - before).toBe(1);
+    }
+    expect((await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup).toBeNull();
+    const ids = (await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute()).map((r) => Number(r.post_id));
+    expect(ids.filter((id) => id < 1060).sort((a, b) => a - b)).toEqual(Array.from({ length: 60 }, (_, i) => 1000 + i));
+  });
+
+  it("makes progress on vBulletin with a one-page budget, including discovery", async () => {
+    const { clock, web, call } = await start();
+    const address = "https://vb.example/showthread.php?t=42";
+    const setVb = (total: number) => {
+      for (let n = 1; n <= total; n++) web.set(n === 1 ? address : `${address}&page=${n}`, { body: vbPage(n, total, posts(n * 10, 2)), contentType: "text/html" });
+    };
+    setVb(1);
+    const src = (await call("POST", "/api/sources", { url: address })).json();
+    await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 1 });
+    setVb(5);
+    for (let i = 0; i < 6; i++) {
+      const before = web.requests.length;
+      clock.now += 60_000;
+      expect((await app!.feeds.checkSource(src.id)).ok).toBe(true);
+      expect(web.requests.length - before).toBe(1);
+    }
+    const rows = await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute();
+    expect(rows).toHaveLength(10);
+    expect((await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup).toBeNull();
+  });
+
+  it("keeps the active gap before applying the normal 300-post history limit", async () => {
+    const { call, setThread, clock } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    setThread(420);
+    let collected = 0;
+    let retainedDuringCatchup = 0;
+    for (let i = 0; i < 7; i++) {
+      clock.now += 60_000;
+      const result = await app!.feeds.checkSource(src.id);
+      expect(result.ok).toBe(true);
+      collected += result.newItems;
+      if (i === 5) retainedDuringCatchup = (await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute()).length;
+    }
+    expect(collected).toBe(400);
+    expect(retainedDuringCatchup).toBeGreaterThan(300);
+    const rows = await app!.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", src.id).execute();
+    expect(rows.map((r) => Number(r.post_id)).sort((a, b) => a - b)).toEqual(Array.from({ length: 300 }, (_, i) => 1120 + i));
+  });
+
   it("follows a thread: one card, the new replies since last read, and catching up on busy threads", async () => {
     const { clock, web, call, setThread } = await start();
     setThread(45); // 3 pages; the last has 5 posts
@@ -209,10 +360,13 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     await call("POST", `/api/sources/${thread.id}/check`);
     expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}latest`]);
 
-    // Up to 10: reads back while whole pages are new.
+    // Finish the persisted gap first, even if more activity arrives meanwhile.
     await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 5, threadPagesPerCheck: 10 });
     clock.now += 6 * 60_000;
     setThread(140); // posts 1078…1139 are new: pages 4–7
+    before = web.requests.length;
+    expect((await call("POST", `/api/sources/${thread.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 15 });
+    expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}page-3`]);
     before = web.requests.length;
     expect((await call("POST", `/api/sources/${thread.id}/check`)).json().result).toMatchObject({ ok: true, newItems: 62 });
     expect(web.requests.slice(before).map((q) => q.url)).toEqual([`${THREAD}latest`, `${THREAD}page-6`, `${THREAD}page-5`, `${THREAD}page-4`]);

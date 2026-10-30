@@ -24,6 +24,16 @@ import { latestUploads, YouTubeApiError } from "../reader/youtubeApi.js";
 
 type SourceRow = Selectable<SourcesTable>;
 
+interface ThreadCatchup {
+  nextPage: number;
+  /** Highest post known before this gap started; never advanced while filling it. */
+  floor: number;
+  /** Null while a one-page vBulletin check is still discovering the newest page. */
+  latestUrl: string | null;
+  /** Recheck the page count after a previously existing page disappears. */
+  discover?: boolean;
+}
+
 /** A user-facing failure with a message that says what to do about it. */
 /**
  * A feed body stored before numeric character references were decoded (D-091): quotes left as
@@ -416,7 +426,8 @@ export class FeedService {
     knownMax: number | null,
     interactive: boolean,
     lastRead: string | null = null,
-  ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string }> {
+    catchup: ThreadCatchup | null = null,
+  ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string; catchup: ThreadCatchup | null }> {
     const get = (url: string) => this.fetchHtml(url, via, interactive);
     const read = async (url: string) => {
       const res = await get(url);
@@ -436,8 +447,26 @@ export class FeedService {
     // read last time (the first page when adding), then the newest page if the thread has grown.
     let newest: { page: ForumThreadPage; url: string };
     let started: ForumThreadPage | null = null;
-    let budget = this.polling.maxPagesPerPoll;
-    if (pager.latestUrl) {
+    // Adding a vBulletin thread may require discovery plus its newest page.
+    let budget = interactive ? Math.max(2, this.polling.maxPagesPerPoll) : this.polling.maxPagesPerPoll;
+    if (catchup) {
+      try {
+        newest = await read(pager.pageUrl(catchup.nextPage));
+      } catch (err) {
+        if (catchup.discover || !(err instanceof FetchError && err.status === 404)) throw err;
+        return { pages: [], lastUrl: lastRead ?? address, address,
+          catchup: { nextPage: 1, floor: catchup.floor, latestUrl: null, discover: true } };
+      }
+      budget--;
+      if (newest.page.page !== Math.min(catchup.nextPage, newest.page.pages)) throw new ThreadParseError("The forum returned a different page while catching up. Will retry the missing page.");
+      knownMax = catchup.floor;
+      if (catchup.discover && newest.page.pages > newest.page.page) {
+        if (budget <= 0) return { pages: [newest.page], lastUrl: newest.url, address,
+          catchup: { nextPage: newest.page.pages, floor: catchup.floor, latestUrl: null } };
+        newest = await read(pager.pageUrl(newest.page.pages));
+        budget--;
+      }
+    } else if (pager.latestUrl) {
       newest = await read(pager.latestUrl);
       budget--;
     } else {
@@ -448,6 +477,9 @@ export class FeedService {
       } catch (err) {
         // That page is gone (posts deleted, so fewer pages): start again from the first page.
         if (from === address || !(err instanceof FetchError && err.status === 404)) throw err;
+        budget--;
+        if (budget <= 0) return { pages: [], lastUrl: from, address,
+          catchup: { nextPage: 1, floor: knownMax ?? 0, latestUrl: null, discover: true } };
         from = address;
         first = await read(from);
       }
@@ -460,11 +492,15 @@ export class FeedService {
       started = first.page;
       newest = first;
       if (first.page.pages > first.page.page) {
+        if (budget <= 0) {
+          return { pages: [first.page], lastUrl: first.url, address,
+            catchup: { nextPage: first.page.pages, floor: knownMax ?? 0, latestUrl: null } };
+        }
         newest = await read(pager.pageUrl(first.page.pages));
         budget--;
       }
     }
-    const lastUrl = newest.url;
+    const lastUrl = catchup?.latestUrl ?? newest.url;
     const pages = [newest.page];
     let current = newest.page;
     // Earlier pages, while a whole page of replies is new, up to the pages allowed per check (D-095).
@@ -473,16 +509,20 @@ export class FeedService {
       if (oldest <= knownMax) break; // this page already reaches posts we have
       if (started && started.page === current.page - 1) {
         pages.unshift(started); // read already, at the start of this check
+        current = started;
         break;
       }
       const previous = await get(pager.pageUrl(current.page - 1));
       const parsed = await pageParser.thread(previous.body, previous.url);
       budget--;
-      if (!parsed) break;
+      if (!parsed || parsed.page !== Math.min(current.page - 1, parsed.pages)) throw new ThreadParseError("Couldn't read the previous thread page. Will retry without skipping replies.");
       pages.unshift(parsed);
       current = parsed;
     }
-    return { pages, lastUrl, address };
+    const oldest = Math.min(...current.posts.map((p) => p.id ? postNumber(p.id) : Infinity));
+    const remaining = knownMax !== null && current.page > 1 && oldest > knownMax
+      ? { nextPage: current.page - 1, floor: knownMax, latestUrl: lastUrl } : null;
+    return { pages, lastUrl, address, catchup: remaining };
   }
 
   /** A forum page: while adding (with the user waiting, errors as SourceError), or on a check. */
@@ -614,14 +654,14 @@ export class FeedService {
   }
 
   /** Stores new posts and brings the thread's single card up to date. Returns how many posts were new. */
-  private async ingestThread(sourceId: string, pages: ForumThreadPage[], lastUrl: string, firstFetch: boolean): Promise<number> {
+  private async ingestThread(sourceId: string, pages: ForumThreadPage[], lastUrl: string, firstFetch: boolean, floor?: number, catchingUp = false, db = this.db.kysely): Promise<number> {
     const now = this.now();
-    const known = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
+    const known = await db.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
     const knownIds = new Set(known.map((k) => k.post_id));
     // Full rows only for the stored posts on the pages just read (D-107): not all 300 bodies each check.
     const onPages = pages.flatMap((p) => p.posts.map((post) => post.id)).filter((id): id is string => !!id && knownIds.has(id));
     const storedRows = onPages.length
-      ? await this.db.kysely.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).where("post_id", "in", onPages).execute()
+      ? await db.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).where("post_id", "in", onPages).execute()
       : [];
     // Posts already stored that are on the pages read: keep them as the forum shows them now (edits,
     // and dates misread before D-102 from Overclock.net's member box).
@@ -630,7 +670,7 @@ export class FeedService {
     for (const post of pages.flatMap((p) => p.posts)) {
       const was = post.id ? stored.get(post.id) : undefined;
       if (!was || (was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author)) continue;
-      await this.db.kysely
+      await db
         .updateTable("thread_posts")
         .set({ posted_at: post.postedAt, posted_label: post.timeLabel, html: post.html, author: post.author })
         .where("source_id", "=", sourceId)
@@ -642,11 +682,11 @@ export class FeedService {
     const fresh = new Map<string, ForumThreadPage["posts"][number]>();
     for (const post of pages.flatMap((p) => p.posts)) {
       if (!post.id || knownIds.has(post.id) || fresh.has(post.id)) continue;
-      if (!firstFetch && postNumber(post.id) <= knownMax) continue; // an old post we trimmed or skipped
+      if (!firstFetch && postNumber(post.id) <= (floor ?? knownMax)) continue; // outside the gap, or an old trimmed post
       fresh.set(post.id, post);
     }
     if (fresh.size) {
-      await this.db.kysely
+      await db
         .insertInto("thread_posts")
         .values(
           [...fresh.values()].map((p) => ({
@@ -661,25 +701,27 @@ export class FeedService {
         )
         .onConflict((oc) => oc.columns(["source_id", "post_id"]).doNothing())
         .execute();
-      // Keep the newest posts only.
-      const all = await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
+    }
+    // Keep the active gap until it is complete, then apply the normal history limit.
+    if (!catchingUp) {
+      const all = await db.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute();
       const drop = all.map((r) => r.post_id).sort((a, b) => postNumber(b) - postNumber(a)).slice(THREAD_POSTS_KEPT);
-      if (drop.length) await this.db.kysely.deleteFrom("thread_posts").where("source_id", "=", sourceId).where("post_id", "in", drop).execute();
+      if (drop.length) await db.deleteFrom("thread_posts").where("source_id", "=", sourceId).where("post_id", "in", drop).execute();
     }
     // The thread's title as the page shows it; a source still named after the old (tab) title follows it.
     const title = pages.at(-1)?.title ?? null;
-    const card = await this.db.kysely.selectFrom("items").select(["id", "title", "published_at"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
+    const card = await db.selectFrom("items").select(["id", "title", "published_at"]).where("source_id", "=", sourceId).where("guid", "=", "thread").executeTakeFirst();
     if (title && card && card.title !== title) {
-      await this.db.kysely.updateTable("items").set({ title }).where("id", "=", card.id).execute();
-      await this.db.kysely.updateTable("sources").set({ title }).where("id", "=", sourceId).where("title", "=", card.title).execute();
-      await this.db.kysely.updateTable("subscriptions").set({ title }).where("source_id", "=", sourceId).where("title", "=", card.title).execute();
+      await db.updateTable("items").set({ title }).where("id", "=", card.id).execute();
+      await db.updateTable("sources").set({ title }).where("id", "=", sourceId).where("title", "=", card.title).execute();
+      await db.updateTable("subscriptions").set({ title }).where("source_id", "=", sourceId).where("title", "=", card.title).execute();
     }
     if (!fresh.size && !firstFetch) {
       // Dates corrected: the card is dated by its newest post again (read state unchanged).
       if (repaired && card) {
-        const newest = await this.db.kysely.selectFrom("thread_posts").select(({ fn }) => fn.max("posted_at").as("at")).where("source_id", "=", sourceId).executeTakeFirst();
+        const newest = await db.selectFrom("thread_posts").select(({ fn }) => fn.max("posted_at").as("at")).where("source_id", "=", sourceId).executeTakeFirst();
         const at = Number(newest?.at);
-        if (at > 0) await this.db.kysely.updateTable("items").set({ published_at: Math.min(at, this.now()) }).where("id", "=", card.id).execute();
+        if (at > 0) await db.updateTable("items").set({ published_at: Math.min(at, this.now()) }).where("id", "=", card.id).execute();
       }
       return 0;
     }
@@ -687,7 +729,7 @@ export class FeedService {
     // Each follower's batch (D-115): a follower who read the card starts a new one now; one who
     // hasn't keeps theirs (none yet: the card shows the newest stored posts).
     if (card) {
-      const followers = await this.db.kysely
+      const followers = await db
         .selectFrom("subscriptions as s")
         .leftJoin("item_states as st", (j) => j.onRef("st.user_id", "=", "s.user_id").on("st.item_id", "=", card.id))
         .select(["s.user_id", "st.read"])
@@ -695,11 +737,11 @@ export class FeedService {
         .execute();
       for (const f of followers) {
         const read = f.read === 1;
-        if (read) await this.db.kysely.updateTable("subscriptions").set({ thread_batch_from: now }).where("user_id", "=", f.user_id).where("source_id", "=", sourceId).execute();
+        if (read) await db.updateTable("subscriptions").set({ thread_batch_from: now }).where("user_id", "=", f.user_id).where("source_id", "=", sourceId).execute();
       }
     }
-    const source = await this.db.kysely.selectFrom("sources").select(["title"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
-    const latest = (await this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "html", "posted_at"]).where("source_id", "=", sourceId).where("fetched_at", "=", now).execute())
+    const source = await db.selectFrom("sources").select(["title"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
+    const latest = (await db.selectFrom("thread_posts").select(["post_id", "author", "html", "posted_at"]).where("source_id", "=", sourceId).execute())
       .sort((a, b) => postNumber(b.post_id) - postNumber(a.post_id))[0];
     // Shown only where a follower's own count can't be worked out; the feed recounts per follower.
     const summary = threadSummary(fresh.size, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
@@ -713,12 +755,12 @@ export class FeedService {
       fetched_at: now,
     };
     const cardId = card?.id ?? crypto.randomUUID();
-    if (card) await this.db.kysely.updateTable("items").set(values).where("id", "=", card.id).execute();
-    else await this.db.kysely.insertInto("items").values({ ...values, id: cardId, source_id: sourceId, guid: "thread" }).execute();
+    if (card) await db.updateTable("items").set(values).where("id", "=", card.id).execute();
+    else await db.insertInto("items").values({ ...values, id: cardId, source_id: sourceId, guid: "thread" }).execute();
     // The card is unread again for every follower (saved stays as it was).
-    const userIds = (await this.db.kysely.selectFrom("subscriptions").select("user_id").where("source_id", "=", sourceId).execute()).map((r) => r.user_id);
+    const userIds = (await db.selectFrom("subscriptions").select("user_id").where("source_id", "=", sourceId).execute()).map((r) => r.user_id);
     if (userIds.length) {
-      await this.db.kysely
+      await db
         .insertInto("item_states")
         .values(userIds.map((user_id) => ({ user_id, item_id: cardId, source_id: sourceId, read: 0, saved: 0, read_at: null })))
         .onConflict((oc) => oc.columns(["user_id", "item_id"]).doUpdateSet({ read: 0, read_at: null }))
@@ -735,8 +777,14 @@ export class FeedService {
       const knownMax = known.length ? Math.max(...known.map((k) => postNumber(k.post_id))) : null;
       // vBulletin threads start from the page read last time, which the card links to (D-120).
       const card = await this.db.kysely.selectFrom("items").select("url").where("source_id", "=", row.id).where("guid", "=", "thread").executeTakeFirst();
-      const read = await this.readThread(row.feed_url, via, knownMax, false, card?.url ?? null);
-      const newItems = await this.ingestThread(row.id, read.pages, read.lastUrl, knownMax === null);
+      const catchup: ThreadCatchup | null = row.thread_catchup ? JSON.parse(row.thread_catchup) : null;
+      const read = await this.readThread(row.feed_url, via, knownMax, false, card?.url ?? null, catchup);
+      // Posts, card state and checkpoint must commit together, including the first gap discovery.
+      const newItems = await this.db.kysely.transaction().execute(async (db) => {
+        const added = await this.ingestThread(row.id, read.pages, read.lastUrl, knownMax === null && !catchup, catchup?.floor, !!read.catchup, db);
+        await db.updateTable("sources").set({ thread_catchup: read.catchup ? JSON.stringify(read.catchup) : null }).where("id", "=", row.id).execute();
+        return added;
+      });
       await this.recordSuccess(row.id, startedAt, null, null, row);
       if (newItems) this.log?.info({ sourceId: row.id, newPosts: newItems }, "new replies");
       return { ok: true, newItems };

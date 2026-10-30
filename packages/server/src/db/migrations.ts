@@ -404,6 +404,14 @@ export const migrations: Record<string, Migration> = {
       await db.schema.dropTable("board_threads").execute();
     },
   },
+  "0017_thread_catchup": {
+    async up(db: Kysely<any>) {
+      await db.schema.alterTable("sources").addColumn("thread_catchup", "text").execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("sources").dropColumn("thread_catchup").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {

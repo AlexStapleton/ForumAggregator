@@ -169,6 +169,7 @@ export class ReaderService {
         "sources.remove_selector",
         "sources.via_flaresolverr",
         "sources.feed_url",
+        "sources.thread_catchup",
         "item_content.origin",
         "item_content.status",
         "item_content.html",
@@ -193,7 +194,7 @@ export class ReaderService {
     const via = item.via_flaresolverr === 1;
     // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
     if (item.source_kind === "thread") {
-      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from);
+      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from, !!item.thread_catchup);
       // From the thread's own address: the card links to the page read last (D-120).
       return this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
     }
@@ -390,7 +391,7 @@ export class ReaderService {
    * A followed thread's card (D-084): the replies since it was last read, oldest first, from the
    * posts stored at each check (no page fetch). Before any batch, the newest stored posts.
    */
-  private async threadCard(base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">, sourceId: string, batchFrom: number | null): Promise<ReaderContent> {
+  private async threadCard(base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">, sourceId: string, batchFrom: number | null, catchingUp = false): Promise<ReaderContent> {
     let q = this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId);
     if (batchFrom !== null) q = q.where("fetched_at", ">=", batchFrom);
     const rows = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
@@ -412,7 +413,10 @@ export class ReaderService {
       if (earlier.length) context = `<div class="thread-context"><p class="thread-context-label">Earlier in the thread</p>${renderForumPosts(earlier.map(asPost))}</div><p class="thread-new-label">New replies</p>`;
     }
     const html = context + renderForumPosts(shown.map(asPost));
-    const notice = rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null;
+    const notice = [
+      catchingUp ? "Catching up on this thread. Older replies are still being collected; newer activity will be checked after catch-up finishes." : null,
+      rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null,
+    ].filter(Boolean).join(" ") || null;
     return { ...base, kind: "page", html, videoId: null, notice };
   }
 
