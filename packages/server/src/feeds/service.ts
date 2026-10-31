@@ -23,6 +23,10 @@ import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 import { latestUploads, YouTubeApiError } from "../reader/youtubeApi.js";
 
+import { postFingerprint } from "../reader/postFingerprint.js";
+
+interface ThreadAudit { polls: number; offset: number; pages: number }
+
 type SourceRow = Selectable<SourcesTable>;
 
 interface ThreadCatchup {
@@ -428,6 +432,8 @@ export class FeedService {
     interactive: boolean,
     lastRead: string | null = null,
     catchup: ThreadCatchup | null = null,
+    audit?: ThreadAudit,
+    recovering = false,
   ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string; catchup: ThreadCatchup | null }> {
     const get = (url: string) => this.fetchHtml(url, via, interactive);
     const read = async (url: string, expectedPage?: number | "last") => {
@@ -449,6 +455,17 @@ export class FeedService {
     let started: ForumThreadPage | null = null;
     // Adding a vBulletin thread may require discovery plus its newest page.
     let budget = interactive ? Math.max(2, this.polling.maxPagesPerPoll) : this.polling.maxPagesPerPoll;
+    const auditDue = !!audit && audit.polls >= 5 && knownMax !== null && !catchup;
+    // A one-request installation dedicates at most every sixth successful check to an older page.
+    // After a failure, rediscover the newest page first (the thread may have shrunk).
+    if (auditDue && !recovering && budget === 1 && audit.pages > 1 && audit.offset % Math.min(3, audit.pages) !== 0) {
+      const target = Math.max(1, audit.pages - audit.offset % Math.min(3, audit.pages));
+      const checked = await read(pager.pageUrl(target), target);
+      audit.pages = checked.page.pages;
+      audit.polls = 0;
+      audit.offset = (audit.offset + 1) % Math.min(3, audit.pages);
+      return { pages: [checked.page], lastUrl: lastRead ?? address, address, catchup: null };
+    }
     if (catchup) {
       try {
         newest = await read(pager.pageUrl(catchup.nextPage), catchup.nextPage);
@@ -522,6 +539,21 @@ export class FeedService {
     const oldest = Math.min(...current.posts.map((p) => p.id ? postNumber(p.id) : Infinity));
     const remaining = knownMax !== null && current.page > 1 && oldest > knownMax
       ? { nextPage: current.page - 1, floor: knownMax, latestUrl: lastUrl } : null;
+    if (audit && !catchup && !remaining) {
+      audit.pages = newest.page.pages;
+      audit.polls = Math.min(5, audit.polls + 1);
+      if (auditDue) {
+        const target = Math.max(1, audit.pages - audit.offset % Math.min(3, audit.pages));
+        if (pages.some(p => p.page === target) || started?.page === target || budget > 0) {
+          if (!pages.some(p => p.page === target)) {
+            const checked = started?.page === target ? started : (await read(pager.pageUrl(target), target)).page;
+            pages.unshift(checked);
+          }
+          audit.polls = 0;
+          audit.offset = (audit.offset + 1) % Math.min(3, audit.pages);
+        }
+      }
+    }
     return { pages, lastUrl, address, catchup: remaining };
   }
 
@@ -661,23 +693,32 @@ export class FeedService {
     // Full rows only for the stored posts on the pages just read (D-107): not all 300 bodies each check.
     const onPages = pages.flatMap((p) => p.posts.map((post) => post.id)).filter((id): id is string => !!id && knownIds.has(id));
     const storedRows = onPages.length
-      ? await db.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author"]).where("source_id", "=", sourceId).where("post_id", "in", onPages).execute()
+      ? await db.selectFrom("thread_posts").select(["post_id", "posted_at", "posted_label", "html", "author", "content_fingerprint", "content_revision", "update_detected_at"]).where("source_id", "=", sourceId).where("post_id", "in", onPages).execute()
       : [];
     // Posts already stored that are on the pages read: keep them as the forum shows them now (edits,
     // and dates misread before D-102 from Overclock.net's member box).
     const stored = new Map(storedRows.map((k) => [k.post_id, k]));
-    let repaired = false;
+    let datesRepaired = false;
+    let contentChanged = false;
+    const encountered = new Set<string>();
     for (const post of pages.flatMap((p) => p.posts)) {
       const was = post.id ? stored.get(post.id) : undefined;
-      if (!was || (was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author)) continue;
-      await db
-        .updateTable("thread_posts")
-        .set({ posted_at: post.postedAt, posted_label: post.timeLabel, html: post.html, author: post.author })
-        .where("source_id", "=", sourceId)
-        .where("post_id", "=", post.id!)
-        .execute();
-      repaired = true;
+      if (!was || encountered.has(post.id!)) continue;
+      encountered.add(post.id!);
+      if (was.content_fingerprint && was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author) continue;
+      const fingerprint = postFingerprint(post.html);
+      // Backfill legacy rows without claiming an edit that we did not observe.
+      const edited = was.content_fingerprint !== null && was.content_fingerprint !== fingerprint;
+      await db.updateTable("thread_posts").set({
+        posted_at: post.postedAt, posted_label: post.timeLabel, html: post.html, author: post.author,
+        content_fingerprint: fingerprint,
+        content_revision: was.content_revision + (edited ? 1 : 0),
+        update_detected_at: edited ? now : was.update_detected_at,
+      }).where("source_id", "=", sourceId).where("post_id", "=", post.id!).execute();
+      datesRepaired ||= was.posted_at !== post.postedAt;
+      contentChanged ||= edited;
     }
+    if (contentChanged) await db.updateTable("sources").set(eb => ({ thread_revision: eb("thread_revision", "+", 1) })).where("id", "=", sourceId).execute();
     const knownMax = Math.max(0, ...known.map((k) => postNumber(k.post_id)));
     const fresh = new Map<string, ForumThreadPage["posts"][number]>();
     for (const post of pages.flatMap((p) => p.posts)) {
@@ -686,6 +727,7 @@ export class FeedService {
       fresh.set(post.id, post);
     }
     if (fresh.size) {
+      if (!contentChanged) await db.updateTable("sources").set(eb => ({ thread_revision: eb("thread_revision", "+", 1) })).where("id", "=", sourceId).execute();
       await db
         .insertInto("thread_posts")
         .values(
@@ -696,6 +738,7 @@ export class FeedService {
             posted_at: p.postedAt,
             posted_label: p.timeLabel,
             html: p.html,
+            content_fingerprint: postFingerprint(p.html),
             fetched_at: now,
           })),
         )
@@ -718,7 +761,7 @@ export class FeedService {
     }
     if (!fresh.size && !firstFetch) {
       // Dates corrected: the card is dated by its newest post again (read state unchanged).
-      if (repaired && card) {
+      if (datesRepaired && card) {
         const newest = await db.selectFrom("thread_posts").select(({ fn }) => fn.max("posted_at").as("at")).where("source_id", "=", sourceId).executeTakeFirst();
         const at = Number(newest?.at);
         if (at > 0) await db.updateTable("items").set({ published_at: Math.min(at, this.now()) }).where("id", "=", card.id).execute();
@@ -778,11 +821,12 @@ export class FeedService {
       // vBulletin threads start from the page read last time, which the card links to (D-120).
       const card = await this.db.kysely.selectFrom("items").select("url").where("source_id", "=", row.id).where("guid", "=", "thread").executeTakeFirst();
       const catchup: ThreadCatchup | null = row.thread_catchup ? JSON.parse(row.thread_catchup) : null;
-      const read = await this.readThread(row.feed_url, via, knownMax, false, card?.url ?? null, catchup);
+      const audit: ThreadAudit = row.thread_audit ? JSON.parse(row.thread_audit) : { polls: 0, offset: 1, pages: 1 };
+      const read = await this.readThread(row.feed_url, via, knownMax, false, card?.url ?? null, catchup, audit, row.consecutive_failures > 0);
       // Posts, card state and checkpoint must commit together, including the first gap discovery.
       const newItems = await this.db.kysely.transaction().execute(async (db) => {
         const added = await this.ingestThread(row.id, read.pages, read.lastUrl, knownMax === null && !catchup, catchup?.floor, !!read.catchup, db);
-        await db.updateTable("sources").set({ thread_catchup: read.catchup ? JSON.stringify(read.catchup) : null }).where("id", "=", row.id).execute();
+        await db.updateTable("sources").set({ thread_catchup: read.catchup ? JSON.stringify(read.catchup) : null, thread_audit: JSON.stringify(audit) }).where("id", "=", row.id).execute();
         return added;
       });
       await this.recordSuccess(row.id, startedAt, null, null, row);

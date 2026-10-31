@@ -301,12 +301,18 @@ export function cleanPageTitle(title: string | null | undefined): string {
 }
 
 /** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */
-export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html"> & { id?: string | null }>): string {
+export function postUpdateLabel(at: number): string {
+  const iso = new Date(at).toISOString();
+  return `<small class="post-update">Update detected <time datetime="${iso}">${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC</time></small>`;
+}
+
+export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html"> & { id?: string | null; updateDetectedAt?: number | null }>): string {
   return posts
     .map((p) => {
       const head = [
         p.author ? `<strong>${escHtml(p.author)}</strong>` : "",
         p.timeLabel ? `<time datetime="${escHtml(p.datetime ?? "")}">${escHtml(p.timeLabel)}</time>` : "",
+        p.updateDetectedAt ? postUpdateLabel(p.updateDetectedAt) : "",
       ].filter(Boolean).join(" · ");
       const anchor = p.id && /^\d+$/.test(p.id) ? ` id="fa-post-${p.id}"` : "";
       return `<section${anchor}><p>${head}</p>${p.html}</section><hr>`;

@@ -105,6 +105,8 @@ export interface SourcesTable {
   id: string;
   /** Persisted thread catch-up checkpoint; null when no gap remains. */
   thread_catchup: Generated<string | null>;
+  thread_audit: Generated<string | null>;
+  thread_revision: Generated<number>;
   kind: "feed" | "youtube" | "reddit" | "thread" | "board";
   /** The feed's own name; each follower's name for it is subscriptions.title. */
   title: string;
@@ -135,6 +137,9 @@ export interface SourcesTable {
 
 /** Posts of followed threads (D-084), newest kept per thread. */
 export interface ThreadPostsTable {
+  content_fingerprint: Generated<string | null>;
+  content_revision: Generated<number>;
+  update_detected_at: Generated<number | null>;
   source_id: string;
   /** The forum's post ID (numeric in XenForo). */
   post_id: string;
