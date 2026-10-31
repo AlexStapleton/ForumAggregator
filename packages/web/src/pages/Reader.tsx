@@ -9,7 +9,7 @@ import { RedditMediaView } from "../RedditMedia";
 import { KIND_LABEL } from "../kinds";
 import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
-import { trackThreadPosition } from "../threadPosition";
+import { canTrackThreadContent, trackThreadPosition } from "../threadPosition";
 import { enhanceQuotes } from "../quoteContext";
 
 interface Props {
@@ -53,7 +53,7 @@ async function loadContent(item: FeedItem, page: Page): Promise<ReaderContent> {
   const hit = cache.get(key);
   if (hit && item.sourceKind !== "thread") return hit;
   const content = await api<ReaderContent>("GET", `/api/items/${item.id}/reader${page === undefined ? "" : `?page=${page}`}`);
-  if (item.sourceKind !== "thread") {
+  if (item.sourceKind !== "thread" && (!content.extraction || content.extraction.status === "complete")) {
     cache.set(key, content);
     if (content.pagination && page === "last") cache.set(`${cacheKey(item)}|${content.pagination.page}`, content);
   }
@@ -66,6 +66,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   const [error, setError] = useState<string>();
   const [positionError, setPositionError] = useState<string>();
   const [reload, setReload] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   const [page, setPage] = useState<Page>(() => (item ? startPage(item) : undefined));
   // The pager stays put while the next page loads.
   const [pager, setPager] = useState<ReaderPagination | null>(null);
@@ -124,6 +125,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     setContent(undefined);
     setError(undefined);
     setPositionError(undefined);
+    setRetrying(false);
     setMore([]);
     setMoreState({ busy: false });
     scroller.current?.scrollTo({ top: 0 });
@@ -161,8 +163,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
   // Save after scrolling settles, and send the last visible position when leaving the page.
   useEffect(() => {
     const root = scroller.current;
-    if (!root || !item || content?.itemId !== item.id || !content.threadProgress?.tracking) return;
-    const stop = trackThreadPosition(root, content.threadProgress.readPostId ?? 0,
+    if (!root || !item || content?.itemId !== item.id || !canTrackThreadContent(content, more)) return;
+    const stop = trackThreadPosition(root, content.threadProgress!.readPostId ?? 0,
       (postId) => api<{ saved: boolean }>("PUT", `/api/items/${item.id}/thread-position`, { postId }, { keepalive: true }),
       (failed) => setPositionError(failed ? "Couldn't save your reading position. Scroll again to retry." : undefined));
     return () => {
@@ -187,7 +189,22 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
 
   // The last thread page shown, and whether there's one after it.
   const lastShown = more.at(-1)?.pagination ?? content?.pagination ?? null;
-  const nextPage = lastShown && lastShown.page < lastShown.pages ? lastShown.page + 1 : null;
+  const incomplete = [content, ...more].some((c) => c?.extraction && c.extraction.status !== "complete");
+  const nextPage = !incomplete && lastShown && lastShown.page < lastShown.pages ? lastShown.page + 1 : null;
+  const retry = async () => {
+    if (!item || retrying) return;
+    const forRequest = currentRequest.current;
+    setRetrying(true);
+    try {
+      if (item.sourceKind === "thread") await api("POST", `/api/sources/${item.sourceId}/check`);
+      if (currentRequest.current === forRequest) {
+        cache.delete(`${cacheKey(item)}|${page ?? ""}`);
+        setReload((n) => n + 1);
+      }
+    } catch (err) {
+      if (currentRequest.current === forRequest) setError(errorMessage(err));
+    } finally { if (currentRequest.current === forRequest) setRetrying(false); }
+  };
   const loadNextPage = async () => {
     if (!item || nextPage === null || moreState.busy) return;
     const forRequest = currentRequest.current;
@@ -332,6 +349,13 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
           {/* Keys differ between these siblings: the same key twice makes React duplicate one. */}
           {content?.redditMedia && <RedditMediaView key={`media-${item.id}`} itemId={item.id} hint={content.redditMedia} postUrl={item.url} />}
 
+          {content?.extraction && content.notice && (
+            <div className="alert alert-info" role="status">
+              <p>{content.notice}</p>
+              <button className="secondary" disabled={retrying} onClick={() => void retry()}>{retrying ? "Retrying…" : "Retry"}</button>
+              {item.url && <> <a href={item.url} target="_blank" rel="noopener noreferrer">Open original ↗</a></>}
+            </div>
+          )}
           {content?.html && (
             // Sanitised on the server (reader/sanitize.ts); the CSP blocks scripts as a second line of defence.
             <div className="reader-content" dangerouslySetInnerHTML={{ __html: content.html }} />
@@ -353,7 +377,10 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
           {more.map((c) => (
             <section key={c.pagination?.page} aria-label={`Page ${c.pagination?.page}`}>
               <p className="page-divider">Page {c.pagination?.page}</p>
-              {c.notice && <div className="alert alert-info">{c.notice}</div>}
+              {c.notice && <div className="alert alert-info" role="status">{c.notice}
+                {c.extraction && c.extraction.status !== "complete" && c.pagination &&
+                  <button className="secondary" onClick={() => goToPage(c.pagination!.page)}>Retry this page</button>}
+              </div>}
               {c.html && <div className="reader-content" dangerouslySetInnerHTML={{ __html: c.html }} />}
             </section>
           ))}
@@ -368,7 +395,7 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
 
           {content && !content.html && content.summary && <p className="reader-summary">{content.summary}</p>}
 
-          {content?.notice && (
+          {content?.notice && !content.extraction && (
             <div className="alert alert-info">
               {content.notice} {item.url && !/original/i.test(content.notice) && "Use “Open original” to read it on the site."}
             </div>

@@ -6,17 +6,20 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { ForumThreadPage } from "./extract.js";
 import { extractWithSelectors, type ReaderSelectors, type SelectorExtraction } from "./extract.js";
-import { parseThreadPage } from "../feeds/thread.js";
+import { parseThreadPage, inspectThreadPage } from "../feeds/thread.js";
+import type { ThreadInspection } from "./threadQuality.js";
 import { parseBoardPage, type BoardPage } from "../feeds/board.js";
 
 export type PageJob =
   | { kind: "extract"; html: string; url: string; selectors: ReaderSelectors }
   | { kind: "thread"; html: string; url: string }
+  | { kind: "thread-inspection"; html: string; url: string }
   | { kind: "board"; html: string; url: string };
 
 /** Does one job; the same code in the worker and in-process. */
 export function runPageJob(job: PageJob): unknown {
   return job.kind === "thread" ? parseThreadPage(job.html, job.url)
+    : job.kind === "thread-inspection" ? inspectThreadPage(job.html, job.url)
     : job.kind === "board" ? parseBoardPage(job.html, job.url)
     : extractWithSelectors(job.html, job.url, job.selectors);
 }
@@ -50,6 +53,10 @@ export class PageParser {
 
   thread(html: string, url: string): Promise<ForumThreadPage | null> {
     return this.run({ kind: "thread", html, url }) as Promise<ForumThreadPage | null>;
+  }
+
+  inspectThread(html: string, url: string): Promise<ThreadInspection> {
+    return this.run({ kind: "thread-inspection", html, url }) as Promise<ThreadInspection>;
   }
 
   /** A vBulletin board page's threads (D-123). */

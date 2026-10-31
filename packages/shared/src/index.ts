@@ -134,6 +134,7 @@ export interface Source {
 
 /** What the reader would show for one item with the given selectors (nothing is saved). */
 export interface ReaderPreview {
+  extraction?: ReaderExtraction;
   itemId: string;
   itemTitle: string;
   url: string;
@@ -198,7 +199,14 @@ export interface TagCount {
 }
 
 /** What the in-app reader shows for an item. */
+export interface ReaderExtraction {
+  status: "complete" | "empty" | "partial" | "access-blocked" | "unrecognized" | "wrong-page" | "failed";
+  /** A previously successful copy is being shown after a failed refresh. */
+  stale: boolean;
+}
+
 export interface ReaderContent {
+  extraction?: ReaderExtraction;
   /** Followed threads: account-specific reading position, never stored in shared page caches. */
   threadProgress?: { readPostId: number | null; firstUnreadPostId: string | null; hasMore: boolean; tracking: boolean };
   itemId: string;

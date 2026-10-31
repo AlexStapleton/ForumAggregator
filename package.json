@@ -13,7 +13,7 @@
   "scripts": {
     "build": "npm run build -w @fa/shared && npm run build -w @fa/server && npm run build -w @fa/web",
     "typecheck": "npm run build -w @fa/shared && npm run typecheck -w @fa/server && npm run typecheck -w @fa/web",
-    "test": "npm run build -w @fa/shared && npm test -w @fa/server",
+    "test": "npm run build -w @fa/shared && npm run build -w @fa/server && npm test -w @fa/server",
     "start": "npm start -w @fa/server"
   },
   "overrides": {

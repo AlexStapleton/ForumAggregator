@@ -15,6 +15,7 @@ import { pageParser } from "../reader/pageParser.js";
 import { followedThreadPager, postNumber, threadAddress, threadSummary, vbulletinThreadAddress } from "./thread.js";
 import { boardThreadSummary, looksLikeVbulletinBoard, type BoardThread } from "./board.js";
 import type { ForumThreadPage } from "../reader/extract.js";
+import { ThreadExtractionError, threadQualityMessage, validateThreadResponse } from "../reader/threadQuality.js";
 import { htmlToText } from "./text.js";
 import { nextCheck } from "./schedule.js";
 import { isValidSelector } from "../reader/extract.js";
@@ -429,16 +430,15 @@ export class FeedService {
     catchup: ThreadCatchup | null = null,
   ): Promise<{ pages: ForumThreadPage[]; lastUrl: string; address: string; catchup: ThreadCatchup | null }> {
     const get = (url: string) => this.fetchHtml(url, via, interactive);
-    const read = async (url: string) => {
+    const read = async (url: string, expectedPage?: number | "last") => {
       const res = await get(url);
       const pageUrl = res.url.replace(/#.*$/, "");
-      const page = await pageParser.thread(res.body, pageUrl);
-      if (!page) {
-        const message = "Couldn't find any posts on that page. It may not be a forum thread (XenForo or vBulletin), or the forum shows it only to members.";
-        if (interactive) throw new SourceError("not_a_thread", message, 422);
-        throw new ThreadParseError(message);
+      const inspection = validateThreadResponse(await pageParser.inspectThread(res.body, pageUrl), url, pageUrl, expectedPage);
+      if (inspection.status !== "complete" || !inspection.value) {
+        if (interactive) throw new SourceError(inspection.codes.includes("challenge") ? "cloudflare_challenge" : inspection.status === "unrecognized" ? "not_a_thread" : "incomplete_thread", threadQualityMessage(inspection), 422);
+        throw new ThreadExtractionError(inspection);
       }
-      return { page, url: pageUrl };
+      return { page: inspection.value, url: pageUrl };
     };
     let pager = followedThreadPager(address);
     if (!pager) throw new ThreadParseError("This source's address isn't a forum thread.");
@@ -451,7 +451,7 @@ export class FeedService {
     let budget = interactive ? Math.max(2, this.polling.maxPagesPerPoll) : this.polling.maxPagesPerPoll;
     if (catchup) {
       try {
-        newest = await read(pager.pageUrl(catchup.nextPage));
+        newest = await read(pager.pageUrl(catchup.nextPage), catchup.nextPage);
       } catch (err) {
         if (catchup.discover || !(err instanceof FetchError && err.status === 404)) throw err;
         return { pages: [], lastUrl: lastRead ?? address, address,
@@ -463,17 +463,17 @@ export class FeedService {
       if (catchup.discover && newest.page.pages > newest.page.page) {
         if (budget <= 0) return { pages: [newest.page], lastUrl: newest.url, address,
           catchup: { nextPage: newest.page.pages, floor: catchup.floor, latestUrl: null } };
-        newest = await read(pager.pageUrl(newest.page.pages));
+        newest = await read(pager.pageUrl(newest.page.pages), newest.page.pages);
         budget--;
       }
     } else if (pager.latestUrl) {
-      newest = await read(pager.latestUrl);
+      newest = await read(pager.latestUrl, "last");
       budget--;
     } else {
       let from = lastRead && pager.pageOf(lastRead) ? lastRead : address;
       let first;
       try {
-        first = await read(from);
+        first = await read(from, interactive ? undefined : pager.pageOf(from) ?? undefined);
       } catch (err) {
         // That page is gone (posts deleted, so fewer pages): start again from the first page.
         if (from === address || !(err instanceof FetchError && err.status === 404)) throw err;
@@ -496,7 +496,7 @@ export class FeedService {
           return { pages: [first.page], lastUrl: first.url, address,
             catchup: { nextPage: first.page.pages, floor: knownMax ?? 0, latestUrl: null } };
         }
-        newest = await read(pager.pageUrl(first.page.pages));
+        newest = await read(pager.pageUrl(first.page.pages), first.page.pages);
         budget--;
       }
     }
@@ -512,8 +512,8 @@ export class FeedService {
         current = started;
         break;
       }
-      const previous = await get(pager.pageUrl(current.page - 1));
-      const parsed = await pageParser.thread(previous.body, previous.url);
+      const previous = await read(pager.pageUrl(current.page - 1), current.page - 1);
+      const parsed = previous.page;
       budget--;
       if (!parsed || parsed.page !== Math.min(current.page - 1, parsed.pages)) throw new ThreadParseError("Couldn't read the previous thread page. Will retry without skipping replies.");
       pages.unshift(parsed);
@@ -791,10 +791,15 @@ export class FeedService {
     } catch (err) {
       const message =
         err instanceof FetchError ? friendlyFetchError(err, row.feed_url, via)
-        : err instanceof ThreadParseError ? err.message
+        : err instanceof ThreadParseError || err instanceof ThreadExtractionError ? err.message
         : "Unexpected error while checking this thread";
-      if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ err, sourceId: row.id }, "check failed");
-      await this.recordFailure(row, startedAt, message, err instanceof FetchError ? err : undefined);
+      if (err instanceof ThreadExtractionError) {
+        const { status, codes, counts } = err.inspection;
+        this.log?.warn({ sourceId: row.id, status, codes, counts }, "thread extraction incomplete");
+      } else if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ sourceId: row.id }, "thread page parsing failed");
+      const failure = err instanceof FetchError ? err : err instanceof ThreadExtractionError && err.inspection.codes.includes("challenge")
+        ? new FetchError("cloudflare_challenge", message) : undefined;
+      await this.recordFailure(row, startedAt, message, failure);
       return { ok: false, newItems: 0, error: message };
     }
   }

@@ -116,6 +116,35 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     return { clock, web, call, setThread };
   }
 
+  it("preserves the catch-up checkpoint, bodies and unread state when a later page parses only partially", async () => {
+    const { clock, web, call, setThread } = await start();
+    setThread(20);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    setThread(220);
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 60 });
+    const snapshot = async () => ({
+      posts: await app!.db.kysely.selectFrom("thread_posts").selectAll().where("source_id", "=", src.id).orderBy("post_id").execute(),
+      state: await app!.db.kysely.selectFrom("item_states").selectAll().where("source_id", "=", src.id).execute(),
+      subscription: await app!.db.kysely.selectFrom("subscriptions").select(["thread_batch_from", "thread_read_post"]).where("source_id", "=", src.id).execute(),
+      checkpoint: (await app!.db.kysely.selectFrom("sources").select("thread_catchup").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_catchup,
+    });
+    const before = await snapshot();
+    // Page 8 succeeds, then page 7 loses one recognized body: neither page may be committed.
+    web.set(`${THREAD}page-7`, { body: page(7, 11, posts(1120, 20)).replace('class="bbWrapper"', 'class="changed-layout"'), contentType: "text/html" });
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: false, newItems: 0 });
+    expect(await snapshot()).toEqual(before);
+    const source = await app!.db.kysely.selectFrom("sources").select(["consecutive_failures", "last_error", "next_check_at"]).where("id", "=", src.id).executeTakeFirstOrThrow();
+    expect(source.consecutive_failures).toBe(1);
+    expect(source.last_error).toContain("could not be read completely");
+    expect(source.next_check_at).toBeGreaterThan(clock.now);
+    setThread(220);
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 60 });
+    const after = await snapshot();
+    expect(after.posts).toHaveLength(140);
+    expect(new Set(after.posts.map((p) => p.post_id)).size).toBe(140);
+    expect(JSON.parse(after.checkpoint!)).toMatchObject({ nextPage: 5, floor: 1019 });
+  });
+
   it("fills a ten-page gap across checks, resumes in a new service, and then picks up newer activity", async () => {
     const { clock, web, call, setThread } = await start();
     setThread(20);
@@ -584,7 +613,7 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     web.set("https://forum.example/threads/gone.9/latest", { body: "<html><body>The requested thread could not be found.</body></html>", contentType: "text/html" });
     const empty = await call("POST", "/api/sources", { url: "https://forum.example/threads/gone.9/" });
     expect(empty.statusCode).toBe(422);
-    expect(empty.json().message).toMatch(/Couldn't find any posts/);
+    expect(empty.json().message).toMatch(/Couldn't recognize the thread's post layout/);
 
     const opml = (await call("GET", "/api/sources/opml")).body;
     expect(opml).not.toContain("threads/");
