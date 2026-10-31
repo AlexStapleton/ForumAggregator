@@ -128,6 +128,51 @@ function fakeFlareSolverr(web: FakeWeb, opts: { fail?: string; wrapXml?: boolean
 }
 
 describe("FlareSolverr client", () => {
+  it.each([false, true])("isolates different URLs while serializing a host (first solve fails: %s)", async (failFirst) => {
+    const firstUrl = "https://forum.example/threads/garden.1/";
+    const secondUrl = "https://forum.example/threads/soil.2/";
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const calls: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const post: JsonPoster = async (_endpoint, body) => {
+      const url = (body as { url: string }).url;
+      calls.push(url);
+      maxActive = Math.max(maxActive, ++active);
+      try {
+        if (url === firstUrl) { entered(); await gate; }
+        if (failFirst && url === firstUrl) return { status: 500, body: { status: "error", message: "Timeout after 60.0 seconds." } };
+        return { status: 200, body: { status: "ok", solution: { url, status: 200, response: `<p>${url}</p>`, cookies: [], userAgent: BROWSER_UA } } };
+      } finally { active--; }
+    };
+    const flare = new FlareSolverr(async () => FS, post, async () => ({ status: 503, body: null }), () => NOW, async () => {});
+    const fetcher = flare.wrap(async () => { throw new Error("unexpected plain fetch"); });
+    // Attach both outcomes before releasing the gate, including an expected rejection.
+    const first = fetcher(firstUrl, { expect: "html" }).then(value => ({ value }), error => ({ error }));
+    await started;
+    const second = fetcher(secondUrl, { expect: "html" });
+    const duplicate = fetcher(secondUrl, { expect: "html" });
+    const waiting = Promise.allSettled([second, duplicate]);
+    await Promise.resolve();
+    expect(calls).toEqual([firstUrl]);
+    release();
+    const outcome = await first;
+    if (failFirst) expect("error" in outcome && outcome.error.message).toContain("Timeout after 60.0 seconds");
+    else expect("value" in outcome && outcome.value).toMatchObject({ url: firstUrl, body: `<p>${firstUrl}</p>` });
+    expect(await waiting).toMatchObject([
+      { status: "fulfilled", value: { url: secondUrl, body: `<p>${secondUrl}</p>` } },
+      { status: "fulfilled", value: { url: secondUrl, body: `<p>${secondUrl}</p>` } },
+    ]);
+    expect(calls).toEqual([firstUrl, secondUrl]);
+    expect(maxActive).toBe(1);
+    // Settled work does not remain cached indefinitely.
+    await fetcher(secondUrl, { expect: "html" });
+    expect(calls).toEqual([firstUrl, secondUrl, secondUrl]);
+  });
+
   it("uses the browser's copy once, then the clearance for plain requests; re-solves when challenged again", async () => {
     const web = new FakeWeb();
     let now = NOW;

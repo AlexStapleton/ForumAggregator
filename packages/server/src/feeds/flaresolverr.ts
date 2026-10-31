@@ -100,7 +100,10 @@ export class FlareSolverr {
   private clearances = new Map<string, Clearance>();
   /** host → until when plain requests with a clearance aren't worth trying. */
   private plainRefused = new Map<string, number>();
+  /** Only identical URLs may share a response (or a failure). */
   private solving = new Map<string, Promise<Solution>>();
+  /** Serialize different URLs on a host without sharing their results. */
+  private hostTails = new Map<string, Promise<void>>();
 
   constructor(
     /** The instance's base URL from Settings, or null when not set up. */
@@ -134,10 +137,18 @@ export class FlareSolverr {
   /** Has the browser open the page; one solve per host at a time. */
   private solve(url: string): Promise<Solution> {
     const host = new URL(url).host;
-    const running = this.solving.get(host);
+    const running = this.solving.get(url);
     if (running) return running;
-    const p = this.doSolve(url).finally(() => this.solving.delete(host));
-    this.solving.set(host, p);
+    const previous = this.hostTails.get(host) ?? Promise.resolve();
+    const p = previous.then(() => this.doSolve(url));
+    // A failed solve releases the host queue; it must not reject other pages waiting their turn.
+    const settled = p.then(() => {}, () => {});
+    this.hostTails.set(host, settled);
+    this.solving.set(url, p);
+    void settled.then(() => {
+      if (this.solving.get(url) === p) this.solving.delete(url);
+      if (this.hostTails.get(host) === settled) this.hostTails.delete(host);
+    });
     return p;
   }
 
