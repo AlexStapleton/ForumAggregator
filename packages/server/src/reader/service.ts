@@ -20,6 +20,7 @@ import { cleanFeedHtml, pageNote, polishArticle, renderForumPosts, youtubeVideoI
 import { layoutRedditPost } from "./redditLayout.js";
 import { fallbackMedia, parseRedditPost, redditMediaPlan, redditPostJsonUrl } from "./redditMedia.js";
 import { sanitizeHtml } from "./sanitize.js";
+import { ThreadExtractionError, validateThreadResponse, type ThreadInspection } from "./threadQuality.js";
 import type { SettingsService } from "../settings.js";
 import { topComments, YouTubeApiError } from "./youtubeApi.js";
 
@@ -69,6 +70,10 @@ class NoArticle extends Error {
   ) {
     super(message);
   }
+}
+
+class IncompletePage extends ThreadExtractionError {
+  constructor(inspection: ThreadInspection, readonly result: SelectorExtraction) { super(inspection); }
 }
 
 function pageErrorMessage(err: unknown): string {
@@ -157,7 +162,7 @@ export class ReaderService {
       .where("user_id", "=", viewer.id).where("source_id", "=", item.source_id)
       .where((eb) => eb.or([eb("thread_read_post", "is", null), eb("thread_read_post", "<", postId)]))
       // Do not skip replies still missing behind the newest page while catching up.
-      .where((eb) => eb.exists(eb.selectFrom("sources").select("id").where("id", "=", item.source_id).where("thread_catchup", "is", null)))
+      .where((eb) => eb.exists(eb.selectFrom("sources").select("id").where("id", "=", item.source_id).where("thread_catchup", "is", null).where("consecutive_failures", "=", 0)))
       .executeTakeFirst();
     return { saved: Number(result.numUpdatedRows) > 0 };
   }
@@ -169,6 +174,7 @@ export class ReaderService {
     if (html && unread && readPostId !== null && !html.includes('class="thread-new-label"')) {
       html = html.replace(`<section id="fa-post-${unread}"`, `<p class="thread-new-label">New replies</p><section id="fa-post-${unread}"`);
     }
+    tracking = tracking && (!content.extraction || content.extraction.status === "complete" && !content.extraction.stale);
     return { ...content, html, threadProgress: { readPostId, firstUnreadPostId: unread, hasMore, tracking } };
   }
 
@@ -198,6 +204,7 @@ export class ReaderService {
         "sources.via_flaresolverr",
         "sources.feed_url",
         "sources.thread_catchup",
+        "sources.last_error as source_error",
         "item_content.origin",
         "item_content.status",
         "item_content.html",
@@ -222,10 +229,17 @@ export class ReaderService {
     const via = item.via_flaresolverr === 1;
     // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
     if (item.source_kind === "thread") {
-      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from, !!item.thread_catchup, item.thread_read_post);
+      if (page === undefined || !item.url) {
+        const card = await this.threadCard(base, item.source_id, item.thread_batch_from, !!item.thread_catchup, item.thread_read_post);
+        if (!item.source_error) return card;
+        return { ...card, extraction: { status: "failed", stale: true },
+          notice: `${item.source_error} Showing previously collected replies. Reading position saving is paused until a successful check.`,
+          threadProgress: card.threadProgress && { ...card.threadProgress, tracking: false } };
+      }
       // From the thread's own address: the card links to the page read last (D-120).
       const content = await this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
-      return this.withThreadPosition(content, item.thread_read_post, !item.thread_catchup);
+      const shown = item.source_error && !content.notice ? { ...content, notice: `${item.source_error} Reading position saving is paused until a successful source check.` } : content;
+      return this.withThreadPosition(shown, item.thread_read_post, !item.thread_catchup && !item.source_error);
     }
 
     // A board's thread card (D-123): the thread itself, on the page with its newest posts unless
@@ -365,7 +379,7 @@ export class ReaderService {
     version = "",
   ): Promise<ReaderContent> {
     if (!pager) return this.summaryOnly(base, "This link isn't a forum thread.");
-    const cacheId = `quotes-v1:${version ? `${item.id}@${version}` : item.id}`;
+    const cacheId = `quality-v1:${version ? `${item.id}@${version}` : item.id}`;
     const key = `${cacheId}|${want}`;
     const known = this.threadPages.get(key);
     if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
@@ -376,12 +390,12 @@ export class ReaderService {
       const pages = first.pagination?.pages ?? 1;
       if (pages <= 1 || first.kind !== "page") return first;
       const last = await this.forumThread(base, item, selectors, via, pages, feedText, pager, version);
-      this.rememberThreadPage(key, last);
+      if (!last.extraction || last.extraction.status === "complete") this.rememberThreadPage(key, last);
       return last;
     }
     const url = want === "last" ? pager.latestUrl! : pager.pageUrl(want);
     try {
-      const { article } = await this.readPage(url, selectors ?? {}, via);
+      const { article } = await this.readPage(url, selectors ?? {}, via, want);
       const content: ReaderContent = {
         ...base,
         author: base.author ?? article.byline,
@@ -389,6 +403,7 @@ export class ReaderService {
         html: polishArticle(article.html, item.title),
         videoId: null,
         notice: null,
+        extraction: { status: "complete", stale: false },
         pagination: article.pages ?? null,
       };
       this.rememberThreadPage(key, content);
@@ -403,10 +418,16 @@ export class ReaderService {
         (want === 1 && item.status === "ok" && item.origin === "page" && item.html
           ? { ...base, kind: "page" as const, html: polishArticle(item.html, item.title), videoId: null, notice: null, pagination: null }
           : null);
-      if (earlier) return { ...earlier, notice: `Couldn't load new replies: ${message} Showing the copy read earlier.` };
+      const status = err instanceof ThreadExtractionError ? err.inspection.status : "failed";
+      if (earlier) return { ...earlier, extraction: { status, stale: true }, notice: `Couldn't load new replies: ${message} Showing the copy read earlier. Reading position saving is paused.` };
+      if (err instanceof IncompletePage && status === "partial" && err.result.article) return {
+        ...base, kind: "page", html: polishArticle(err.result.article.html, item.title), videoId: null,
+        pagination: err.result.article.pages ?? null, extraction: { status, stale: false },
+        notice: `${message} This is an incomplete preview; reading position saving is paused.`,
+      };
       const feed = feedText();
-      if (feed) return { ...base, kind: "feed", html: polishArticle(feed, item.title), videoId: null, notice: `${message} Showing the feed's text instead.`, pagination: null };
-      return this.summaryOnly(base, message);
+      if (feed) return { ...base, kind: "feed", html: polishArticle(feed, item.title), videoId: null, notice: `${message} Showing the feed's text instead.`, pagination: null, extraction: { status, stale: false } };
+      return { ...this.summaryOnly(base, message), extraction: { status, stale: false } };
     }
   }
 
@@ -486,13 +507,23 @@ export class ReaderService {
     url: string,
     selectors: ReaderSelectors,
     viaFlareSolverr = false,
+    expectedThreadPage?: ThreadPageRequest,
   ): Promise<SelectorExtraction & { article: NonNullable<SelectorExtraction["article"]> }> {
     await this.limiter.wait(url, INTERACTIVE);
     const res = await this.fetcherFor(viaFlareSolverr)(url, { expect: "html", maxBytes: 3 * 1024 * 1024 });
     if (res.kind !== "ok") throw new Error("The site answered without content.");
     if (!/html/i.test(res.contentType)) throw new Error("The link isn't a web page (it may be a file or video).");
     // On the page worker: a big page takes long enough to stall the server otherwise (D-107).
-    const result = await pageParser.extract(res.body, res.url, selectors);
+    let result: SelectorExtraction;
+    try { result = await pageParser.extract(res.body, res.url, selectors); }
+    catch (err) {
+      if (expectedThreadPage !== undefined) throw new Error(/took too long/i.test((err as Error).message) ? "Reading the forum page took too long. Try again later." : "Reading the forum page failed. Try again later.");
+      throw err;
+    }
+    if (result.thread) {
+      const inspection = expectedThreadPage !== undefined ? validateThreadResponse(result.thread, url, res.url, expectedThreadPage) : result.thread;
+      if (inspection.status !== "complete" && (expectedThreadPage !== undefined || inspection.status !== "unrecognized")) throw new IncompletePage(inspection, result);
+    }
     if (!result.article) {
       if (selectors.article) {
         throw new SelectorMiss(
@@ -532,8 +563,11 @@ export class ReaderService {
       const result = await this.readPage(item.url, { article: req.articleSelector, remove: req.removeSelector }, source.via_flaresolverr === 1);
       return { ...out, html: polishArticle(result.article.html, item.title), matched: result.matched, removed: result.removed };
     } catch (err) {
-      const partial = err instanceof SelectorMiss ? err.result : null;
-      return { ...out, matched: partial?.matched ?? null, removed: partial?.removed ?? null, notice: pageErrorMessage(err) };
+      const partial = err instanceof SelectorMiss || err instanceof IncompletePage ? err.result : null;
+      return { ...out, matched: partial?.matched ?? null, removed: partial?.removed ?? null,
+        html: err instanceof IncompletePage && err.inspection.status === "partial" ? partial?.article?.html ?? null : null,
+        extraction: err instanceof IncompletePage ? { status: err.inspection.status, stale: false } : undefined,
+        notice: pageErrorMessage(err) };
     }
   }
 

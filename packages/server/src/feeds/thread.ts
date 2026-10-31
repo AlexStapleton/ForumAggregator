@@ -2,7 +2,8 @@
 // seen are kept, and the thread has a single card that says how many new replies there are.
 // XenForo threads, and vBulletin threads (D-120).
 import { JSDOM } from "jsdom";
-import { leanPageHtml, parseForumThread, parseVbulletinThread, type ForumThreadPage } from "../reader/extract.js";
+import { leanPageHtml, inspectForumDocument, type ForumThreadPage } from "../reader/extract.js";
+import type { ThreadInspection } from "../reader/threadQuality.js";
 
 const THREAD_PATH = /^(\/threads\/[^/]+\.\d+)(?:\/|$)/;
 
@@ -116,9 +117,14 @@ export function threadPagerFor(url: string | null, feedUrl: string | null): Thre
 
 /** A fetched thread page, parsed; null when the page has no posts we can read. */
 export function parseThreadPage(html: string, pageUrl: string): ForumThreadPage | null {
+  const result = inspectThreadPage(html, pageUrl);
+  return result.status === "complete" ? result.value : null;
+}
+
+export function inspectThreadPage(html: string, pageUrl: string): ThreadInspection {
   const dom = new JSDOM(leanPageHtml(html), { url: pageUrl });
   try {
-    return parseForumThread(dom.window.document, pageUrl) ?? parseVbulletinThread(dom.window.document, pageUrl);
+    return inspectForumDocument(dom.window.document, pageUrl, html.length > 3_000_000);
   } finally {
     dom.window.close();
   }

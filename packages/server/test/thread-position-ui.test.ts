@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
-import { reachedThreadPost, trackThreadPosition } from "../../web/src/threadPosition.js";
+import { canTrackThreadContent, reachedThreadPost, trackThreadPosition } from "../../web/src/threadPosition.js";
+import type { ReaderContent } from "@fa/shared";
 
 describe("thread reading position in the viewport", () => {
+  it("pauses the entire view when any appended page is incomplete or stale", () => {
+    const complete = { threadProgress: { tracking: true }, extraction: { status: "complete", stale: false } } as ReaderContent;
+    expect(canTrackThreadContent(complete, [complete])).toBe(true);
+    for (const status of ["partial", "wrong-page", "access-blocked", "unrecognized", "empty", "failed"] as const) {
+      const partial = { ...complete, extraction: { status, stale: false } };
+      expect(canTrackThreadContent(complete, [partial])).toBe(false);
+      expect(canTrackThreadContent(partial)).toBe(false);
+    }
+    expect(canTrackThreadContent(complete, [{ ...complete, extraction: { status: "complete", stale: true } }])).toBe(false);
+  });
   afterEach(() => vi.useRealTimers());
   function view() {
     vi.useFakeTimers();

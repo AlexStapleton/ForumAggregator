@@ -1,3 +1,12 @@
+import type { ReaderContent } from "@fa/shared";
+
+/** A later appended page can be incomplete even when the first page was read successfully. */
+export function canTrackThreadContent(content: ReaderContent | undefined, more: ReaderContent[] = []): boolean {
+  return !!content?.threadProgress?.tracking && [content, ...more].every((page) =>
+    (!page.extraction || page.extraction.status === "complete" && !page.extraction.stale) &&
+    (!page.threadProgress || page.threadProgress.tracking));
+}
+
 /** Only posts whose end is visible count as reached; a tall, partly read post does not. */
 export function reachedThreadPost(posts: Array<{ id: number; bottom: number }>, top: number, bottom: number): number | null {
   const visible = posts.filter((post) => Number.isSafeInteger(post.id) && post.id > 0 && post.bottom > top && post.bottom <= bottom);

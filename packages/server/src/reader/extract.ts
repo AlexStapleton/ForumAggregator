@@ -5,6 +5,7 @@ import type { ItemAudio } from "@fa/shared";
 import { htmlToText, safeHttpUrl } from "../feeds/text.js";
 import { sanitizeHtml } from "./sanitize.js";
 import { restoreReaderImage } from "./images.js";
+import { threadIdentity, type ThreadInspection } from "./threadQuality.js";
 
 /** Below this much text, what we got is probably a teaser, a paywall or an error page. */
 export const MIN_ARTICLE_TEXT = 300;
@@ -33,6 +34,8 @@ export interface ReaderSelectors {
 }
 
 export interface SelectorExtraction {
+  /** Thread evidence travels through the worker alongside extraction, without raw page data. */
+  thread?: ThreadInspection;
   article: Extracted | null;
   /** How many elements the article selector matched (null when not set). */
   matched: number | null;
@@ -104,20 +107,26 @@ export function extractWithSelectors(pageHtml: string, pageUrl: string, selector
       const hasImage = /<img\b/i.test(html);
       return {
         article: textLength > 0 || hasImage ? { html, title: doc.title || null, byline: null, textLength } : null,
+        thread: inspectForumDocument(doc, pageUrl, pageHtml.length > 3_000_000),
         matched: matches.length,
         removed,
         audio,
       };
     }
     // A XenForo thread: the posts, not Readability's guess (D-081).
-    const thread = xenforoThread(doc, pageUrl) ?? vbulletinThread(doc, pageUrl);
-    if (thread) return { article: thread, matched: null, removed, audio };
+    const inspection = inspectForumDocument(doc, pageUrl, pageHtml.length > 3_000_000);
+    const thread = inspection.value ? threadArticle(inspection.value, doc, pageUrl) : null;
+    if (inspection.value && inspection.value.posts.length > MAX_THREAD_POSTS) {
+      inspection.status = "partial";
+      inspection.codes.push("truncated");
+    }
+    if (thread || inspection.status !== "unrecognized") return { article: thread, thread: inspection, matched: null, removed, audio };
     const article = new Readability(doc, { charThreshold: MIN_ARTICLE_TEXT }).parse();
-    if (!article?.content) return { article: null, matched: null, removed, audio };
+    if (!article?.content) return { article: null, thread: inspection, matched: null, removed, audio };
     const html = sanitizeHtml(article.content, pageUrl);
     const textLength = htmlToText(html).length;
-    if (textLength < MIN_ARTICLE_TEXT) return { article: null, matched: null, removed, audio };
-    return { article: { html, title: article.title ?? null, byline: article.byline ?? null, textLength }, matched: null, removed, audio };
+    if (textLength < MIN_ARTICLE_TEXT) return { article: null, thread: inspection, matched: null, removed, audio };
+    return { article: { html, title: article.title ?? null, byline: article.byline ?? null, textLength }, thread: inspection, matched: null, removed, audio };
   } finally {
     dom.window.close();
   }
@@ -164,6 +173,63 @@ const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").re
 // California/Overclock's nested layout uses article.js-post without the message class,
 // plus a standalone MessageCard for the original post. Inner reply cards are not posts.
 const XENFORO_POST = "article.message, article.js-post[data-content], .MessageCard.js-post";
+const hiddenPost = (post: Element) => !!post.closest('[hidden], [aria-hidden="true"], .u-hidden, .hidden, blockquote, .bbcode_container');
+const xenforoBody = (post: Element) => Array.from(post.querySelectorAll(".message-body .bbWrapper, .bbWrapper"))
+  .find((body) => body.closest(XENFORO_POST) === post);
+const xenforoId = (post: Element) => /(\d+)$/.exec(post.getAttribute("data-content") ?? post.id)?.[1] ?? null;
+function xenforoCandidates(doc: Document, page: number) {
+  return Array.from(doc.querySelectorAll(XENFORO_POST)).filter((post) => !hiddenPost(post) &&
+    (post.matches(".js-post, .message--post, .message--deleted") || xenforoId(post) !== null || !!xenforoBody(post)) &&
+    !(page > 1 && post.querySelector(".js-originalPostContainer")));
+}
+
+/** Inspect the same recognized post containers used by extraction. Missing optional authors,
+ * timestamps, pagination totals and non-consecutive IDs are not evidence of lost replies. */
+export function inspectForumDocument(doc: Document, pageUrl: string, truncated = false): ThreadInspection {
+  const current = doc.querySelector(".pageNav [aria-current='page'], .pageNav-page--current")?.textContent;
+  const pageNumber = Number(/^\s*(\d+)/.exec(current ?? "")?.[1] ?? /\/page-(\d+)/.exec(new URL(pageUrl).pathname)?.[1] ?? 1);
+  const xf = xenforoCandidates(doc, pageNumber);
+  const vbBodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => /^post_message_\d+$/.test(el.id) && !hiddenPost(el));
+  const vbWrappers = Array.from(doc.querySelectorAll('[id^="post"]')).filter((el) => /^(post_?)\d+$/.test(el.id) && el.tagName !== "A" && !hiddenPost(el));
+  const vb = vbBodies.length || /vbulletin/i.test(doc.querySelector('meta[name="generator"]')?.getAttribute("content") ?? "") || vbWrappers.some((el) => el.querySelector(".bigusername, .postdate"));
+  const candidates = xf.length ? xf : vb ? [...vbWrappers, ...vbBodies.filter((body) => !vbWrappers.some((post) => post.contains(body)))] : [];
+  const idOf = (el: Element) => xf.length ? xenforoId(el) : /(\d+)$/.exec(el.id)?.[1] ?? null;
+  const bodyOf = (el: Element) => xf.length ? xenforoBody(el) : el.id.startsWith("post_message_") ? el : el.querySelector(`[id="post_message_${idOf(el)}"]`);
+  const unique = new Map<string | Element, Element>();
+  for (const candidate of candidates) {
+    const key = idOf(candidate) ?? candidate;
+    if (!unique.has(key) || (!bodyOf(unique.get(key)!) && bodyOf(candidate))) unique.set(key, candidate);
+  }
+  const deleted = [...unique.values()].filter((el) => el.matches(".message--deleted, .postbitdeleted"));
+  const active = [...unique.values()].filter((el) => !deleted.includes(el));
+  const bodies = active.map(bodyOf).filter((el): el is Element => !!el);
+  const counts = { candidates: active.length, bodies: bodies.length, usable: 0,
+    stableIds: active.filter((el) => idOf(el) !== null && Number.isSafeInteger(Number(idOf(el)))).length,
+    duplicates: candidates.length - unique.size, deleted: deleted.length };
+  const codes: ThreadInspection["codes"] = [];
+  // Login dialogs and quoted challenge text on a readable thread are not access failures.
+  const outsidePost = (el: Element) => !el.closest(`${XENFORO_POST}, [id^="post_message_"], blockquote`);
+  const challenge = Array.from(doc.querySelectorAll('#challenge-running, #challenge-stage, #cf-challenge-running, form[action*="/cdn-cgi/challenge-platform"]')).some(outsidePost);
+  const login = bodies.length === 0 && (
+    (/log\s?in|sign\s?in/i.test(doc.title) && !!doc.querySelector('form input[type="password"]')) ||
+    Array.from(doc.querySelectorAll(".blockMessage, .standard_error, .errorPanel")).some((el) => outsidePost(el) && /must be logged in|do not have permission|log in to (view|read)/i.test(el.textContent ?? "")));
+  if (challenge || login) return { value: null, status: "access-blocked", codes: [challenge ? "challenge" : "login"], counts };
+  const explicitEmpty = deleted.length > 0 && !active.length || !active.length &&
+    Array.from(doc.querySelectorAll(".blockMessage, .standard_error")).some((el) => outsidePost(el) && /^(there are no posts (to display|in this thread)|this thread has been deleted)[.!]?$/i.test(el.textContent?.trim() ?? ""));
+  if (explicitEmpty) return { value: null, status: "empty", codes: ["deleted"], counts };
+  const value = parseForumThread(doc, pageUrl) ?? parseVbulletinThread(doc, pageUrl);
+  counts.usable = value?.posts.filter((post) => htmlToText(post.html).length > 0 || /<img\b/i.test(post.html)).length ?? 0;
+  if (truncated || bodies.some((body) => body.innerHTML.length > 400_000)) codes.push("truncated");
+  if (counts.bodies < counts.candidates) codes.push("missing-body");
+  if (counts.usable < counts.bodies) codes.push("empty-body");
+  if (counts.stableIds < counts.candidates) codes.push("missing-id");
+  const canonical = safeHttpUrl(doc.querySelector('link[rel="canonical"]')?.getAttribute("href"), pageUrl);
+  if (canonical && threadIdentity(canonical) && threadIdentity(pageUrl) && threadIdentity(canonical) !== threadIdentity(pageUrl))
+    return { value: null, status: "wrong-page", codes: ["wrong-thread"], counts };
+  if (codes.length) return { value, status: "partial", codes, counts };
+  return value && counts.usable > 0 ? { value, status: "complete", codes, counts }
+    : { value: null, status: "unrecognized", codes: ["unknown-layout"], counts };
+}
 
 /** XenForo 2 thread page → its posts (author, time, body), or null if it isn't one. */
 export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPage | null {
@@ -177,12 +243,12 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
     page = number(compact[1]) || page;
     pages = Math.max(pages, page, number(compact[2]));
   }
-  const bodyOf = (post: Element) => Array.from(post.querySelectorAll(".message-body .bbWrapper, .bbWrapper"))
-    .find((body) => body.closest(XENFORO_POST) === post);
+  const bodyOf = xenforoBody;
   const seen = new Set<string>();
-  const articles = Array.from(doc.querySelectorAll(XENFORO_POST)).filter((post) => {
+  const articles = xenforoCandidates(doc, page).filter((post) => {
     // The nested view repeats a collapsed original post above every page of replies.
     if (page > 1 && post.querySelector(".js-originalPostContainer")) return false;
+    if (post.matches(".message--deleted")) return false;
     const id = post.getAttribute("data-content") ?? post.id;
     const key = /(\d+)$/.exec(id)?.[1];
     if (!bodyOf(post) || (key && seen.has(key))) return false;
@@ -249,13 +315,12 @@ export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "dateti
 }
 
 /** A thread page for the reader: its posts (up to 100), and which page of how many (D-081, D-088). */
-function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
-  const thread = parseForumThread(doc, pageUrl);
-  if (!thread) return null;
+function threadArticle(thread: ForumThreadPage, doc: Document, pageUrl: string): Extracted | null {
   const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
   const textLength = htmlToText(html).length;
   if (!thread.posts.some((p) => htmlToText(p.html).length || /<img\b/i.test(p.html))) return null;
-  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength, pages: { page: thread.page, pages: thread.pages } };
+  const nextPageUrl = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
+  return { html, title: thread.title, byline: thread.posts[0]?.author ?? null, textLength, pages: { page: thread.page, pages: thread.pages }, ...(nextPageUrl ? { nextPageUrl } : {}) };
 }
 
 /**
@@ -264,7 +329,12 @@ function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
  * signatures and buttons sit outside it and are left out. Quotes become block quotes.
  */
 export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThreadPage | null {
-  const bodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => /^post_message_\d+$/.test(el.id));
+  const seen = new Set<string>();
+  const bodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => {
+    if (!/^post_message_\d+$/.test(el.id) || hiddenPost(el) || seen.has(el.id)) return false;
+    seen.add(el.id);
+    return true;
+  });
   if (!bodies.length) return null;
   const loaded = new Set(bodies.map((body) => body.id.slice("post_message_".length)));
   const offset = vbulletinTimeOffset(doc);
@@ -440,22 +510,6 @@ function vbulletinQuotes(body: Element, pageUrl: string, loaded: Set<string>) {
       label.remove();
     }
   }
-}
-
-/** A vBulletin thread page for the reader (D-098): its posts, which page of how many, and the next page's link. */
-function vbulletinThread(doc: Document, pageUrl: string): Extracted | null {
-  const thread = parseVbulletinThread(doc, pageUrl);
-  if (!thread || !thread.posts.some((p) => htmlToText(p.html).length || /<img\b/i.test(p.html))) return null;
-  const html = renderForumPosts(thread.posts.slice(0, MAX_THREAD_POSTS));
-  const nextPageUrl = safeHttpUrl(doc.querySelector('link[rel="next"], a[rel="next"]')?.getAttribute("href"), pageUrl);
-  return {
-    html,
-    title: thread.title,
-    byline: thread.posts[0]?.author ?? null,
-    textLength: htmlToText(html).length,
-    pages: { page: thread.page, pages: thread.pages },
-    nextPageUrl,
-  };
 }
 
 /** For a thread page shown without the in-app pager: which page it is, and a link to the next. */
