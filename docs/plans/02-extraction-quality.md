@@ -1,6 +1,6 @@
 # Implementation plan: incomplete-extraction detection
 
-Status: planned. Priority: 2. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
+Status: implemented in [PR #31](https://github.com/AlexStapleton/ForumAggregator/pull/31), awaiting merge. Priority: 2. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
 
 ## Outcome and boundaries
 
@@ -34,14 +34,14 @@ reading, but a followed-thread poll must not silently switch to article parsing 
 
 ## PR sequence
 
-- [ ] **E1 — diagnostics without behavior change:** add result types and adapter evidence,
+- [x] **E1 — diagnostics without behavior change:** add result types and adapter evidence,
   preserving current call sites through a small compatibility layer. Test worker and in-process
   outputs for parity. Keep raw page HTML, cookies, tokens, and query credentials out of logs.
-- [ ] **E2 — ingestion and fallback policy:** reject unsafe advancement for partial/unrecognized
+- [x] **E2 — ingestion and fallback policy:** reject unsafe advancement for partial/unrecognized
   pages before the catch-up transaction. Do not replace good post bodies with missing fragments.
   Reuse existing failure scheduling. Show usable partial content only as an explicitly labelled,
   non-progress-tracking reader preview when there is no complete cached copy.
-- [ ] **E3 — user-facing diagnostics:** distinguish stale cached content from fresh extraction;
+- [x] **E3 — user-facing diagnostics:** distinguish stale cached content from fresh extraction;
   offer existing retry/original actions and a concise source status. Ensure preview/selectors
   tools show useful matched/removed counts without exposing internal implementation jargon.
 
@@ -68,3 +68,18 @@ state transitions, worker execution, configured FlareSolverr integration, and re
 No new permanent diagnostics table is planned initially; use bounded structured logs and
 existing source error state. If false positives appear, relax the specific rule with a fixture,
 without broadly accepting incomplete pages or deleting the previous good snapshot.
+
+## Implementation record
+
+PR #31 adds serializable status/codes/counts alongside parsed posts, using the same recognized
+containers as extraction. It rejects incomplete polling before ingestion, retains good cached
+copies, labels uncached partial previews, and pauses position saving across failed source checks
+and incomplete appended pages. Existing source backoff and FlareSolverr routing remain in use.
+The reader offers Retry and Open original actions; selector preview counts remain available.
+
+Validation includes missing/empty bodies, stable IDs, short/media replies, nested and duplicate
+posts, access/empty/wrong-page states, catch-up rollback and recovery, cached-copy preservation,
+and real compiled-worker parity. Build and typecheck passed. Browser checks at 360px/1280px
+verified retry recovery and no position advance into a partial appended page. Full local Windows
+suite: 348 passed, with the pre-existing Unix file-permission assertion failing on Windows;
+see the PR for Linux SQLite/PostgreSQL CI. Generic article quality remains a later extension.

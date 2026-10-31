@@ -1,6 +1,6 @@
 # Implementation plan: quote and reply context
 
-Status: implemented in [PR #29](https://github.com/AlexStapleton/ForumAggregator/pull/29), awaiting merge after #27. Priority: 1. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
+Status: implemented in [PR #29](https://github.com/AlexStapleton/ForumAggregator/pull/29), merged with #27. Priority: 1. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
 
 ## Outcome and boundaries
 
@@ -79,4 +79,4 @@ appended pages. Quote excursions and layout changes pause position sampling to a
 
 Validation: 50 focused tests passed, plus typecheck and production build. Browser checks in the
 actual reader at 360px and 1280px covered Enter/Space activation, collapse/expand, highlighting,
-and return focus. Full SQLite/PostgreSQL CI results are linked from the PR. Merge #27 first.
+and return focus. Full SQLite/PostgreSQL CI results are linked from the PR. The reading-position dependency is now on main.

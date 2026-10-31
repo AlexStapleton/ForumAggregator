@@ -20,8 +20,7 @@ Each plan specifies the current code, proposed contracts, staged PRs, regression
 release checks. The status table records implementation progress; unmerged PRs are not released
 features. Defaults in the remaining plans are starting decisions to validate against fixtures.
 
-Dependency order: quote extraction can start now; its reader interactions must integrate with
-the reading-position work in PR #27. Extraction-quality results should land before edited-post
+Dependency order: quote context now integrates with the reading-position work in PR #27. Extraction-quality results should land before edited-post
 auditing and additional engine ingestion. Tables/code improvements can proceed independently,
 with reading-position integration before release. Choose the next real forum site before writing
 its adapter. Keep all five workstreams planned until their implementation starts.
@@ -31,8 +30,8 @@ selection depends on actual sources the user follows; table/code work can procee
 
 | Order | Work | Status | Result |
 |---|---|---|---|
-| 1 | Quote and reply context | Implemented in [#29](https://github.com/AlexStapleton/ForumAggregator/pull/29); awaiting merge | Understand who is answering whom without rereading long quotes |
-| 2 | Incomplete-extraction detection | Planned | Know when content is missing instead of treating parser failure as no activity |
+| 1 | Quote and reply context | Merged in [#29](https://github.com/AlexStapleton/ForumAggregator/pull/29) | Understand who is answering whom without rereading long quotes |
+| 2 | Incomplete-extraction detection | Implemented in [#31](https://github.com/AlexStapleton/ForumAggregator/pull/31); awaiting merge | Know when content is missing instead of treating parser failure as no activity |
 | 3 | Edited-post handling | Planned | See corrections and updated attachments without resetting the whole discussion |
 | 4 | More forum engines | Planned; choose sites first | Read more of the user's actual sources reliably |
 | 5 | Tables and code blocks | Planned | Read benchmarks, configurations, and logs comfortably on a phone |
@@ -68,6 +67,12 @@ metadata on refetch; unverified post-only references remain external. See the PR
 missing-target quotes; extraction tests plus reader interaction tests.
 
 ## 2. Incomplete-extraction detection
+
+**Implementation:** [PR #31](https://github.com/AlexStapleton/ForumAggregator/pull/31). Structured
+thread evidence protects ingestion, cached copies and saved progress; reader warnings offer retry
+and original links. Tests cover missing bodies, valid short/media replies, nested/duplicate posts,
+access failures, wrong pages, checkpoint recovery and actual worker parity. Build/typecheck and
+browser checks passed; see the PR for the full SQLite/PostgreSQL CI result. No migration needed.
 
 **Work**
 
