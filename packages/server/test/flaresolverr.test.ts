@@ -58,7 +58,7 @@ describe("XenForo thread pages", () => {
     expect(out).toContain("<strong>PepperGrower</strong>");
     expect(out).toContain('<time datetime="2026-10-11T10:00:00.000Z">Oct 11, 2026</time>');
     expect(out).toContain('src="https://forum.example/attachments/pot.jpg"');
-    expect(out).toContain("PepperGrower said:");
+    expect(out).toContain("<cite>PepperGrower wrote:</cite>");
     expect(out).toContain("Looking great!");
     expect(out.indexOf("PepperGrower</strong>")).toBeLessThan(out.indexOf("Reaper55</strong>"));
     expect(out).not.toMatch(/Click to expand|Sidebar|signature/);
