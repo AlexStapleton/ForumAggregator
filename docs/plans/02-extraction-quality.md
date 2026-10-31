@@ -1,6 +1,6 @@
 # Implementation plan: incomplete-extraction detection
 
-Status: implemented in [PR #31](https://github.com/AlexStapleton/ForumAggregator/pull/31), awaiting merge. Priority: 2. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
+Status: merged in [PR #31](https://github.com/AlexStapleton/ForumAggregator/pull/31); CI passed. Priority: 2. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
 
 ## Outcome and boundaries
 

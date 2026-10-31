@@ -31,8 +31,8 @@ selection depends on actual sources the user follows; table/code work can procee
 | Order | Work | Status | Result |
 |---|---|---|---|
 | 1 | Quote and reply context | Merged in [#29](https://github.com/AlexStapleton/ForumAggregator/pull/29) | Understand who is answering whom without rereading long quotes |
-| 2 | Incomplete-extraction detection | Implemented in [#31](https://github.com/AlexStapleton/ForumAggregator/pull/31); awaiting merge | Know when content is missing instead of treating parser failure as no activity |
-| 3 | Edited-post handling | Planned | See corrections and updated attachments without resetting the whole discussion |
+| 2 | Incomplete-extraction detection | Merged in [#31](https://github.com/AlexStapleton/ForumAggregator/pull/31) | Know when content is missing instead of treating parser failure as no activity |
+| 3 | Edited-post handling | Implemented in [#32](https://github.com/AlexStapleton/ForumAggregator/pull/32); CI passed, awaiting merge | See corrections and updated attachments without resetting the whole discussion |
 | 4 | More forum engines | Planned; choose sites first | Read more of the user's actual sources reliably |
 | 5 | Tables and code blocks | Planned | Read benchmarks, configurations, and logs comfortably on a phone |
 
@@ -97,6 +97,10 @@ integration tests covering polling, cached fallback, and subsequent recovery. Av
 a single text-length threshold as proof of completeness.
 
 ## 3. Edited-post handling
+
+**Implementation:** [PR #32](https://github.com/AlexStapleton/ForumAggregator/pull/32). Semantic fingerprints, silent legacy baselines, detected-update labels, revision-aware page caches, and persisted audits of the newest three pages within the existing request budget. SQLite/PostgreSQL CI, typecheck and production build passed. Tests cover two followers, preserved state, edits with new replies, audit failures/restarts and one-page budgets. Open readers are not replaced in the background; historical versions and deletion synchronization remain out of scope.
+
+**Related reliability fix:** [PR #33](https://github.com/AlexStapleton/ForumAggregator/pull/33) isolates concurrent FlareSolverr responses by URL while serializing requests per host. This addresses reproduced cross-page result/error sharing, not the underlying cause of a site's challenge timeout.
 
 **Work**
 

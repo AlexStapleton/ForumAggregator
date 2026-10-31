@@ -1,6 +1,6 @@
 # Implementation plan: edited-post handling
 
-Status: planned. Priority: 3. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
+Status: implemented in [PR #32](https://github.com/AlexStapleton/ForumAggregator/pull/32); SQLite/PostgreSQL CI passed, awaiting merge. Priority: 3. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
 Dependency: extraction-quality gating before enabling additional audit fetches.
 
 ## Outcome and initial policy
@@ -71,3 +71,7 @@ the window and cadence: edits outside the audited/visited pages are not guarante
 Missing posts alone are not deletion evidence; deletion synchronization and a full edit-history
 viewer are separate work. If auditing must be disabled, normal polling and repair of encountered
 posts should continue to work without rolling back the additive schema.
+
+## Implementation record
+
+PR #32 implements the bounded audit policy and migration, semantic edit detection, update labels, and page-cache invalidation. Typecheck and production build passed. Local full suite: 357 passed, with the existing Windows POSIX file-mode assertion failing; Linux CI passed. Tests cover two followers with different positions, saved/read state, edits alongside new replies, silent baseline backfill, restart/failure recovery, and one-page budgets. See `docs/EDITED-POSTS.md` on the implementation branch for behavior and limits. Open readers retain their current content until reopened or a page is requested, preserving scroll position instead of replacing content during reading.
