@@ -116,6 +116,92 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     return { clock, web, call, setThread };
   }
 
+  it("detects edits once, preserves follower state and refreshes a cached page", async () => {
+    const { clock, web, call, setThread } = await start();
+    setThread(3);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    const card = (await call("GET", "/api/items?filter=all")).json().items[0];
+    await app!.db.kysely.updateTable("subscriptions").set({ thread_read_post: 1001 }).where("source_id", "=", src.id).execute();
+    await call("PATCH", `/api/items/${card.id}`, { read: true, saved: true });
+    const owner = await app!.db.kysely.selectFrom("users").selectAll().executeTakeFirstOrThrow();
+    const otherId = "other-edit-reader";
+    await app!.db.kysely.insertInto("users").values({ ...owner, id: otherId, username: "other-reader" }).execute();
+    const subscription = await app!.db.kysely.selectFrom("subscriptions").selectAll().where("source_id", "=", src.id).executeTakeFirstOrThrow();
+    await app!.db.kysely.insertInto("subscriptions").values({ ...subscription, user_id: otherId, thread_read_post: 1000 }).execute();
+    const login = await app!.fastify.inject({ method: "POST", url: "/api/auth/login", payload: { username: "other-reader", password: "correct horse battery" }, headers: CSRF });
+    const otherCookie = sessionCookie(login)!;
+    const state = async () => ({
+      followers: await app!.db.kysely.selectFrom("subscriptions").selectAll().where("source_id", "=", src.id).execute(),
+      items: await app!.db.kysely.selectFrom("item_states").selectAll().where("source_id", "=", src.id).execute(),
+      card: await app!.db.kysely.selectFrom("items").selectAll().where("id", "=", card.id).executeTakeFirstOrThrow(),
+    });
+    const before = await state();
+    const endpoint = `/api/items/${card.id}/reader`;
+    expect((await call("GET", endpoint + "?page=1")).json().html).not.toContain("Corrected voltage");
+    const changed = posts(1000, 3); changed[2].text = 'Corrected voltage <a href="https://assets.example/file?id=2">attachment</a>';
+    const body = page(1, 1, changed);
+    web.set(THREAD, { body, contentType: "text/html" });
+    web.set(THREAD + "latest", { body, contentType: "text/html", finalUrl: THREAD });
+    clock.now += 60000;
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+    const row = async () => app!.db.kysely.selectFrom("thread_posts").selectAll().where("source_id", "=", src.id).where("post_id", "=", "1002").executeTakeFirstOrThrow();
+    expect(await row()).toMatchObject({ content_revision: 1, update_detected_at: clock.now });
+    expect(await state()).toEqual(before);
+    const content = (await call("GET", endpoint)).json();
+    expect(content.html).toContain("Corrected voltage"); expect(content.html).toContain("Update detected");
+    const whole = (await call("GET", endpoint + "?page=1")).json();
+    expect(whole.html).toContain("Corrected voltage"); expect(whole.html).toContain("Update detected");
+    const other = (await app!.fastify.inject({ method: "GET", url: endpoint, headers: { cookie: otherCookie } })).json();
+    expect(other.html).toContain("Corrected voltage"); expect(other.html).toContain("Update detected");
+    expect(await state()).toEqual(before);
+    const once = await row();
+    clock.now += 60000;
+    await app!.feeds.checkSource(src.id);
+    expect(await row()).toEqual(once);
+    web.set(THREAD + "latest", { body: body.replaceAll("Today at 10:00 AM", "Yesterday"), contentType: "text/html", finalUrl: THREAD });
+    await app!.feeds.checkSource(src.id);
+    expect(await row()).toMatchObject({ content_revision: 1, update_detected_at: once.update_detected_at });
+    await app!.db.kysely.updateTable("thread_posts").set({ content_fingerprint: null, content_revision: 0, update_detected_at: null }).where("source_id", "=", src.id).execute();
+    await app!.feeds.checkSource(src.id);
+    expect(await row()).toMatchObject({ content_revision: 0, update_detected_at: null });
+    expect((await row()).content_fingerprint).toBeTruthy();
+    const newer = [...changed, ...posts(1003, 1)]; newer[2].text = "Another correction";
+    web.set(THREAD + "latest", { body: page(1, 1, newer), contentType: "text/html", finalUrl: THREAD });
+    expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 1 });
+    expect(await row()).toMatchObject({ content_revision: 1 });
+    expect((await app!.db.kysely.selectFrom("item_states").select("saved").where("item_id", "=", card.id).where("user_id", "=", owner.id).executeTakeFirstOrThrow()).saved).toBe(1);
+  });
+
+  it.each([1, 3])("audits every six successful polls within a %i-page budget across restart/failure", async (budget) => {
+    const { clock, web, call, setThread } = await start();
+    setThread(40);
+    const src = (await call("POST", "/api/sources", { url: THREAD })).json();
+    setThread(45);
+    await app!.feeds.checkSource(src.id);
+    await app!.db.kysely.updateTable("sources").set({ thread_audit: null }).where("id", "=", src.id).execute();
+    await call("PUT", "/api/settings/checking", { intervalMinutes: 30, threadIntervalMinutes: 15, threadPagesPerCheck: budget });
+    const audit = async () => (await app!.db.kysely.selectFrom("sources").select("thread_audit").where("id", "=", src.id).executeTakeFirstOrThrow()).thread_audit;
+    for (let i = 0; i < 5; i++) {
+      const before = web.requests.length;
+      expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+      expect(web.requests.length - before).toBeLessThanOrEqual(budget);
+    }
+    const checkpoint = await audit();
+    expect(JSON.parse(checkpoint!)).toMatchObject({ polls: 5, offset: 1, pages: 3 });
+    web.set(THREAD + "page-2", { body: page(2, 3, posts(1020, 20)).replace('class="bbWrapper"', 'class="broken"'), contentType: "text/html" });
+    const restarted = new FeedService(app!.db, ConfigSchema.parse({ polling: { maxPagesPerPoll: budget } }), web.fetcher, new HostLimiter(0, 0, async () => {}), () => clock.now);
+    const before = web.requests.length;
+    expect(await restarted.checkSource(src.id)).toMatchObject({ ok: false });
+    expect(web.requests.length - before).toBeLessThanOrEqual(budget);
+    expect(await audit()).toEqual(checkpoint);
+    const changed = posts(1020, 20); changed[0].text = "Edited older reply";
+    web.set(THREAD + "page-2", { body: page(2, 3, changed), contentType: "text/html" });
+    expect(await restarted.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+    if (budget === 1) expect(await restarted.checkSource(src.id)).toMatchObject({ ok: true, newItems: 0 });
+    expect(JSON.parse((await audit())!)).toMatchObject({ polls: 0, offset: 2 });
+    expect(await app!.db.kysely.selectFrom("thread_posts").select(["html", "content_revision"]).where("source_id", "=", src.id).where("post_id", "=", "1020").executeTakeFirstOrThrow()).toMatchObject({ html: expect.stringContaining("Edited older reply"), content_revision: 1 });
+  });
+
   it("preserves the catch-up checkpoint, bodies and unread state when a later page parses only partially", async () => {
     const { clock, web, call, setThread } = await start();
     setThread(20);
