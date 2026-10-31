@@ -26,7 +26,7 @@ let currentBase = "";
 // SOURCE elements are removed by the allow-list; resolve picture images before that happens.
 purify.addHook("beforeSanitizeElements", (node) => {
   const el = node as unknown as Element;
-  if (el.tagName === "PICTURE") {
+  if (el.tagName === "PICTURE" || (el.tagName === "A" && el.matches('.js-lbImage[data-type="image"]'))) {
     for (const img of Array.from(el.querySelectorAll("img"))) restoreReaderImage(img, currentBase);
   }
 });
