@@ -1,6 +1,6 @@
 # Implementation plan: quote and reply context
 
-Status: planned. Priority: 1. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
+Status: implemented in [PR #29](https://github.com/AlexStapleton/ForumAggregator/pull/29), awaiting merge after #27. Priority: 1. Parent: [approved roadmap](../THREAD-READING-PLAN.md).
 
 ## Outcome and boundaries
 
@@ -35,13 +35,13 @@ Images and tables can make a quote long even when its text is short.
 
 ## PR sequence
 
-- [ ] **Q1 — normalization and fixtures:** add nested/long/missing-author examples for both
+- [x] **Q1 — normalization and fixtures:** add nested/long/missing-author examples for both
   engines; normalize authors and references; retain images, code, and table content. Test
   generated identifiers and URL validation independently of the source's classes/IDs.
-- [ ] **Q2 — reader controls:** implement collapse/expand, local-reference lookup, target
+- [x] **Q2 — reader controls:** implement collapse/expand, local-reference lookup, target
   highlighting, return-to-reply, and external-link fallback. Scope lookups to the current
   thread and loaded pages. Preserve the scroll anchor when expanding content above it.
-- [ ] **Q3 — reading-position integration:** distinguish quote jumps and layout changes from
+- [x] **Q3 — reading-position integration:** distinguish quote jumps and layout changes from
   normal reading progression. A jump must not mark intervening replies read; collapsing a
   quote must not advance progress just because later post ends moved into view. Preserve
   expansion state while appending a page, with bounded state cleared when leaving the thread.
@@ -68,3 +68,15 @@ Q1–Q3 pass focused tests and required CI, both engines retain their current ex
 and browser checks show no reading-position regressions. No database migration is required
 unless implementation chooses to persist structured quote metadata; document that decision
 before adding schema. If controls fail, plain readable quotes and original links must remain.
+
+## Implementation record
+
+PR #29 implements Q1–Q3 without a database migration. Quote metadata uses sanitized `cite`
+URLs and visible attribution. Post-only redirects resolve locally only when their target is
+verified in the fetched page; otherwise the original link remains external. Previously stored
+posts gain metadata on refetch. Long quotes use native details controls; DOM state survives
+appended pages. Quote excursions and layout changes pause position sampling to avoid false progress.
+
+Validation: 50 focused tests passed, plus typecheck and production build. Browser checks in the
+actual reader at 360px and 1280px covered Enter/Space activation, collapse/expand, highlighting,
+and return focus. Full SQLite/PostgreSQL CI results are linked from the PR. Merge #27 first.

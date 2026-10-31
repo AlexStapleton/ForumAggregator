@@ -17,8 +17,8 @@ Detailed implementation plans:
 5. [Tables and code blocks](plans/05-tables-code.md)
 
 Each plan specifies the current code, proposed contracts, staged PRs, regression cases, and
-release checks. These are implementation proposals, not completed features. Concrete defaults
-are starting decisions to validate against fixtures, rather than release promises.
+release checks. The status table records implementation progress; unmerged PRs are not released
+features. Defaults in the remaining plans are starting decisions to validate against fixtures.
 
 Dependency order: quote extraction can start now; its reader interactions must integrate with
 the reading-position work in PR #27. Extraction-quality results should land before edited-post
@@ -31,7 +31,7 @@ selection depends on actual sources the user follows; table/code work can procee
 
 | Order | Work | Status | Result |
 |---|---|---|---|
-| 1 | Quote and reply context | Planned | Understand who is answering whom without rereading long quotes |
+| 1 | Quote and reply context | Implemented in [#29](https://github.com/AlexStapleton/ForumAggregator/pull/29); awaiting merge | Understand who is answering whom without rereading long quotes |
 | 2 | Incomplete-extraction detection | Planned | Know when content is missing instead of treating parser failure as no activity |
 | 3 | Edited-post handling | Planned | See corrections and updated attachments without resetting the whole discussion |
 | 4 | More forum engines | Planned; choose sites first | Read more of the user's actual sources reliably |
@@ -41,6 +41,12 @@ For each item, record its PR, fixtures, validation results, and remaining limita
 work proceeds. Mark it complete only when the acceptance criteria have been checked.
 
 ## 1. Quote and reply context
+
+**Implementation:** [PR #29](https://github.com/AlexStapleton/ForumAggregator/pull/29), stacked on
+reading positions (#27). Fifty focused tests, typecheck and production build passed locally;
+keyboard and layout checks passed in the real reader at 360px and 1280px. Nested XenForo and
+vBulletin fixtures cover attribution, references and retained content. Existing stored posts gain
+metadata on refetch; unverified post-only references remain external. See the PR for full CI results.
 
 **Work**
 
