@@ -62,7 +62,9 @@ function imageSet(el: Element, base: string): string | null {
 /** Recover image addresses before Readability or sanitization removes source metadata. */
 export function restoreReaderImage(img: Element, base: string): void {
   const href = httpsImage(img.closest("a[href]")?.getAttribute("href") ?? null, base);
-  let selected = href && IMAGE_FILE.test(new URL(href).pathname) ? href : null;
+  const attachmentImage = img.closest('a.js-lbImage[data-type="image"][href]');
+  const xenforoImage = href && attachmentImage && new URL(href).origin === new URL(base).origin && /\/attachments\//.test(new URL(href).pathname);
+  let selected = href && (IMAGE_FILE.test(new URL(href).pathname) || xenforoImage) ? href : null;
   const picture = img.parentElement?.tagName === "PICTURE" ? img.parentElement : null;
   if (!selected && picture) {
     for (const source of Array.from(picture.children)) {

@@ -11,6 +11,42 @@ const vbulletin = (body: string) => `<h1>Benchmarks</h1><div id="post1">
   <a class="username">Tester</a><div id="post_message_1">${body}</div></div>`;
 
 describe("reader images", () => {
+  const attachment = `<section class="message-attachments"><h4>Attachments</h4><ul class="attachmentList">
+    <li class="file"><a class="file-preview js-lbImage" data-type="image" href="/attachments/watering-chart-png.151903/">
+      <img src="/thumb.png" srcset="/thumb2.png 2x" alt="Watering chart" onerror="alert(1)"></a>
+      <div class="file-content"><span class="file-name">Watering chart.png</span><div class="file-meta">Views: 12</div></div></li>
+    <li class="file"><a class="file-preview" href="/attachments/notes-pdf.151904/">Icon</a><div class="file-content"><span class="file-name">Notes.pdf</span></div></li>
+    </ul></section>`;
+
+  it.each(["Post with an attached chart", ""])("keeps separate XenForo attachments in reader and polling (%s)", (text) => {
+    const html = xenforo(text).replace("</article>", attachment + "</article>");
+    for (const out of [extractArticle(html, URL)?.html, parseThreadPage(html, URL)?.posts[0]?.html]) {
+      expect(out).toContain('src="https://forum.example/attachments/watering-chart-png.151903/"');
+      expect(out).toContain('href="https://forum.example/attachments/watering-chart-png.151903/"');
+      expect(out).toContain("Watering chart.png</figcaption>");
+      expect(out).toContain('href="https://forum.example/attachments/notes-pdf.151904/"');
+      expect(out).toContain("Notes.pdf</a>");
+      expect(out).not.toMatch(/thumb|Views:|onerror|alert/);
+    }
+  });
+
+  it("does not duplicate inline attachments or take attachments from nested/quoted posts", () => {
+    const inline = '<a href="/attachments/watering-chart-png.151903/">Chart</a>';
+    const nested = '<article class="message" data-content="post-2"><div class="bbWrapper">Second</div>' + attachment.replaceAll("151903", "251903") + '</article>';
+    const html = xenforo(inline).replace("</article>", attachment + '<blockquote>' + attachment.replaceAll("151903", "351903") + '</blockquote>' + nested + '</article>');
+    const posts = parseThreadPage(html, URL)!.posts;
+    expect(posts).toHaveLength(2);
+    expect(posts[0]!.html.match(/watering-chart-png\.151903/g)).toHaveLength(1);
+    expect(posts[0]!.html).not.toMatch(/251903|351903/);
+    expect(posts[1]!.html).toContain("251903");
+  });
+
+  it("resolves declared XenForo attachment images before sanitizing their metadata", () => {
+    const html = '<a class="js-lbImage" data-type="image" href="/attachments/chart-png.123/"><img src="/thumb.png"></a>';
+    expect(sanitizeHtml(html, URL)).toContain('src="https://forum.example/attachments/chart-png.123/"');
+    expect(sanitizeHtml(html.replace('/attachments/chart-png.123/', 'javascript:alert(1)'), URL)).not.toContain('javascript:');
+  });
+
   it.each(["data-src", "data-lazy-src", "data-original"])("restores %s in sanitized feed content", (attr) => {
     const out = sanitizeHtml(`<img src="data:image/gif;base64,placeholder" ${attr}="/results.png" alt="Benchmark" onerror="alert(1)">`, URL);
     expect(out).toContain('src="https://forum.example/results.png"');

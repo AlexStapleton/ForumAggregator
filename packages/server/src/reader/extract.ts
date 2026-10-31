@@ -177,6 +177,37 @@ const hiddenPost = (post: Element) => !!post.closest('[hidden], [aria-hidden="tr
 const xenforoBody = (post: Element) => Array.from(post.querySelectorAll(".message-body .bbWrapper, .bbWrapper"))
   .find((body) => body.closest(XENFORO_POST) === post);
 const xenforoId = (post: Element) => /(\d+)$/.exec(post.getAttribute("data-content") ?? post.id)?.[1] ?? null;
+/** XenForo keeps unattached-to-text uploads beside the bbWrapper, not inside it. */
+function xenforoAttachments(post: Element, body: Element, pageUrl: string): string {
+  const seen = new Set(Array.from(body.querySelectorAll("a[href], img[src]")).map(el =>
+    safeHttpUrl(el.getAttribute(el.tagName === "IMG" ? "src" : "href"), pageUrl)));
+  const out: string[] = [];
+  for (const section of Array.from(post.querySelectorAll(".message-attachments"))) {
+    if (section.closest(XENFORO_POST) !== post || body.contains(section) || hiddenPost(section)) continue;
+    for (const file of Array.from(section.querySelectorAll(".file"))) {
+      if (file.closest(XENFORO_POST) !== post || hiddenPost(file)) continue;
+      const link = file.querySelector("a.file-preview[href], .file-name a[href], .file-content a[href]");
+      const href = safeHttpUrl(link?.getAttribute("href"), pageUrl);
+      if (!link || !href || seen.has(href)) continue;
+      seen.add(href);
+      const img = link.querySelector("img")?.cloneNode(true) as Element | undefined;
+      const name = file.querySelector(".file-name")?.textContent?.trim() || img?.getAttribute("alt") || link.textContent?.trim() || "Attachment";
+      const anchor = post.ownerDocument.createElement("a");
+      anchor.setAttribute("href", href);
+      if (img && link.matches('.js-lbImage[data-type="image"]')) {
+        anchor.className = "js-lbImage";
+        anchor.setAttribute("data-type", "image");
+        anchor.append(img);
+        restoreReaderImage(img, pageUrl);
+        out.push(`<figure>${anchor.outerHTML}<figcaption>${escHtml(name)}</figcaption></figure>`);
+      } else {
+        anchor.textContent = name;
+        out.push(`<p>${anchor.outerHTML}</p>`);
+      }
+    }
+  }
+  return out.length ? `<div><p><strong>Attachments</strong></p>${out.join("")}</div>` : "";
+}
 function xenforoCandidates(doc: Document, page: number) {
   return Array.from(doc.querySelectorAll(XENFORO_POST)).filter((post) => !hiddenPost(post) &&
     (post.matches(".js-post, .message--post, .message--deleted") || xenforoId(post) !== null || !!xenforoBody(post)) &&
@@ -280,7 +311,7 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
       // Standard ISO from the exact time, so browsers can show it in local time (XenForo writes "+0000").
       datetime: postedAt !== null ? new Date(postedAt).toISOString() : (time?.getAttribute("datetime") ?? null),
       timeLabel: time?.textContent?.trim() || null,
-      html: sanitizeHtml(body.innerHTML, pageUrl),
+      html: sanitizeHtml(body.innerHTML + xenforoAttachments(post, body, pageUrl), pageUrl),
     };
   });
   const title =
