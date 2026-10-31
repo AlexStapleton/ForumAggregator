@@ -22,7 +22,7 @@ export function trackThreadPosition(root: HTMLElement, initial: number, send: (i
     return pending;
   };
   const sample = () => {
-    if (root.ownerDocument.hidden) return;
+    if (root.ownerDocument.hidden || root.dataset.quotePause) return;
     const bounds = root.getBoundingClientRect();
     const posts = [];
     for (const post of Array.from(root.querySelectorAll<HTMLElement>('.reader-content section[id^="fa-post-"]'))) {

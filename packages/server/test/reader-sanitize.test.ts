@@ -107,9 +107,13 @@ describe("vBulletin threads (D-098)", () => {
   it("turns vB3, vB4 and Bike Forums quotes into block quotes with who wrote them", () => {
     const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
     const reply = thread.posts[1]!.html;
-    expect(reply).toMatch(/<blockquote><p><strong>Rider One wrote:<\/strong><\/p>[\s\S]*Is steel still worth it\?[\s\S]*<\/blockquote>/);
-    expect(reply).toMatch(/<blockquote><p><strong>Someone wrote:<\/strong><\/p>[\s\S]*Steel is real\.[\s\S]*<\/blockquote>/);
-    expect(reply).toMatch(/<blockquote><p><strong>Rider Three wrote:<\/strong><\/p>[\s\S]*Bike Forums' own quote box\.[\s\S]*<\/blockquote>[\s\S]*And a reply to it\./);
+    const quotes = new JSDOM(reply).window.document.querySelectorAll("blockquote");
+    expect(Array.from(quotes, (q) => q.querySelector("cite")?.textContent)).toEqual(["Rider One wrote:", "Someone wrote:", "Rider Three wrote:"]);
+    expect(quotes[0]!.textContent).toContain("Is steel still worth it?");
+    expect(quotes[1]!.textContent).toContain("Steel is real.");
+    expect(quotes[2]!.textContent).toContain("Bike Forums' own quote box.");
+    expect(quotes[0]!.querySelector("a")?.href).toBe("https://forum.example/classic-vintage/showthread.php?p=501#post501");
+    expect(reply).toContain("And a reply to it.");
     expect(reply).not.toMatch(/Quote:|Originally Posted by|<table/);
     expect(reply).toContain("Yes, for comfort.");
   });

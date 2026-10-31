@@ -10,6 +10,7 @@ import { KIND_LABEL } from "../kinds";
 import { readPrefs } from "../prefs";
 import { fullDate, relativeTime } from "../time";
 import { trackThreadPosition } from "../threadPosition";
+import { enhanceQuotes } from "../quoteContext";
 
 interface Props {
   mode: "overlay" | "pane";
@@ -149,6 +150,13 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
     const post = root.querySelector(`#fa-post-${target}`);
     if (post) root.scrollTo({ top: root.scrollTop + post.getBoundingClientRect().top - root.getBoundingClientRect().top - 80 });
   }, [content]);
+
+  // Quote controls persist while pages append; a new reading request resets the excursion.
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || !item?.url) return;
+    return enhanceQuotes(root, item.url);
+  }, [item?.id, item?.url, requestKey]);
 
   // Save after scrolling settles, and send the last visible position when leaving the page.
   useEffect(() => {

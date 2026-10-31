@@ -19,7 +19,7 @@ const ALLOWED_TAGS = [
   "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
   "div", "span", "section", "article", "aside", "details", "summary",
 ];
-const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "datetime"];
+const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "datetime", "cite"];
 
 let currentBase = "";
 
@@ -38,6 +38,11 @@ purify.addHook("beforeSanitizeAttributes", (node) => {
 
 purify.addHook("afterSanitizeAttributes", (node) => {
   const el = node as unknown as Element;
+  if (el.hasAttribute("cite")) {
+    const cite = safeHttpUrl(el.getAttribute("cite"), currentBase);
+    if (el.tagName === "BLOCKQUOTE" && cite) el.setAttribute("cite", cite);
+    else el.removeAttribute("cite");
+  }
   if (el.tagName === "A") {
     const href = safeHttpUrl(el.getAttribute("href"), currentBase);
     if (href) {

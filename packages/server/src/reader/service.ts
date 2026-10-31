@@ -365,7 +365,7 @@ export class ReaderService {
     version = "",
   ): Promise<ReaderContent> {
     if (!pager) return this.summaryOnly(base, "This link isn't a forum thread.");
-    const cacheId = version ? `${item.id}@${version}` : item.id;
+    const cacheId = `quotes-v1:${version ? `${item.id}@${version}` : item.id}`;
     const key = `${cacheId}|${want}`;
     const known = this.threadPages.get(key);
     if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
