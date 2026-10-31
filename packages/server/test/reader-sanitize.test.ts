@@ -107,16 +107,20 @@ describe("vBulletin threads (D-098)", () => {
   it("turns vB3, vB4 and Bike Forums quotes into block quotes with who wrote them", () => {
     const thread = parseVbulletinThread(new JSDOM(html, { url }).window.document, url)!;
     const reply = thread.posts[1]!.html;
-    expect(reply).toMatch(/<blockquote><p><strong>Rider One wrote:<\/strong><\/p>[\s\S]*Is steel still worth it\?[\s\S]*<\/blockquote>/);
-    expect(reply).toMatch(/<blockquote><p><strong>Someone wrote:<\/strong><\/p>[\s\S]*Steel is real\.[\s\S]*<\/blockquote>/);
-    expect(reply).toMatch(/<blockquote><p><strong>Rider Three wrote:<\/strong><\/p>[\s\S]*Bike Forums' own quote box\.[\s\S]*<\/blockquote>[\s\S]*And a reply to it\./);
+    const quotes = new JSDOM(reply).window.document.querySelectorAll("blockquote");
+    expect(Array.from(quotes, (q) => q.querySelector("cite")?.textContent)).toEqual(["Rider One wrote:", "Someone wrote:", "Rider Three wrote:"]);
+    expect(quotes[0]!.textContent).toContain("Is steel still worth it?");
+    expect(quotes[1]!.textContent).toContain("Steel is real.");
+    expect(quotes[2]!.textContent).toContain("Bike Forums' own quote box.");
+    expect(quotes[0]!.querySelector("a")?.href).toBe("https://forum.example/classic-vintage/showthread.php?p=501#post501");
+    expect(reply).toContain("And a reply to it.");
     expect(reply).not.toMatch(/Quote:|Originally Posted by|<table/);
     expect(reply).toContain("Yes, for comfort.");
   });
 
   it("is used by the reader, with the page count and the next page's link", () => {
     const article = extractWithSelectors(html, url, {}).article!;
-    expect(article.html).toMatch(/^<section><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
+    expect(article.html).toMatch(/^<section id="fa-post-501"><p><strong>Rider One<\/strong> · <time datetime="">10-23-26 \| 12:23 AM<\/time><\/p>/);
     expect(article.pages).toEqual({ page: 1, pages: 3 });
     expect(article.nextPageUrl).toBe("https://forum.example/classic-vintage/100-steel-frames-2.html");
     expect(article.byline).toBe("Rider One");

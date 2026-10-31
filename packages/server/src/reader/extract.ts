@@ -199,6 +199,7 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
       Array.from(post.querySelectorAll("time.u-dt, time[datetime]")).find((t) => !t.closest(".message-user, .message-cell--user, .message-userDetails")) ??
       null;
     const body = bodyOf(post)!;
+    xenforoQuotes(body, pageUrl, seen);
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
     const idSource = post.getAttribute("data-content") ?? post.id ?? "";
@@ -234,14 +235,15 @@ export function cleanPageTitle(title: string | null | undefined): string {
 }
 
 /** Posts as reader HTML: author and time above each body. Input bodies are already sanitised. */
-export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html">>): string {
+export function renderForumPosts(posts: Array<Pick<ForumPost, "author" | "datetime" | "timeLabel" | "html"> & { id?: string | null }>): string {
   return posts
     .map((p) => {
       const head = [
         p.author ? `<strong>${escHtml(p.author)}</strong>` : "",
         p.timeLabel ? `<time datetime="${escHtml(p.datetime ?? "")}">${escHtml(p.timeLabel)}</time>` : "",
       ].filter(Boolean).join(" · ");
-      return `<section><p>${head}</p>${p.html}</section><hr>`;
+      const anchor = p.id && /^\d+$/.test(p.id) ? ` id="fa-post-${p.id}"` : "";
+      return `<section${anchor}><p>${head}</p>${p.html}</section><hr>`;
     })
     .join("\n");
 }
@@ -264,6 +266,7 @@ function xenforoThread(doc: Document, pageUrl: string): Extracted | null {
 export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThreadPage | null {
   const bodies = Array.from(doc.querySelectorAll('[id^="post_message_"]')).filter((el) => /^post_message_\d+$/.test(el.id));
   if (!bodies.length) return null;
+  const loaded = new Set(bodies.map((body) => body.id.slice("post_message_".length)));
   const offset = vbulletinTimeOffset(doc);
   const now = Date.now();
   const posts: ForumPost[] = bodies.map((body) => {
@@ -273,7 +276,7 @@ export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThrea
     // vB4: .postdate; vB3: the post's header cell ("10-23-26 | 12:23 AM", "#1" in the next cell).
     const dateEl = post?.querySelector(".postdate .date, .postdate") ?? post?.querySelector(".thead .tcell, td.thead, .thead");
     const timeLabel = dateEl?.textContent?.replace(/\s+/g, " ").replace(/#\s*\d+\s*$/, "").trim().slice(0, 60) || null;
-    vbulletinQuotes(body);
+    vbulletinQuotes(body, pageUrl, loaded);
     for (const junk of Array.from(body.querySelectorAll("script, noscript, img[alt='View Post']"))) junk.remove();
     // A real time only when the page says which time zone its times are in (D-123).
     const postedAt = offset !== null && timeLabel ? vbulletinTime(timeLabel, offset, now) : null;
@@ -339,17 +342,67 @@ export function vbulletinTime(label: string, offsetMinutes: number, now: number)
   return Date.UTC(year, month - 1, day, hour, minute) - offsetMinutes * 60_000;
 }
 
+/** Attribution is plain text; references still pass through the HTML URL allow-list. */
+function quoteAttribution(quote: Element, author: string | null, href: string | null) {
+  const doc = quote.ownerDocument;
+  const p = doc.createElement("p");
+  const cite = doc.createElement("cite");
+  cite.textContent = author ? `${author.trim()} wrote:` : "Quoted post";
+  p.append(cite);
+  if (href) {
+    quote.setAttribute("cite", href);
+    const a = doc.createElement("a");
+    a.setAttribute("href", href);
+    a.textContent = "View original post";
+    p.append(" ", a);
+  }
+  if (author || href) quote.prepend(p);
+}
+
+function xenforoQuotes(body: Element, pageUrl: string, loaded: Set<string>) {
+  for (const quote of Array.from(body.querySelectorAll("blockquote.bbCodeBlock--quote")).reverse()) {
+    const title = Array.from(quote.querySelectorAll(".bbCodeBlock-title"))
+      .find((el) => el.closest("blockquote") === quote);
+    const author = quote.getAttribute("data-quote")?.trim() ||
+      title?.textContent?.trim().replace(/\s+(said|wrote):?\s*$/i, "") || null;
+    let href = safeHttpUrl(title?.querySelector("a[href]")?.getAttribute("href"), pageUrl);
+    // A post-only reference does not establish which thread it belongs to. Keep it external.
+    const postId = /^post: (\d+)$/.exec(quote.getAttribute("data-source") ?? "")?.[1];
+    const page = new URL(pageUrl);
+    const forumPath = /^(.*\/)threads\//.exec(page.pathname)?.[1];
+    if (!href && postId && forumPath) href = new URL(`${forumPath}posts/${postId}/`, page.origin).href;
+    title?.remove();
+    quoteAttribution(quote, author, href);
+    // Post-only redirects are globally addressed, but only a match in this parsed page proves
+    // membership of this thread. Keep the original link while recording a verified local cite.
+    if (href && postId && loaded.has(postId)) {
+      const ref = new URL(href);
+      const referenceId = /\/posts\/(\d+)\/?$/.exec(ref.pathname)?.[1] ??
+        (/\/goto\/post$/.test(ref.pathname) ? ref.searchParams.get("id") : null);
+      if (ref.origin === page.origin && referenceId === postId) {
+        page.hash = `post-${postId}`;
+        quote.setAttribute("cite", page.href);
+      }
+    }
+  }
+}
+
 /** vBulletin's quote boxes (vB3 "Quote:" + table, vB4 .bbcode_container) → <blockquote>. */
-function vbulletinQuotes(body: Element) {
+function vbulletinQuotes(body: Element, pageUrl: string, loaded: Set<string>) {
   const doc = body.ownerDocument;
-  const quote = (who: string | null, inner: Element | null) => {
+  const quote = (who: string | null, inner: Element | null, href: string | null) => {
     const bq = doc.createElement("blockquote");
-    if (who) {
-      const p = doc.createElement("p");
-      const b = doc.createElement("strong");
-      b.textContent = `${who} wrote:`;
-      p.append(b);
-      bq.append(p);
+    const safe = safeHttpUrl(href, pageUrl);
+    quoteAttribution(bq, who, safe);
+    if (safe) {
+      const ref = new URL(safe);
+      const page = new URL(pageUrl);
+      const id = ref.searchParams.get("p");
+      if (ref.origin === page.origin && /\/showthread\.php$/i.test(ref.pathname) &&
+        !ref.searchParams.has("t") && id && loaded.has(id)) {
+        page.hash = `post${id}`;
+        bq.setAttribute("cite", page.href);
+      }
     }
     if (inner) bq.append(...Array.from(inner.childNodes));
     return bq;
@@ -357,8 +410,9 @@ function vbulletinQuotes(body: Element) {
   // vB4
   for (const box of Array.from(body.querySelectorAll(".bbcode_container")).reverse()) {
     const who = box.querySelector(".bbcode_postedby strong")?.textContent?.trim() ?? null;
+    const href = box.querySelector(".bbcode_postedby a[href]")?.getAttribute("href") ?? null;
     box.querySelector(".bbcode_postedby")?.remove();
-    box.replaceWith(quote(who, box.querySelector(".message, .bbcode_quote") ?? box));
+    box.replaceWith(quote(who, box.querySelector(".message, .bbcode_quote") ?? box, href));
   }
   // vB3: <div><div class="smallfont">Quote:</div><table>…<td class="alt2">[<div>Originally Posted by <strong>X</strong></div><div>text</div>]</td>…</table></div>
   // Bike Forums: <div><div><label>Quote:</label></div><div class="panel alt2">[same]</div></div>
@@ -371,13 +425,15 @@ function vbulletinQuotes(body: Element) {
     const cell = next?.tagName === "TABLE" ? next.querySelector("td") : next;
     if (!next || !cell) continue;
     let who: string | null = null;
+    let href: string | null = null;
     const by = Array.from(cell.children).find((c) => /^\s*Originally Posted by/i.test(c.textContent ?? ""));
     if (by) {
       who = by.querySelector("strong, b")?.textContent?.trim() ?? null;
+      href = by.querySelector("a[href]")?.getAttribute("href") ?? null;
       by.remove();
     }
     const box = label.parentElement && label.parentElement !== body ? label.parentElement : null;
-    const replacement = quote(who, cell);
+    const replacement = quote(who, cell, href);
     if (box && box.children.length === 2) box.replaceWith(replacement);
     else {
       next.replaceWith(replacement);

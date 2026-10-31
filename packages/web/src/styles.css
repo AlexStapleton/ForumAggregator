@@ -423,3 +423,13 @@ input[readonly] { color: var(--muted); background: transparent; }
   .pager-numbers { display: none; }
   .reader-pager button { min-width: 40px; padding: 0.4rem 0.5rem; }
 }
+
+/* Quote controls keep attribution visible and support keyboard navigation. */
+.reader-content blockquote > p:has(> cite) { color: var(--text); }
+.reader-content blockquote summary { cursor: pointer; padding: .4rem 0; }
+.reader-content blockquote summary:focus-visible, .quote-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.reader-content .quote-jump { display: block; margin: .3rem 0; color: var(--accent); }
+.reader-content .quote-jump[hidden] { display: none; }
+.reader-content .quote-target { outline: 2px solid var(--accent); outline-offset: 4px; }
+.quote-return { position: sticky; top: 0; z-index: 2; padding: .5rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+.quote-return[hidden] { display: none; }

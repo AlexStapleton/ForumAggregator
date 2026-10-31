@@ -6,6 +6,11 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+### Added
+- Followed threads remember each account's reading position, reopen at the first unread reply
+  with context, and let readers continue through long batches. Position saves pause during
+  catch-up so missing older replies are not skipped.
+
 ### Fixed
 - Followed threads resume gaps across checks when new replies exceed the page budget. Catch-up
   progress survives restarts, appears in the reader, and commits atomically with posts. The usual

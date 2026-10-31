@@ -145,6 +145,33 @@ export class ReaderService {
     return p;
   }
 
+  async saveThreadPosition(viewer: Viewer, itemId: string, postId: number): Promise<{ saved: boolean } | null> {
+    const item = await this.db.kysely.selectFrom("items")
+      .innerJoin("subscriptions as s", "s.source_id", "items.source_id")
+      .innerJoin("sources", "sources.id", "items.source_id")
+      .select("items.source_id").where("items.id", "=", itemId).where("s.user_id", "=", viewer.id)
+      .where("sources.kind", "=", "thread").executeTakeFirst();
+    if (!item) return null;
+    // One conditional update: late requests from another tab cannot move the position backward.
+    const result = await this.db.kysely.updateTable("subscriptions").set({ thread_read_post: postId })
+      .where("user_id", "=", viewer.id).where("source_id", "=", item.source_id)
+      .where((eb) => eb.or([eb("thread_read_post", "is", null), eb("thread_read_post", "<", postId)]))
+      // Do not skip replies still missing behind the newest page while catching up.
+      .where((eb) => eb.exists(eb.selectFrom("sources").select("id").where("id", "=", item.source_id).where("thread_catchup", "is", null)))
+      .executeTakeFirst();
+    return { saved: Number(result.numUpdatedRows) > 0 };
+  }
+
+  private withThreadPosition(content: ReaderContent, readPostId: number | null, tracking: boolean, firstUnread?: string | null, hasMore = false): ReaderContent {
+    const ids = [...(content.html ?? "").matchAll(/<section id="fa-post-(\d+)"/g)].map((m) => m[1]!);
+    const unread = firstUnread === undefined ? ids.find((id) => Number(id) > (readPostId ?? 0)) ?? null : firstUnread;
+    let html = content.html;
+    if (html && unread && readPostId !== null && !html.includes('class="thread-new-label"')) {
+      html = html.replace(`<section id="fa-post-${unread}"`, `<p class="thread-new-label">New replies</p><section id="fa-post-${unread}"`);
+    }
+    return { ...content, html, threadProgress: { readPostId, firstUnreadPostId: unread, hasMore, tracking } };
+  }
+
   private async load(viewer: Viewer, itemId: string, page?: ThreadPageRequest): Promise<ReaderContent | null> {
     const item = await this.db.kysely
       .selectFrom("items")
@@ -163,6 +190,7 @@ export class ReaderService {
         "items.source_id",
         "items.guid",
         "s.thread_batch_from",
+        "s.thread_read_post",
         "s.title as source_title",
         "sources.kind as source_kind",
         "sources.article_selector",
@@ -194,9 +222,10 @@ export class ReaderService {
     const via = item.via_flaresolverr === 1;
     // A followed thread's card shows its new replies; asked for a page, it shows the thread itself.
     if (item.source_kind === "thread") {
-      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from, !!item.thread_catchup);
+      if (page === undefined || !item.url) return this.threadCard(base, item.source_id, item.thread_batch_from, !!item.thread_catchup, item.thread_read_post);
       // From the thread's own address: the card links to the page read last (D-120).
-      return this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
+      const content = await this.forumThread(base, item, null, via, page, () => null, item.feed_url ? followedThreadPager(item.feed_url) : null);
+      return this.withThreadPosition(content, item.thread_read_post, !item.thread_catchup);
     }
 
     // A board's thread card (D-123): the thread itself, on the page with its newest posts unless
@@ -336,7 +365,7 @@ export class ReaderService {
     version = "",
   ): Promise<ReaderContent> {
     if (!pager) return this.summaryOnly(base, "This link isn't a forum thread.");
-    const cacheId = version ? `${item.id}@${version}` : item.id;
+    const cacheId = `quotes-v1:${version ? `${item.id}@${version}` : item.id}`;
     const key = `${cacheId}|${want}`;
     const known = this.threadPages.get(key);
     if (known && this.now() - known.at < THREAD_REFRESH_MS) return known.content;
@@ -391,16 +420,23 @@ export class ReaderService {
    * A followed thread's card (D-084): the replies since it was last read, oldest first, from the
    * posts stored at each check (no page fetch). Before any batch, the newest stored posts.
    */
-  private async threadCard(base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">, sourceId: string, batchFrom: number | null, catchingUp = false): Promise<ReaderContent> {
+  private async threadCard(base: Omit<ReaderContent, "kind" | "html" | "notice" | "videoId">, sourceId: string, batchFrom: number | null, catchingUp = false, readPostId: number | null = null): Promise<ReaderContent> {
     let q = this.db.kysely.selectFrom("thread_posts").select(["post_id", "author", "posted_at", "posted_label", "html"]).where("source_id", "=", sourceId);
-    if (batchFrom !== null) q = q.where("fetched_at", ">=", batchFrom);
-    const rows = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
-    const shown = rows.slice(-THREAD_CARD_MAX_POSTS);
+    if (batchFrom !== null && readPostId === null) q = q.where("fetched_at", ">=", batchFrom);
+    const all = (await q.execute()).sort((a, b) => Number(a.post_id) - Number(b.post_id));
+    const rows = readPostId === null ? all : all.filter((p) => Number(p.post_id) > readPostId);
+    const shown = rows.slice(0, THREAD_CARD_MAX_POSTS);
+    const readContext = readPostId === null ? [] : all.filter((p) => Number(p.post_id) <= readPostId).slice(-THREAD_CARD_CONTEXT_POSTS);
+    if (!shown.length && readContext.length) {
+      const html = renderForumPosts(readContext.map((p) => ({ id: p.post_id, author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html })));
+      return this.withThreadPosition({ ...base, kind: "page", html, videoId: null, notice: catchingUp ? "Catching up on older replies. Reading position will resume saving when catch-up finishes." : "You're caught up on the stored replies." }, readPostId, !catchingUp, null);
+    }
     if (!shown.length) return this.summaryOnly(base, "No replies stored yet. They appear here after the next check.");
-    const asPost = (p: (typeof rows)[number]) => ({ author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html });
+    const asPost = (p: (typeof rows)[number]) => ({ id: p.post_id, author: p.author, datetime: p.posted_at ? new Date(p.posted_at).toISOString() : null, timeLabel: p.posted_label, html: p.html });
     // The posts just before the new ones, for context (D-102): what the new replies answer or quote.
     let context = "";
-    if (batchFrom !== null && shown.length === rows.length) {
+    if (readContext.length) context = `<div class="thread-context"><p class="thread-context-label">Earlier in the thread</p>${renderForumPosts(readContext.map(asPost))}</div><p class="thread-new-label">New replies</p>`;
+    if (readPostId === null && batchFrom !== null && shown.length === rows.length) {
       // IDs first, then the bodies of just those few (D-107).
       const ids = (await this.db.kysely.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).where("fetched_at", "<", batchFrom).execute())
         .map((r) => r.post_id)
@@ -414,10 +450,10 @@ export class ReaderService {
     }
     const html = context + renderForumPosts(shown.map(asPost));
     const notice = [
-      catchingUp ? "Catching up on this thread. Older replies are still being collected; newer activity will be checked after catch-up finishes." : null,
-      rows.length > shown.length ? `Showing the newest ${shown.length} of ${rows.length} new replies. Open the original for the rest.` : null,
+      catchingUp ? "Catching up on this thread. Older replies are still being collected; newer activity will be checked after catch-up finishes. Reading position saving pauses until then." : null,
+      rows.length > shown.length ? `Showing the first ${shown.length} of ${rows.length} unread replies. Continue below to read more.` : null,
     ].filter(Boolean).join(" ") || null;
-    return { ...base, kind: "page", html, videoId: null, notice };
+    return this.withThreadPosition({ ...base, kind: "page", html, videoId: null, notice }, readPostId, !catchingUp, shown[0]?.post_id ?? null, rows.length > shown.length);
   }
 
   /**

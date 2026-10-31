@@ -53,6 +53,67 @@ describe.each(backends)("accounts (%s)", (backend) => {
     return { clock, web, admin: as(admin), as, anon, invite };
   }
 
+  it("saves thread positions per account, resumes with context, and rejects stale or unauthorized writes", async () => {
+    const { admin, as, invite, web, clock } = await start();
+    web.set(`${THREAD}latest`, { body: threadPage(1, 12), contentType: "text/html", finalUrl: THREAD });
+    web.set(THREAD, { body: threadPage(1, 12), contentType: "text/html" });
+    const source = (await admin("POST", "/api/sources", { url: THREAD })).json();
+    const bob = as((await invite("bob")).cookie);
+    const outsider = as((await invite("outsider")).cookie);
+    await bob("POST", "/api/sources", { url: THREAD });
+    const item = (await admin("GET", "/api/items?filter=all")).json().items[0];
+    const reader = `/api/items/${item.id}/reader`;
+    const position = `/api/items/${item.id}/thread-position`;
+    expect((await admin("GET", reader)).json().threadProgress).toMatchObject({ readPostId: null, firstUnreadPostId: "1" });
+    expect((await admin("PUT", position, { postId: 6 })).json()).toEqual({ saved: true });
+    const resumed = (await admin("GET", reader)).json();
+    expect(resumed.threadProgress).toMatchObject({ readPostId: 6, firstUnreadPostId: "7", tracking: true });
+    expect(resumed.html).toContain('id="fa-post-4"');
+    expect(resumed.html).not.toContain('id="fa-post-3"');
+    expect(resumed.html).toContain("New replies");
+    expect((await bob("GET", reader)).json().threadProgress.readPostId).toBeNull();
+    expect((await outsider("PUT", position, { postId: 8 })).statusCode).toBe(404);
+    for (const postId of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "8"]) expect((await admin("PUT", position, { postId })).statusCode).toBe(400);
+    await Promise.all([admin("PUT", position, { postId: 9 }), admin("PUT", position, { postId: 7 })]);
+    expect((await admin("GET", reader)).json().threadProgress.readPostId).toBe(9);
+    // The cached whole page is shared, but the progress overlay must remain account-specific.
+    expect((await admin("GET", `${reader}?page=1`)).json().threadProgress.firstUnreadPostId).toBe("10");
+    expect((await bob("GET", `${reader}?page=1`)).json().threadProgress.firstUnreadPostId).toBe("1");
+    await admin("PATCH", `/api/items/${item.id}`, { read: true });
+    web.set(`${THREAD}latest`, { body: threadPage(1, 14), contentType: "text/html", finalUrl: THREAD });
+    clock.now += 60_000;
+    await admin("POST", `/api/sources/${source.id}/check`);
+    // Polling starts a new unread batch, but must not hide unfinished replies 10–12.
+    expect((await admin("GET", reader)).json().threadProgress.firstUnreadPostId).toBe("10");
+    await admin("PUT", position, { postId: 14 });
+    const caughtUp = (await admin("GET", reader)).json();
+    expect(caughtUp.threadProgress.firstUnreadPostId).toBeNull();
+    expect(caughtUp.notice).toContain("caught up");
+  });
+
+  it("continues long stored batches in order and pauses position writes during catch-up", async () => {
+    const { admin, web } = await start();
+    web.set(`${THREAD}latest`, { body: threadPage(1, 150), contentType: "text/html", finalUrl: THREAD });
+    const source = (await admin("POST", "/api/sources", { url: THREAD })).json();
+    const item = (await admin("GET", "/api/items?filter=all")).json().items[0];
+    const reader = `/api/items/${item.id}/reader`;
+    const position = `/api/items/${item.id}/thread-position`;
+    const first = (await admin("GET", reader)).json();
+    expect(first.threadProgress).toMatchObject({ firstUnreadPostId: "1", hasMore: true });
+    expect(first.html).toContain('id="fa-post-100"');
+    expect(first.html).not.toContain('id="fa-post-101"');
+    await admin("PUT", position, { postId: 100 });
+    const next = (await admin("GET", reader)).json();
+    expect(next.threadProgress).toMatchObject({ firstUnreadPostId: "101", hasMore: false });
+    expect(next.html).toContain('id="fa-post-150"');
+    await app!.db.kysely.updateTable("sources").set({ thread_catchup: JSON.stringify({ floor: 100, nextPage: 2, latestUrl: THREAD }) }).where("id", "=", source.id).execute();
+    expect((await admin("GET", reader)).json().threadProgress.tracking).toBe(false);
+    expect((await admin("PUT", position, { postId: 150 })).json()).toEqual({ saved: false });
+    expect((await admin("GET", reader)).json().threadProgress.readPostId).toBe(100);
+    await app!.db.kysely.updateTable("sources").set({ thread_catchup: null }).where("id", "=", source.id).execute();
+    expect((await admin("PUT", position, { postId: 150 })).json()).toEqual({ saved: true });
+  });
+
   it("the first account is the admin; invitation links make the others", async () => {
     const { admin, anon, as } = await start();
     expect((await admin("GET", "/api/auth/status")).json()).toMatchObject({ username: "alex", role: "admin" });
