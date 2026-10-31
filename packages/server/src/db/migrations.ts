@@ -420,6 +420,22 @@ export const migrations: Record<string, Migration> = {
       await db.schema.alterTable("subscriptions").dropColumn("thread_read_post").execute();
     },
   },
+  "0019_thread_post_edits": {
+    async up(db: Kysely<any>) {
+      await db.schema.alterTable("thread_posts").addColumn("content_fingerprint", "text").execute();
+      await db.schema.alterTable("thread_posts").addColumn("content_revision", "integer", c => c.notNull().defaultTo(0)).execute();
+      await db.schema.alterTable("thread_posts").addColumn("update_detected_at", "bigint").execute();
+      await db.schema.alterTable("sources").addColumn("thread_audit", "text").execute();
+      await db.schema.alterTable("sources").addColumn("thread_revision", "integer", c => c.notNull().defaultTo(0)).execute();
+    },
+    async down(db: Kysely<any>) {
+      await db.schema.alterTable("sources").dropColumn("thread_revision").execute();
+      await db.schema.alterTable("sources").dropColumn("thread_audit").execute();
+      await db.schema.alterTable("thread_posts").dropColumn("update_detected_at").execute();
+      await db.schema.alterTable("thread_posts").dropColumn("content_revision").execute();
+      await db.schema.alterTable("thread_posts").dropColumn("content_fingerprint").execute();
+    },
+  },
 };
 
 export const migrationProvider: MigrationProvider = {
