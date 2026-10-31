@@ -4,6 +4,11 @@ The single place to see **where the project is, what's next, and what's blocked*
 Updated every time work lands. Design detail lives in [DESIGN.md](DESIGN.md), reasoning in
 [DECISIONS.md](DECISIONS.md).
 
+**Approved reading/extraction plan (2026-10-30):** see
+[Thread reading and extraction improvements](THREAD-READING-PLAN.md) for the prioritized queue:
+quote/reply context, incomplete-extraction detection, edited posts, more forum engines, and
+tables/code blocks, with acceptance criteria and validation plans for each.
+
 _Last updated: 2026-10-28 (v1.14.0; the milestone sections below are the history up to M1.2)_
 
 ## Status at a glance
