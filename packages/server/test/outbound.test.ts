@@ -112,8 +112,8 @@ describe("real HTTP boundaries (only local dummy servers)", () => {
 
   it("rejects a public-to-private redirect before issuing the private request", async () => {
     // The public response is simulated; no external service is contacted.
-    const network = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 302, headers: { location: base } }));
-    await expect(new OutboundPolicy().fetch("https://public.example/feed")).rejects.toBeInstanceOf(OutboundBlocked);
+    const network = vi.fn(async () => new Response(null, { status: 302, headers: { location: base } }));
+    await expect(new OutboundPolicy([], undefined, network).fetch("https://public.example/feed")).rejects.toBeInstanceOf(OutboundBlocked);
     expect(network).toHaveBeenCalledTimes(1);
     expect(seen).toEqual([]);
   });

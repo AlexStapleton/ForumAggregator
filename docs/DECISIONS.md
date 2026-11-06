@@ -2,6 +2,29 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-11-06 (round 21: review of PRs #21–#34)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-137 | **Outbound requests use undici's own `fetch`**, not Node's built-in one. D-127's connection check is an undici 7 `Agent`; Node 22's `fetch` is undici 6. Mixing versions worked but isn't supported, and an update to either could break every outbound request. The request function can be swapped for a fake in tests (one test faked the global `fetch` before) | User (agreed after review) + Claude | Same-version pieces; the real-server tests in `outbound.test.ts` still prove the check runs on each connection |
+| D-136 | **Review fixes.** (1) A thread check with new posts read every stored post's body (300+) to find the newest one, undoing D-107; it now reads the IDs and then that one body. (2) Unexpected thread-check errors were logged without the error as "thread page parsing failed"; they log `{ err }` as "check failed" again, like feed checks. (3) A followed thread's own reader notices ("You're caught up…", "Showing the first N of M unread replies…") were followed by "Use “Open original” to read it on the site.", meant for pages that couldn't be read; not any more. (4) `[Unreleased]` in the changelog now lists PRs #22, #25, #29, #31–#34 and the three migrations, and this round records their decisions | Claude (asked to review recent work) | Found by reading the diff since v1.14.0; `npm run typecheck` and `npm test` pass before and after |
+
+## 2026-10-31 (round 20: thread reading, extraction quality, outbound safety; PRs #21–#34)
+
+Recorded afterwards from the merged code (the commits have no descriptions); sources are the PRs.
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-127 | **Outbound requests go only to public addresses.** Feeds, articles, forum pages, JSON APIs and every redirect hop are checked, the address is checked again inside the connection's DNS lookup (no re-resolving after the check), and cookies and validators are dropped when a redirect changes origin (max 5 hops). Internal services need an exact origin in `FA_ALLOWED_INTERNAL_ORIGINS`. Admin-set service URLs (FlareSolverr's API) are called directly but never follow redirects | PR #21 | Any invited account could otherwise make the server fetch LAN or cloud-metadata addresses. Breaks feeds on the LAN until their origin is allowed |
+| D-128 | **FlareSolverr stays on when configured**, with the requested page and the page it ended on both checked against D-127. Its own browser isn't covered (it fetches subresources and follows redirects itself); DEPLOY.md says to isolate it at the network level | PR #21 | Turning it off would break Cloudflare-protected forums; the remaining risk is documented |
+| D-129 | **Read/saved updates touch only the fields sent**, and the web app sends taps on one item in order, rebasing on failure | PR #22 | Two devices (or two quick taps) could overwrite each other's flag |
+| D-130 | **Followed-thread catch-up is a stored checkpoint** (`sources.thread_catchup`, migration 0017): when new replies exceed the pages-per-check limit, later checks continue the gap from where they stopped, committing posts and checkpoint in one transaction. The 300-post limit applies once the gap is filled | PR #26 | Busy threads lost replies between checks; restarts lost progress |
+| D-131 | **Each account's reading position in a followed thread** (`subscriptions.thread_read_post`, migration 0018), saved as the furthest post scrolled past, only ever forwards, and not at all while catching up or after a failed check | PR #26 | Reopens at the first unread reply; pausing avoids marking replies read that haven't been collected |
+| D-132 | **Quote attribution and navigation**: quotes show "X wrote:" and a link to the original; they jump within the reader only when the quoted post's ID is on a loaded page of the same thread (a post-only link doesn't prove which thread it's in). Quotes over about 12 lines collapse into a native `<details>` | PR #29 | Context for replies without leaving the reader, and no links that jump to the wrong place |
+| D-133 | **Thread pages are inspected before use** (complete, partial, empty, access-blocked, wrong page, unrecognized). Only complete pages are stored, cached or move the reading position; otherwise the check fails with a fixed message (never page HTML or URLs) and the stored replies stay | PR #31 | A login page, bot check or half-parsed page used to be stored as the thread, or skip replies |
+| D-134 | **Edited posts**: a fingerprint of each stored post's sanitized body (`thread_posts.content_fingerprint`, migration 0019) marks a change as "Update detected" with when it was noticed; every sixth successful check also re-reads one of the newest three pages within the page budget. Old rows get a fingerprint without being marked edited. Details in EDITED-POSTS.md | PR #32 | Edits were silently replaced; a bounded audit catches edits on pages no longer being read |
+| D-135 | **FlareSolverr shares a result only between identical URLs** and runs one solve per host at a time; XenForo attachments outside the post body are shown under the post | PRs #33, #34 | Two pages of one thread requested together got the same page back; attachments were missing |
+
 ## 2026-10-28 (round 19: board activity)
 
 | ID | Decision | Source | Rationale |
@@ -232,4 +255,5 @@ Resolved: Q-GHCR (D-035), Q-PI-TEST (user has a Pi; checklist in DEPLOY.md).
 - **Q-EMAIL**: Is reading forum email notifications from a mailbox (option C) acceptable?
 - **Q-DOCKERHUB**: Docker Hub push was skipped on the 2026-10-11 run (`DOCKERHUB_USERNAME` empty at run time). Check the secret names and location, then re-run.
 - **Q-YT-COMMENTS**: Resolved by D-075.
+- **Q-OUTBOUND-PROXY**: DEPLOY.md §7 says a server behind an outbound proxy can set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY`. Since D-127, requests carry their own connection pool, which most likely bypasses that proxy (not tested). Does anyone run it behind an outbound proxy? If so, D-127 needs a proxy-aware path. **2026-11-06: the user's server has no outbound proxy, so nothing to change for now**; revisit if a proxied install is needed.
 - **Q-REDDIT**: Subreddits only, or also your home feed and saved posts? Deferred until after YouTube.

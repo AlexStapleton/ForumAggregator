@@ -784,8 +784,13 @@ export class FeedService {
       }
     }
     const source = await db.selectFrom("sources").select(["title"]).where("id", "=", sourceId).executeTakeFirstOrThrow();
-    const latest = (await db.selectFrom("thread_posts").select(["post_id", "author", "html", "posted_at"]).where("source_id", "=", sourceId).execute())
-      .sort((a, b) => postNumber(b.post_id) - postNumber(a.post_id))[0];
+    // The thread's newest stored post, which during catch-up may not be one fetched now. IDs
+    // first, then that one body (D-107): not every stored body on each check with new posts.
+    const newestId = (await db.selectFrom("thread_posts").select("post_id").where("source_id", "=", sourceId).execute())
+      .map((r) => r.post_id)
+      .sort((a, b) => postNumber(b) - postNumber(a))[0];
+    const latest = newestId === undefined ? undefined
+      : await db.selectFrom("thread_posts").select(["post_id", "author", "html", "posted_at"]).where("source_id", "=", sourceId).where("post_id", "=", newestId).executeTakeFirst();
     // Shown only where a follower's own count can't be worked out; the feed recounts per follower.
     const summary = threadSummary(fresh.size, latest ? { author: latest.author, text: htmlToText(latest.html) } : null);
     const values = {
@@ -840,7 +845,7 @@ export class FeedService {
       if (err instanceof ThreadExtractionError) {
         const { status, codes, counts } = err.inspection;
         this.log?.warn({ sourceId: row.id, status, codes, counts }, "thread extraction incomplete");
-      } else if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ sourceId: row.id }, "thread page parsing failed");
+      } else if (!(err instanceof FetchError || err instanceof ThreadParseError)) this.log?.warn({ err, sourceId: row.id }, "check failed");
       const failure = err instanceof FetchError ? err : err instanceof ThreadExtractionError && err.inspection.codes.includes("challenge")
         ? new FetchError("cloudflare_challenge", message) : undefined;
       await this.recordFailure(row, startedAt, message, failure);

@@ -397,7 +397,8 @@ export function Reader({ mode, items, index, hasMore, onIndexChange, onLoadMore,
 
           {content?.notice && !content.extraction && (
             <div className="alert alert-info">
-              {content.notice} {item.url && !/original/i.test(content.notice) && "Use “Open original” to read it on the site."}
+              {/* A followed thread's own notices (caught up, more unread replies) aren't failures to read it. */}
+              {content.notice} {item.url && !content.threadProgress && !/original/i.test(content.notice) && "Use “Open original” to read it on the site."}
             </div>
           )}
 
