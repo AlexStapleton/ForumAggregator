@@ -81,7 +81,7 @@ function decode(bytes: Uint8Array, contentType: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+export async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
   if (!res.body) return new Uint8Array();
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];

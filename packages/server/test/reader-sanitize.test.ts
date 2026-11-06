@@ -43,7 +43,9 @@ describe("sanitizeHtml", () => {
     expect(out).toContain('rel="noopener noreferrer nofollow"');
     expect(out).toMatch(/<img[^>]+src="https:\/\/news\.example\/img\/a\.jpg"/);
     expect(out).toContain('referrerpolicy="no-referrer"');
-    expect(out).not.toContain("insecure.example"); // http image dropped
+    // http images load through this server, never straight from the http site (D-140).
+    expect(out).toContain('<img src="/api/image?url=http%3A%2F%2Finsecure.example%2Fb.jpg"');
+    expect(out).not.toContain('src="http://');
   });
 });
 

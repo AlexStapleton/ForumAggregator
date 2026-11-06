@@ -23,7 +23,7 @@ import { cleanRedditSummary, planReddit } from "./reddit.js";
 import { channelFeedUrl, channelIdFromPage, isConsentPage, normaliseYouTubeInput, planYouTube } from "./youtube.js";
 import { latestUploads, YouTubeApiError } from "../reader/youtubeApi.js";
 
-import { postFingerprint } from "../reader/postFingerprint.js";
+import { currentFingerprint, postFingerprint } from "../reader/postFingerprint.js";
 
 interface ThreadAudit { polls: number; offset: number; pages: number }
 
@@ -705,10 +705,13 @@ export class FeedService {
       const was = post.id ? stored.get(post.id) : undefined;
       if (!was || encountered.has(post.id!)) continue;
       encountered.add(post.id!);
-      if (was.content_fingerprint && was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author) continue;
+      // Unchanged and fingerprinted by this version: nothing to do. An older fingerprint is
+      // replaced even then, so a later edit is compared against the current version.
+      if (currentFingerprint(was.content_fingerprint) && was.posted_at === post.postedAt && was.posted_label === post.timeLabel && was.html === post.html && was.author === post.author) continue;
       const fingerprint = postFingerprint(post.html);
-      // Backfill legacy rows without claiming an edit that we did not observe.
-      const edited = was.content_fingerprint !== null && was.content_fingerprint !== fingerprint;
+      // Backfill legacy rows, and rows fingerprinted by an earlier renderer, without claiming an
+      // edit that we did not observe (D-142).
+      const edited = currentFingerprint(was.content_fingerprint) && was.content_fingerprint !== fingerprint;
       await db.updateTable("thread_posts").set({
         posted_at: post.postedAt, posted_label: post.timeLabel, html: post.html, author: post.author,
         content_fingerprint: fingerprint,

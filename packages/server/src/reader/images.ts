@@ -78,9 +78,29 @@ export function restoreReaderImage(img: Element, base: string): void {
   }
   selected ??= imageSet(img, base);
   for (const attr of LAZY) selected ??= httpsImage(img.getAttribute(attr), base);
+  // A lazy image only on http:// still beats its placeholder: the sanitizer proxies it (D-140).
+  const placeholder = !safeHttpUrl(img.getAttribute("src"), base);
+  if (placeholder) for (const attr of LAZY) selected ??= safeHttpUrl(img.getAttribute(attr), base);
   if (selected) {
     img.setAttribute("src", selected);
     // A later sanitization pass must not replace the chosen picture/attachment with a thumbnail.
     for (const attr of [...LAZY, ...SETS]) img.removeAttribute(attr);
   }
+}
+
+/** Where the reader loads an http:// image from: this server fetches it (D-140), since an https
+ * page can't show it directly. Relative, so stored HTML works behind any address. */
+export const IMAGE_PROXY_PATH = "/api/image";
+
+export function imageProxyUrl(httpUrl: string): string {
+  return `${IMAGE_PROXY_PATH}?url=${encodeURIComponent(httpUrl)}`;
+}
+
+/** The http:// address inside one of our own proxy links (already sanitized HTML), or null. */
+export function proxiedImageTarget(src: string | null): string | null {
+  if (!src?.startsWith(`${IMAGE_PROXY_PATH}?url=`)) return null;
+  try {
+    const target = new URL(decodeURIComponent(src.slice(IMAGE_PROXY_PATH.length + 5)));
+    return target.protocol === "http:" && !target.username && !target.password ? target.href : null;
+  } catch { return null; }
 }

@@ -6,9 +6,19 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
-The database gets three new migrations on start (0017–0019: thread catch-up checkpoints, each
-account's reading position, post update tracking); nothing to do by hand. Feeds or articles served
-from your own network are now blocked unless allowed (see Security below).
+## [1.15.0] - 2026-11-06
+
+Followed threads pick up where you stopped reading, never skip replies on busy threads, and show
+when a post has been edited; quotes say who wrote them and jump to the quoted post; embedded
+videos, attachments and `http://` images no longer go missing from posts. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.15.0`. The
+database gets three migrations on start (0017–0019); nothing to do by hand.
+
+**Check before upgrading:** feeds and articles on your own network (a `192.168.x.x` or other LAN
+address, or a server name on your LAN) are now blocked. If you follow any, allow their exact
+address with `FA_ALLOWED_INTERNAL_ORIGINS` (e.g. `http://192.168.1.50:1200`), see
+[DEPLOY.md](docs/DEPLOY.md#outbound-requests-and-internal-feeds). Feeds on the internet are not
+affected.
 
 ### Added
 - Followed threads remember each account's reading position, reopen at the first unread reply
@@ -21,7 +31,14 @@ from your own network are now blocked unless allowed (see Security below).
 - Quotes in forum posts say who wrote them, link to the quoted post, jump to it when it's on the
   page being read (with a way back), and long quotes can be collapsed.
 - XenForo attachments that sit beside a post's text, rather than in it, are shown under the post,
-  linking to the full-size image.
+  linking to the full-size image. vBulletin's "Attached Images" and "Attached Files" (e.g. Bike
+  Forums) are shown under the post too.
+- Embedded videos and posts no longer vanish from forum posts, articles and feeds: YouTube shows a
+  thumbnail linking to the video; Vimeo, X (Twitter), Instagram, Reddit and other embeds become
+  links. Uploaded video and audio files play in the reader.
+- Images on plain `http://` addresses are shown: the server fetches them for the reader (only
+  `http://` images, only common picture formats, up to 10 MB, never from your own network).
+- Spoilers in XenForo posts are hidden until tapped, and classic smilies keep their text (`:)`).
 
 ### Changed
 - Thread pages are checked for completeness before anything is stored: a bot check, a login page,
@@ -44,6 +61,9 @@ from your own network are now blocked unless allowed (see Security below).
   other way round); quick taps on read/saved are sent in order.
 - FlareSolverr no longer hands one page's result to a different page on the same site requested
   at the same time; requests to a site still go one at a time.
+- A post that was only a video or an `http://` image made its whole thread page count as misread,
+  so the followed thread stopped updating and the reader stopped at that page. (Found before
+  release, in the thread completeness checks above.)
 
 ### Security
 - Block non-public destinations for feeds, articles, forum pages and JSON requests, including

@@ -433,3 +433,11 @@ input[readonly] { color: var(--muted); background: transparent; }
 .reader-content .quote-target { outline: 2px solid var(--accent); outline-offset: 4px; }
 .quote-return { position: sticky; top: 0; z-index: 2; padding: .5rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .quote-return[hidden] { display: none; }
+
+/* Spoilers from forum posts (D-139): hidden until tapped. Quote collapsing has its own rules above. */
+.reader-content details:not(blockquote > details) { border: 1px solid var(--border); border-radius: 6px; padding: .2rem .7rem; margin: .6rem 0; }
+.reader-content details:not(blockquote > details) > summary { cursor: pointer; font-weight: 600; min-height: 32px; display: list-item; padding: .3rem 0; }
+.reader-content details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Embedded video thumbnails and uploaded videos fill the column. */
+.reader-content video { width: 100%; background: #000; }
+.reader-content figure { margin: .8rem 0; }

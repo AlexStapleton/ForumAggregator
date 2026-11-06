@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 
+/**
+ * Bump when the same forum post comes out of the parser/sanitizer differently (e.g. D-139 turned
+ * embeds into links): a stored fingerprint of another version is a baseline, not an edit (D-142).
+ */
+export const FINGERPRINT_VERSION = "v2";
+
+/** A stored fingerprint made by this version (legacy ones have no version prefix). */
+export const currentFingerprint = (stored: string | null): stored is string => !!stored?.startsWith(`${FINGERPRINT_VERSION}:`);
+
 /** Sanitized bodies only: author and relative date labels are outside this identity. */
 export function postFingerprint(html: string): string {
   const fragment = JSDOM.fragment(html);
@@ -14,5 +23,5 @@ export function postFingerprint(html: string): string {
       .filter(name => el.hasAttribute(name)).map(name => [name, el.getAttribute(name)]);
     return [tag, attrs, Array.from(el.childNodes).map(n => visit(n, verbatim || tag === "pre" || tag === "code")).filter(n => n !== null)];
   };
-  return createHash("sha256").update(JSON.stringify(Array.from(fragment.childNodes).map(n => visit(n)))).digest("hex");
+  return `${FINGERPRINT_VERSION}:` + createHash("sha256").update(JSON.stringify(Array.from(fragment.childNodes).map(n => visit(n)))).digest("hex");
 }

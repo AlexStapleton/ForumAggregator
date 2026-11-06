@@ -165,6 +165,12 @@ describe.each(backends)("following a thread (%s)", (backend) => {
     await app!.feeds.checkSource(src.id);
     expect(await row()).toMatchObject({ content_revision: 0, update_detected_at: null });
     expect((await row()).content_fingerprint).toBeTruthy();
+    // A fingerprint from an earlier renderer that differs is a new baseline, not an edit (D-142),
+    // even when the stored body is unchanged; and it is replaced by the current version.
+    await app!.db.kysely.updateTable("thread_posts").set({ content_fingerprint: "v1:" + "0".repeat(64) }).where("source_id", "=", src.id).execute();
+    await app!.feeds.checkSource(src.id);
+    expect(await row()).toMatchObject({ content_revision: 0, update_detected_at: null });
+    expect((await row()).content_fingerprint).toMatch(/^v2:/);
     const newer = [...changed, ...posts(1003, 1)]; newer[2].text = "Another correction";
     web.set(THREAD + "latest", { body: page(1, 1, newer), contentType: "text/html", finalUrl: THREAD });
     expect(await app!.feeds.checkSource(src.id)).toMatchObject({ ok: true, newItems: 1 });
