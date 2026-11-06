@@ -2,6 +2,12 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-11-06 (round 22: release 1.15.0)
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-138 | Release **v1.15.0** (minor: thread reading position, catch-up, edited posts, quote navigation, extraction checks, outbound request blocking; migrations 0017–0019). Minor rather than major although LAN feeds now need `FA_ALLOWED_INTERNAL_ORIGINS`: the user follows none, and most installs don't either, so the changelog leads with a "Check before upgrading" note instead | User ("merge it and prepare the 1.15.0 release") + Claude | Follows RELEASING.md |
+
 ## 2026-11-06 (round 21: review of PRs #21–#34)
 
 | ID | Decision | Source | Rationale |

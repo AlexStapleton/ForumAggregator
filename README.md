@@ -6,7 +6,7 @@ is enough) in one Docker container, with no account anywhere else.
 
 ![The feed beside the reader, on a desktop in dark mode](docs/screenshots/feed-and-reader.png)
 
-Current release: **1.14.0** ([changelog](CHANGELOG.md)).
+Current release: **1.15.0** ([changelog](CHANGELOG.md)).
 
 ## What it does
 
@@ -15,7 +15,8 @@ Current release: **1.14.0** ([changelog](CHANGELOG.md)).
   section of a WordPress site (e.g. `science.nasa.gov/earth/`) the section's own feed.
 - **Forums:** XenForo and vBulletin boards (e.g. a board's RSS), and **followed threads** (paste a
   thread's link, either kind): one card per thread that comes back with just the new replies, the
-  posts before them for context. For a vBulletin board, paste its page to follow its discussions:
+  posts before them for context. It reopens where you stopped reading and marks posts edited
+  since you saw them. For a vBulletin board, paste its page to follow its discussions:
   one card per thread, back whenever it has new replies.
 - **Podcasts:** episodes play in the reader, with speed control and resume where you stopped.
 - **YouTube channels** (link or `@handle`), with top comments if you add your own free API key.
@@ -32,7 +33,8 @@ Current release: **1.14.0** ([changelog](CHANGELOG.md)).
 **Reading**
 - A built-in reader shows the full article, not just the feed's teaser, without the site's menus
   and sidebars.
-- Forum threads read as posts (author, date, quotes), with a page bar and **Load next page**.
+- Forum threads read as posts (author, date, attachments, quotes that say who wrote them and jump to
+  the quoted post), with a page bar and **Load next page**.
 - Side by side on a wide screen, full screen on a phone; swipe or press Next to go through the feed.
 - Unread / all / saved, by source (tick the ones you want) or by tag, newest or oldest first.
 

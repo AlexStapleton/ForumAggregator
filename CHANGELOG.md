@@ -6,9 +6,18 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
-The database gets three new migrations on start (0017–0019: thread catch-up checkpoints, each
-account's reading position, post update tracking); nothing to do by hand. Feeds or articles served
-from your own network are now blocked unless allowed (see Security below).
+## [1.15.0] - 2026-11-06
+
+Followed threads pick up where you stopped reading, never skip replies on busy threads, and show
+when a post has been edited; quotes say who wrote them and jump to the quoted post. Upgrade with
+`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.15.0`. The
+database gets three migrations on start (0017–0019); nothing to do by hand.
+
+**Check before upgrading:** feeds and articles on your own network (a `192.168.x.x` or other LAN
+address, or a server name on your LAN) are now blocked. If you follow any, allow their exact
+address with `FA_ALLOWED_INTERNAL_ORIGINS` (e.g. `http://192.168.1.50:1200`), see
+[DEPLOY.md](docs/DEPLOY.md#outbound-requests-and-internal-feeds). Feeds on the internet are not
+affected.
 
 ### Added
 - Followed threads remember each account's reading position, reopen at the first unread reply
