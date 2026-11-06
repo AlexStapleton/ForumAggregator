@@ -255,5 +255,5 @@ Resolved: Q-GHCR (D-035), Q-PI-TEST (user has a Pi; checklist in DEPLOY.md).
 - **Q-EMAIL**: Is reading forum email notifications from a mailbox (option C) acceptable?
 - **Q-DOCKERHUB**: Docker Hub push was skipped on the 2026-10-11 run (`DOCKERHUB_USERNAME` empty at run time). Check the secret names and location, then re-run.
 - **Q-YT-COMMENTS**: Resolved by D-075.
-- **Q-OUTBOUND-PROXY**: DEPLOY.md §7 says a server behind an outbound proxy can set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY`. Since D-127, requests carry their own connection pool, which most likely bypasses that proxy (not tested). Does anyone run it behind an outbound proxy? If so, D-127 needs a proxy-aware path.
+- **Q-OUTBOUND-PROXY**: DEPLOY.md §7 says a server behind an outbound proxy can set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY`. Since D-127, requests carry their own connection pool, which most likely bypasses that proxy (not tested). Does anyone run it behind an outbound proxy? If so, D-127 needs a proxy-aware path. **2026-11-06: the user's server has no outbound proxy, so nothing to change for now**; revisit if a proxied install is needed.
 - **Q-REDDIT**: Subreddits only, or also your home feed and saved posts? Deferred until after YouTube.
