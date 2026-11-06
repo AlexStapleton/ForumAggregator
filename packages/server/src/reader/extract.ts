@@ -5,6 +5,7 @@ import type { ItemAudio } from "@fa/shared";
 import { htmlToText, safeHttpUrl } from "../feeds/text.js";
 import { sanitizeHtml } from "./sanitize.js";
 import { restoreReaderImage } from "./images.js";
+import { normalizeRichContent } from "./richContent.js";
 import { threadIdentity, type ThreadInspection } from "./threadQuality.js";
 
 /** Below this much text, what we got is probably a teaser, a paywall or an error page. */
@@ -297,6 +298,8 @@ export function parseForumThread(doc: Document, pageUrl: string): ForumThreadPag
       null;
     const body = bodyOf(post)!;
     xenforoQuotes(body, pageUrl, seen);
+    // Spoilers keep their title, which sits on the button removed just below (D-139).
+    normalizeRichContent(body, pageUrl);
     // "Click to expand…" toggles and other buttons mean nothing without the site's scripts.
     for (const junk of Array.from(body.querySelectorAll(".bbCodeBlock-expandLink, .bbCodeSpoiler-button, script, noscript"))) junk.remove();
     const idSource = post.getAttribute("data-content") ?? post.id ?? "";
@@ -388,7 +391,7 @@ export function parseVbulletinThread(doc: Document, pageUrl: string): ForumThrea
     // A real time only when the page says which time zone its times are in (D-123).
     const postedAt = offset !== null && timeLabel ? vbulletinTime(timeLabel, offset, now) : null;
     const datetime = postedAt !== null ? new Date(postedAt).toISOString() : null;
-    return { id, author, datetime, timeLabel, postedAt, html: sanitizeHtml(body.innerHTML, pageUrl) };
+    return { id, author, datetime, timeLabel, postedAt, html: sanitizeHtml(body.innerHTML + (post ? vbulletinAttachments(post, body, pageUrl) : ""), pageUrl) };
   });
   // Bike Forums' theme: "20 / 21" (#mb_page_current, #mb_page_total). Classic: "Page 20 of 21", an
   // innermost element of the page navigation (the page links sit beside it).
@@ -492,6 +495,48 @@ function xenforoQuotes(body: Element, pageUrl: string, loaded: Set<string>) {
       }
     }
   }
+}
+
+const VB_ATTACHMENT = /(?:^|\/)attachment\.php\?(?:.*&)?attachmentid=\d+|\/attachments\/./i;
+
+/**
+ * vBulletin lists a post's uploads in boxes beside its message ("Attached Thumbnails", "Attached
+ * Images", "Attached Files"), not in it (D-141). Pictures link to the full size, which is also what
+ * is shown; other files are links. Uploads already in the message, and signatures, are skipped.
+ */
+function vbulletinAttachments(post: Element, body: Element, pageUrl: string): string {
+  const resolve = (raw: string | null) => {
+    const url = safeHttpUrl(raw, pageUrl);
+    return url && VB_ATTACHMENT.test(new URL(url).pathname + new URL(url).search) ? url : null;
+  };
+  const seen = new Set(Array.from(body.querySelectorAll("a[href], img[src]")).map((el) => resolve(el.getAttribute(el.tagName === "IMG" ? "src" : "href"))));
+  const outside = (el: Element) => !body.contains(el) && !el.closest(".signature, [id^='post_message_']") && !hiddenPost(el);
+  const pictures: string[] = [];
+  const files: string[] = [];
+  const nameOf = (el: Element | null) => /Name:\s*(\S+)/.exec(el?.getAttribute("title") ?? "")?.[1] ?? null;
+  for (const link of Array.from(post.querySelectorAll("a[href]"))) {
+    const href = resolve(link.getAttribute("href"));
+    if (!href || seen.has(href) || !outside(link)) continue;
+    seen.add(href);
+    const thumb = Array.from(link.querySelectorAll("img")).find((img) => !img.matches(".inlineimg"));
+    if (thumb) {
+      const name = nameOf(thumb) ?? nameOf(link);
+      const alt = name ?? "Attached image";
+      pictures.push(`<figure><a href="${escHtml(href)}"><img src="${escHtml(href)}" alt="${escHtml(alt)}"></a>${name ? `<figcaption>${escHtml(name)}</figcaption>` : ""}</figure>`);
+    } else {
+      const text = link.textContent?.replace(/\s+/g, " ").trim() || "Attached file";
+      files.push(`<p><a href="${escHtml(href)}">${escHtml(text)}</a></p>`);
+    }
+  }
+  // Full-size pictures shown without a link around them (some vB4 styles).
+  for (const img of Array.from(post.querySelectorAll("img[src]"))) {
+    const src = resolve(img.getAttribute("src"));
+    if (!src || seen.has(src) || img.closest("a[href]") || !outside(img)) continue;
+    seen.add(src);
+    pictures.push(`<figure><img src="${escHtml(src)}" alt="${escHtml(nameOf(img) ?? "Attached image")}"></figure>`);
+  }
+  const all = [...pictures, ...files];
+  return all.length ? `<div><p><strong>Attachments</strong></p>${all.join("")}</div>` : "";
 }
 
 /** vBulletin's quote boxes (vB3 "Quote:" + table, vB4 .bbcode_container) → <blockquote>. */

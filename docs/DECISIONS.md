@@ -2,11 +2,25 @@
 
 Each entry records what was decided, who decided it, and why. Newest first within each date.
 
+## 2026-11-06 (round 23: what forum pages lose; before releasing 1.15.0)
+
+Checked by running realistic XenForo and vBulletin markup through the real parser (the user's
+forums answer this cloud machine with bot checks, so their live pages couldn't be compared). Text,
+links, mentions, quotes, code, tables, link previews, lazy images and XenForo attachments came
+through; parsing speed was fine (one parse per page, on the page worker). What was lost is below.
+
+| ID | Decision | Source | Rationale |
+|---|---|---|---|
+| D-139 | **Embeds become links; spoilers and smilies are kept** (`reader/richContent.ts`, run by the sanitizer for every post, article and feed, and by the XenForo parser before it drops buttons). YouTube (XenForo `data-media-site-id`, s9e MediaEmbed, plain iframes) → thumbnail from `i.ytimg.com` linking to the video; Vimeo, X, Instagram, Reddit, Imgur, Giphy, Dailymotion, TikTok → a link; any other iframe → a link to its address, or "[Embedded content not shown]". `<video>`/`<audio>` files play when https (controls, `preload=metadata`, never autoplay), always with a link. XenForo spoilers → `<details>` with their title. Sprite smilies (a transparent placeholder image) → their text. Iframes stay forbidden: links, not players | User (chose "videos/embeds as links", "smilies as text", "click-to-reveal spoilers") + Claude | They vanished without a trace, and a post that was only a video made its page "partial" (D-133), so the followed thread stopped updating and the reader stopped there: found before 1.15.0 was tagged, which the user chose to hold for it |
+| D-140 | **The server fetches `http://` images** for the reader (`GET /api/image?url=`), which the sanitizer now points them at instead of dropping them. Only `http://` addresses (https images still load straight from their site, so it isn't a general proxy); login required like all `/api`; D-127's checks on every hop (a private address answers 403 before any connection); raster types only (no SVG: same-origin script risk), 10 MB cap, 15 s timeout; sent with `nosniff`, `default-src 'none'; sandbox`, `private, max-age=86400`; nothing stored on the server; 600 requests a minute per client. Lazy images whose only real address is http now use it. Doesn't help members-only attachments: the app keeps no forum logins (only FlareSolverr clearances) | User (chose "server fetches them" over a plain link) + Claude | The CSP allows only https images and browsers block mixed content, so older forums' and image hosts' pictures were silently missing |
+| D-141 | **vBulletin attachments**: links to `attachment.php?attachmentid=…` (or `/attachments/…`) in the post's wrapper but outside its message and signature are listed under the post, as for XenForo (D-135): pictures (a thumbnail link) shown full size with the "Name:" from their title as caption, other files as links; one already in the message isn't repeated | User (chose "vBulletin attachments") + Claude | Bike Forums' "Attached Images"/"Attached Files" were lost |
+| D-142 | **Edit fingerprints carry a version** (`v2:` + sha256). A stored fingerprint of another version (or none) is a new baseline, not an edit, and is replaced even when the stored body is unchanged. Bump `FINGERPRINT_VERSION` whenever the same post comes out of the parser differently | Claude | D-139–D-141 change how unchanged posts render; without this every such post would be marked "Update detected" when next re-read (D-134) |
+
 ## 2026-11-06 (round 22: release 1.15.0)
 
 | ID | Decision | Source | Rationale |
 |---|---|---|---|
-| D-138 | Release **v1.15.0** (minor: thread reading position, catch-up, edited posts, quote navigation, extraction checks, outbound request blocking; migrations 0017–0019). Minor rather than major although LAN feeds now need `FA_ALLOWED_INTERNAL_ORIGINS`: the user follows none, and most installs don't either, so the changelog leads with a "Check before upgrading" note instead | User ("merge it and prepare the 1.15.0 release") + Claude | Follows RELEASING.md |
+| D-138 | Release **v1.15.0** (minor: thread reading position, catch-up, edited posts, quote navigation, extraction checks, outbound request blocking, embeds/attachments/http images in posts (round 23); migrations 0017–0019). Minor rather than major although LAN feeds now need `FA_ALLOWED_INTERNAL_ORIGINS`: the user follows none, and most installs don't either, so the changelog leads with a "Check before upgrading" note instead | User ("merge it and prepare the 1.15.0 release") + Claude | Follows RELEASING.md |
 
 ## 2026-11-06 (round 21: review of PRs #21–#34)
 

@@ -316,6 +316,12 @@ the addresses that hostname resolves to. Ordinary accounts cannot edit this envi
 Keep the list narrow. Existing internal sources without an exception will report a blocked
 destination after upgrading; public sources continue to work normally.
 
+Pictures on plain `http://` addresses in posts and articles are fetched by the server for the
+reader (`/api/image`), because an https page can't show them directly. The same rules apply: only
+public addresses (or allowed internal origins), common picture formats (no SVG), up to 10 MB, and
+only for logged-in accounts. Nothing is stored on the server; each browser caches what it showed
+for a day. https pictures still load straight from their site.
+
 ### Forums behind a Cloudflare check: FlareSolverr (optional)
 
 **FlareSolverr remains available when configured; no new opt-in setting is required.** The app

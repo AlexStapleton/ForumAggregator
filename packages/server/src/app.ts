@@ -20,6 +20,7 @@ import { sendError } from "./http.js";
 import { VERSION } from "./version.js";
 import { HostLimiter, createHttpFetch, createHttpJson, httpServiceJson, FetchError, type Fetcher, type JsonFetcher } from "./feeds/fetch.js";
 import { OutboundPolicy, OutboundBlocked } from "./feeds/outbound.js";
+import { registerImageProxy } from "./reader/imageProxy.js";
 import { ItemService } from "./feeds/items.js";
 import { Poller } from "./feeds/poller.js";
 import { registerFeedRoutes } from "./feeds/routes.js";
@@ -147,6 +148,7 @@ export async function buildApp({ env, secretKey, config, db, now, fetcher, limit
   const poller = new Poller(feeds, fastify.log);
   registerAdminRoutes(fastify, auth, feeds);
   registerFeedRoutes(fastify, feeds, items, reader);
+  registerImageProxy(fastify, outbound);
   registerSettingsRoutes(fastify, settings, sharedJson, flare, feeds);
   // Settings → Checking overrides config.yaml's intervals (D-095).
   await feeds.applyChecking(await settings.checking(), false);

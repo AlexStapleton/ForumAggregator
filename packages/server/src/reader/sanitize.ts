@@ -1,11 +1,13 @@
 // Cleaning untrusted HTML (feed content, extracted articles) before the reader shows it.
-// Allow-list only: basic formatting, http(s) links, https images. No scripts, styles,
-// iframes, forms, event handlers or inline styles survive. The page's CSP (script-src 'self')
-// is a second line of defence, not the first.
+// Allow-list only: basic formatting, http(s) links, images (http ones through this server, D-140),
+// https video/audio files. No scripts, styles, iframes, forms, event handlers or inline styles
+// survive; embeds become links first (richContent.ts). The page's CSP (script-src 'self') is a
+// second line of defence, not the first.
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 import { safeHttpUrl } from "../feeds/text.js";
-import { restoreReaderImage } from "./images.js";
+import { imageProxyUrl, proxiedImageTarget, restoreReaderImage } from "./images.js";
+import { normalizeRichContent, RICH_CONTENT_HINT } from "./richContent.js";
 
 const window = new JSDOM("").window;
 const purify = createDOMPurify(window as unknown as Parameters<typeof createDOMPurify>[0]);
@@ -15,11 +17,11 @@ const ALLOWED_TAGS = [
   "ul", "ol", "li", "dl", "dt", "dd",
   "blockquote", "pre", "code", "kbd", "samp",
   "em", "strong", "b", "i", "u", "s", "small", "sub", "sup", "mark", "abbr", "cite", "q", "time",
-  "a", "img", "figure", "figcaption", "picture",
+  "a", "img", "figure", "figcaption", "picture", "video", "audio",
   "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
   "div", "span", "section", "article", "aside", "details", "summary",
 ];
-const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "datetime", "cite"];
+const ALLOWED_ATTR = ["href", "src", "alt", "title", "colspan", "rowspan", "datetime", "cite", "controls", "preload"];
 
 let currentBase = "";
 
@@ -54,12 +56,25 @@ purify.addHook("afterSanitizeAttributes", (node) => {
     }
   }
   if (el.tagName === "IMG") {
-    const src = safeHttpUrl(el.getAttribute("src"), currentBase);
-    // https only: the CSP blocks http images anyway, and mixed content would warn.
-    if (src && src.startsWith("https://")) {
-      el.setAttribute("src", src);
+    const raw = el.getAttribute("src");
+    const src = proxiedImageTarget(raw) ?? safeHttpUrl(raw, currentBase);
+    // https straight from the site; http through this server (D-140), since the CSP and mixed
+    // content rules block http images on the page.
+    if (src) {
+      el.setAttribute("src", src.startsWith("https://") ? src : imageProxyUrl(src));
       el.setAttribute("loading", "lazy");
       el.setAttribute("referrerpolicy", "no-referrer");
+    } else {
+      el.remove();
+    }
+  }
+  if (el.tagName === "VIDEO" || el.tagName === "AUDIO") {
+    // Files only, https only (richContent.ts adds a link beside it); never autoplay.
+    const src = safeHttpUrl(el.getAttribute("src"), currentBase);
+    if (src && src.startsWith("https://")) {
+      el.setAttribute("src", src);
+      el.setAttribute("controls", "");
+      el.setAttribute("preload", "metadata");
     } else {
       el.remove();
     }
@@ -72,7 +87,15 @@ const MAX_HTML = 400_000;
 export function sanitizeHtml(html: string, baseUrl: string): string {
   currentBase = baseUrl;
   try {
-    const clean = purify.sanitize(html.slice(0, MAX_HTML), {
+    let input = html.slice(0, MAX_HTML);
+    // Embeds, spoilers and sprite smilies would otherwise disappear without a trace (D-139).
+    if (RICH_CONTENT_HINT.test(input)) {
+      const box = window.document.createElement("div");
+      box.innerHTML = input;
+      normalizeRichContent(box, baseUrl);
+      input = box.innerHTML;
+    }
+    const clean = purify.sanitize(input, {
       ALLOWED_TAGS,
       ALLOWED_ATTR,
       ALLOW_DATA_ATTR: false,
