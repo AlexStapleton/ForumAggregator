@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP, type LookupFunction } from "node:net";
 import ipaddr from "ipaddr.js";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 export class OutboundBlocked extends Error {
   constructor(message = "This destination is not public. Ask the administrator to allow its exact origin in FA_ALLOWED_INTERNAL_ORIGINS.") {
@@ -10,6 +10,11 @@ export class OutboundBlocked extends Error {
 }
 
 export type Resolver = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
+/** Sends one request (no redirects) through the given connection pool. */
+export type Transport = (url: URL, init: RequestInit & { dispatcher: Agent }) => Promise<Response>;
+// undici's own fetch, not Node's built-in one: the Agent below must come from the same undici
+// version as the fetch using it, and Node bundles an older undici than this package installs.
+const send: Transport = (url, init) => undiciFetch(url, init as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
 const resolve: Resolver = (hostname) => lookup(hostname, { all: true, verbatim: true });
 const hostnameOf = (url: URL) => url.hostname.replace(/^\[|\]$/g, "");
 
@@ -36,7 +41,7 @@ export function publicAddress(address: string): boolean {
 export class OutboundPolicy {
   private readonly allowed: Set<string>;
 
-  constructor(origins: string[] = [], private readonly resolver: Resolver = resolve) {
+  constructor(origins: string[] = [], private readonly resolver: Resolver = resolve, private readonly transport: Transport = send) {
     this.allowed = new Set(origins.map((input) => {
       const url = webUrl(input);
       if (url.pathname !== "/" || url.search || url.hash) throw new Error("FA_ALLOWED_INTERNAL_ORIGINS must contain exact HTTP/HTTPS origins, without paths, queries or fragments");
@@ -89,8 +94,9 @@ export class OutboundPolicy {
       const dispatcher = new Agent({ connect: { lookup: this.connectionLookup(url.href) } });
       let response: Response;
       try {
-        const options = { ...init, headers, signal, redirect: "manual" as const, dispatcher };
-        response = await fetch(url, options);
+        // Plain header pairs: a Headers object from Node's own undici isn't this undici's class.
+        const options = { ...init, headers: Object.fromEntries(headers), signal, redirect: "manual" as const, dispatcher };
+        response = await this.transport(url, options);
       } catch (error) {
         // Native fetch wraps lookup failures in TypeError.cause.
         const cause = (error as { cause?: unknown }).cause;
