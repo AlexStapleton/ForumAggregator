@@ -6,45 +6,81 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
-## [1.15.0] - 2026-11-06
+## [1.20.0] - 2026-11-06
 
-Followed threads pick up where you stopped reading, never skip replies on busy threads, and show
-when a post has been edited; quotes say who wrote them and jump to the quoted post; embedded
-videos, attachments and `http://` images no longer go missing from posts. Upgrade with
-`docker compose pull && docker compose up -d`, or pin `alexstapo/forumaggregator:1.15.0`. The
-database gets three migrations on start (0017–0019); nothing to do by hand.
+Embedded videos, attachments and `http://` pictures no longer go missing from forum posts, and a
+followed thread no longer stops updating because one of its posts is only a video or a picture.
+Upgrade with `docker compose pull && docker compose up -d`, or pin
+`alexstapo/forumaggregator:1.20.0`. No database changes.
 
-**Check before upgrading:** feeds and articles on your own network (a `192.168.x.x` or other LAN
-address, or a server name on your LAN) are now blocked. If you follow any, allow their exact
-address with `FA_ALLOWED_INTERNAL_ORIGINS` (e.g. `http://192.168.1.50:1200`), see
-[DEPLOY.md](docs/DEPLOY.md#outbound-requests-and-internal-feeds). Feeds on the internet are not
-affected.
+This is also the first image since 1.14.0 that reports its own version: 1.15.0 to 1.19.0 were
+tagged without the version bump, so they report 1.14.0 (their changes are listed below).
+
+### Added
+- Embedded videos and posts no longer vanish from forum posts, articles and feeds: YouTube shows a
+  thumbnail linking to the video; Vimeo, X (Twitter), Instagram, Reddit and other embeds become
+  links. Uploaded video and audio files play in the reader.
+- Pictures on plain `http://` addresses are shown: the server fetches them for the reader (only
+  `http://` pictures, only common picture formats, up to 10 MB, never from your own network). See
+  [DEPLOY.md](docs/DEPLOY.md#outbound-requests-and-internal-feeds).
+- vBulletin's "Attached Images" and "Attached Files" (e.g. Bike Forums) are shown under the post.
+- Spoilers in XenForo posts are hidden until tapped, and classic smilies keep their text (`:)`).
+
+### Fixed
+- Since 1.17.0, a post that was only a video or an `http://` picture made its whole thread page
+  count as misread: the followed thread stopped updating and the reader stopped at that page.
+- A thread check with new replies read every stored post to find the newest one; it reads one
+  again.
+- A followed thread's own notices ("You're caught up…") no longer suggest opening the original.
+- Unexpected errors while checking a thread are logged with their details again.
+- Outbound requests use one version of their HTTP library throughout, so an update to Node or to
+  the library can't quietly break fetching.
+- Posts shown differently because of the changes above aren't marked "Update detected".
+
+## [1.19.0] - 2026-10-31
+
+Published on GitHub as "v1.1.9.0"; the image reports 1.14.0. No database changes.
+
+### Added
+- XenForo attachments that sit beside a post's text, rather than in it, are shown under the post,
+  linking to the full-size image.
+
+## [1.18.0] - 2026-10-31
+
+The image reports 1.14.0. The database gets migration 0019 (post update tracking) on start.
+
+### Added
+- Followed threads notice edits to posts they have already collected and mark them **Update
+  detected** with the time it was noticed (UTC). Every sixth successful check also re-reads one of
+  the newest three pages, within the pages-per-check limit. Edits don't make the card unread. See
+  [EDITED-POSTS.md](docs/EDITED-POSTS.md).
+
+### Fixed
+- FlareSolverr no longer hands one page's result to a different page on the same site requested
+  at the same time; requests to a site still go one at a time.
+
+## [1.17.0] - 2026-10-31
+
+The image reports 1.14.0. The database gets migration 0018 (each account's reading position) on
+start.
 
 ### Added
 - Followed threads remember each account's reading position, reopen at the first unread reply
   with context, and let readers continue through long batches. Position saves pause during
   catch-up so missing older replies are not skipped.
-- Followed threads notice edits to posts they have already collected and mark them **Update
-  detected** with the time it was noticed (UTC). Every sixth successful check also re-reads one of
-  the newest three pages, within the pages-per-check limit. Edits don't make the card unread. See
-  [EDITED-POSTS.md](docs/EDITED-POSTS.md).
 - Quotes in forum posts say who wrote them, link to the quoted post, jump to it when it's on the
   page being read (with a way back), and long quotes can be collapsed.
-- XenForo attachments that sit beside a post's text, rather than in it, are shown under the post,
-  linking to the full-size image. vBulletin's "Attached Images" and "Attached Files" (e.g. Bike
-  Forums) are shown under the post too.
-- Embedded videos and posts no longer vanish from forum posts, articles and feeds: YouTube shows a
-  thumbnail linking to the video; Vimeo, X (Twitter), Instagram, Reddit and other embeds become
-  links. Uploaded video and audio files play in the reader.
-- Images on plain `http://` addresses are shown: the server fetches them for the reader (only
-  `http://` images, only common picture formats, up to 10 MB, never from your own network).
-- Spoilers in XenForo posts are hidden until tapped, and classic smilies keep their text (`:)`).
 
 ### Changed
 - Thread pages are checked for completeness before anything is stored: a bot check, a login page,
   the wrong page, or posts the reader couldn't read stop the check (stored replies and reading
   position are kept) instead of being saved as the thread. The reader says what went wrong and
-  offers Retry.
+  offers Retry. (A post that was only a video or an `http://` picture tripped this; fixed in
+  1.20.0.)
+
+## [1.16.0] - 2026-10-30
+
+The image reports 1.14.0. The database gets migration 0017 (thread catch-up checkpoints) on start.
 
 ### Fixed
 - Followed threads resume gaps across checks when new replies exceed the page budget. Catch-up
@@ -52,18 +88,25 @@ affected.
   300-post history limit applies after catch-up completes.
 - Ignore stale "Load older" results and errors after feed changes or refreshes, and share
   overlapping pagination requests so repeated clicks cannot advance the cursor out of order.
+- Lazy-loaded and responsive images (`data-src`, `srcset`) show in the reader at their largest
+  size, and forum pages whose posts are only images are no longer treated as empty.
+
+## [1.15.0] - 2026-10-29
+
+The image reports 1.14.0. No database changes.
+
+**Check before upgrading:** feeds and articles on your own network (a `192.168.x.x` or other LAN
+address, or a server name on your LAN) are blocked from this version on. If you follow any, allow
+their exact address with `FA_ALLOWED_INTERNAL_ORIGINS` (e.g. `http://192.168.1.50:1200`), see
+[DEPLOY.md](docs/DEPLOY.md#outbound-requests-and-internal-feeds). Feeds on the internet are not
+affected.
+
+### Fixed
 - Overclock.net's nested thread layout now renders individual posts with thread page controls,
   instead of falling back to article extraction and including unrelated page widgets. Nested
   replies appear once, and the repeated original post is omitted after the first page.
-- Lazy-loaded and responsive images (`data-src`, `srcset`) show in the reader at their largest
-  size, and forum pages whose posts are only images are no longer treated as empty.
 - Marking an item read on one device no longer resets its saved flag set on another (and the
   other way round); quick taps on read/saved are sent in order.
-- FlareSolverr no longer hands one page's result to a different page on the same site requested
-  at the same time; requests to a site still go one at a time.
-- A post that was only a video or an `http://` image made its whole thread page count as misread,
-  so the followed thread stopped updating and the reader stopped at that page. (Found before
-  release, in the thread completeness checks above.)
 
 ### Security
 - Block non-public destinations for feeds, articles, forum pages and JSON requests, including
