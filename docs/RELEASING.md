@@ -5,6 +5,9 @@ How to cut a version (e.g. 1.1.0). Images are built by CI: `latest` from `main`,
 
 ## Steps
 
+0. **Pick the number from the tags, not the changelog:** `git fetch --tags && git tag --sort=-v:refname | head -3`
+   (or the Releases page). If releases were published since the changelog's last section (1.15.0
+   to 1.19.0 were, D-143), give each its own section first, from its GitHub release notes.
 1. **In the release PR, before tagging:**
    - Bump all packages (keeps `package-lock.json` in step):
      `npm version X.Y.Z --no-git-tag-version --workspaces --include-workspace-root=false`
@@ -26,4 +29,6 @@ How to cut a version (e.g. 1.1.0). Images are built by CI: `latest` from `main`,
 - **Minor** (1.**2**.0): new features, nothing you have to change.
 - **Major** (**2**.0.0): you have to do something when upgrading (config, data, ports).
 
-Note: v1.0.1 was tagged without step 1, so that image reports 1.0.0.
+Note: v1.0.1 was tagged without step 1, so that image reports 1.0.0; likewise v1.15.0 to v1.19.0
+report 1.14.0 (D-143). Releases made straight from GitHub's Releases page skip step 1, so do step 1
+in a PR first. Name the release exactly like its tag (`v1.19.0` was titled "v1.1.9.0").
