@@ -198,13 +198,14 @@ export interface TagCount {
   unread: number;
 }
 
-/** What the in-app reader shows for an item. */
+/** How completely a forum thread page was read for the reader. */
 export interface ReaderExtraction {
   status: "complete" | "empty" | "partial" | "access-blocked" | "unrecognized" | "wrong-page" | "failed";
   /** A previously successful copy is being shown after a failed refresh. */
   stale: boolean;
 }
 
+/** What the in-app reader shows for an item. */
 export interface ReaderContent {
   extraction?: ReaderExtraction;
   /** Followed threads: account-specific reading position, never stored in shared page caches. */

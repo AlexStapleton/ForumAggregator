@@ -6,10 +6,28 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 
 ## [Unreleased]
 
+The database gets three new migrations on start (0017–0019: thread catch-up checkpoints, each
+account's reading position, post update tracking); nothing to do by hand. Feeds or articles served
+from your own network are now blocked unless allowed (see Security below).
+
 ### Added
 - Followed threads remember each account's reading position, reopen at the first unread reply
   with context, and let readers continue through long batches. Position saves pause during
   catch-up so missing older replies are not skipped.
+- Followed threads notice edits to posts they have already collected and mark them **Update
+  detected** with the time it was noticed (UTC). Every sixth successful check also re-reads one of
+  the newest three pages, within the pages-per-check limit. Edits don't make the card unread. See
+  [EDITED-POSTS.md](docs/EDITED-POSTS.md).
+- Quotes in forum posts say who wrote them, link to the quoted post, jump to it when it's on the
+  page being read (with a way back), and long quotes can be collapsed.
+- XenForo attachments that sit beside a post's text, rather than in it, are shown under the post,
+  linking to the full-size image.
+
+### Changed
+- Thread pages are checked for completeness before anything is stored: a bot check, a login page,
+  the wrong page, or posts the reader couldn't read stop the check (stored replies and reading
+  position are kept) instead of being saved as the thread. The reader says what went wrong and
+  offers Retry.
 
 ### Fixed
 - Followed threads resume gaps across checks when new replies exceed the page budget. Catch-up
@@ -20,6 +38,12 @@ Docker images: `alexstapo/forumaggregator:<version>` and `ghcr.io/alexstapleton/
 - Overclock.net's nested thread layout now renders individual posts with thread page controls,
   instead of falling back to article extraction and including unrelated page widgets. Nested
   replies appear once, and the repeated original post is omitted after the first page.
+- Lazy-loaded and responsive images (`data-src`, `srcset`) show in the reader at their largest
+  size, and forum pages whose posts are only images are no longer treated as empty.
+- Marking an item read on one device no longer resets its saved flag set on another (and the
+  other way round); quick taps on read/saved are sent in order.
+- FlareSolverr no longer hands one page's result to a different page on the same site requested
+  at the same time; requests to a site still go one at a time.
 
 ### Security
 - Block non-public destinations for feeds, articles, forum pages and JSON requests, including
